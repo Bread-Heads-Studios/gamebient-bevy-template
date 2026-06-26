@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Voidrunner</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            width: 100%; height: 100%;
+            overflow: hidden;
+            background: #0a0a0f;
+            font-family: 'Courier New', monospace;
+            color: #00e5ff;
+        }
+
+        /* --- Game container + canvas --- */
+        #game-container {
+            position: fixed; inset: 0;
+            z-index: 0;
+        }
+        #game {
+            width: 100%; height: 100%;
+            display: block;
+            outline: none;
+        }
+
+        /* --- Loading overlay --- */
+        #loading {
+            position: fixed; inset: 0;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            z-index: 100;
+            background: #0a0a0f;
+            transition: opacity 0.6s ease-out;
+        }
+        #loading.hidden { opacity: 0; pointer-events: none; }
+        #loading h1 {
+            font-size: clamp(1.8rem, 8vw, 4rem);
+            font-weight: bold;
+            letter-spacing: 0.3em;
+            text-transform: uppercase;
+            margin-bottom: 2rem;
+            text-align: center;
+            padding: 0 1rem;
+        }
+        #loading-bar-track {
+            width: 300px; height: 4px;
+            background: #1a1a2e;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        #loading-bar {
+            width: 0%; height: 100%;
+            background: linear-gradient(90deg, #00e5ff, #7b2fff);
+            transition: width 0.3s ease;
+        }
+        #loading-status {
+            margin-top: 1rem;
+            font-size: 0.85rem;
+            opacity: 0.7;
+        }
+
+        /* --- Error overlay --- */
+        #error {
+            position: fixed; inset: 0;
+            display: none; flex-direction: column;
+            align-items: center; justify-content: center;
+            z-index: 200;
+            background: #0a0a0f;
+            padding: 2rem;
+            text-align: center;
+        }
+        #error h2 { color: #ff3366; font-size: 1.5rem; margin-bottom: 1rem; }
+        #error p { max-width: 500px; line-height: 1.6; opacity: 0.8; }
+
+        /* --- Click-to-start overlay (audio unlock) --- */
+        #audio-unlock {
+            position: fixed; inset: 0;
+            display: none; flex-direction: column;
+            align-items: center; justify-content: center;
+            z-index: 150;
+            background: #0a0a0f;
+            cursor: pointer;
+        }
+        #audio-unlock p {
+            font-size: clamp(1rem, 4vw, 1.3rem);
+            letter-spacing: 0.2em;
+            text-shadow: 0 0 10px #00e5ff;
+            animation: pulse 2s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Pre-created canvas inside a fixed container. Bevy targets #game via
+         Window { canvas: Some("#game"), fit_canvas_to_parent: true }. -->
+    <div id="game-container">
+        <canvas id="game"></canvas>
+    </div>
+
+    <div id="loading">
+        <h1>Voidrunner</h1>
+        <div id="loading-bar-track"><div id="loading-bar"></div></div>
+        <div id="loading-status">Initializing...</div>
+    </div>
+
+    <div id="error">
+        <h2>ERROR</h2>
+        <p id="error-msg"></p>
+    </div>
+
+    <div id="audio-unlock">
+        <p>Click to Start</p>
+    </div>
+
+    <!-- Suppress wasm-bindgen control-flow exceptions globally.
+         Must be a regular script (not module) so it registers before WASM loads. -->
+    <script>
+        // Listen for virtual controller messages from parent iframe wrapper
+        window.addEventListener('message', function(e) {
+            if (e.data && e.data.type === 'keyEvent') {
+                var evt = new KeyboardEvent(e.data.eventType, {
+                    key: e.data.key,
+                    code: e.data.code,
+                    bubbles: true,
+                    cancelable: true,
+                });
+                window.dispatchEvent(evt);
+                var canvas = document.getElementById('game');
+                if (canvas) canvas.dispatchEvent(evt);
+            }
+        });
+
+        function isWasmNoise(msg) {
+            return typeof msg === 'string' && (
+                msg.includes('Using exceptions for control flow') ||
+                msg.includes('AudioContext was not allowed to start') ||
+                msg.includes('unwind') ||
+                msg.includes('RuntimeError: unreachable')
+            );
+        }
+        window.addEventListener('error', function(e) {
+            if (isWasmNoise(e.message)) { e.preventDefault(); return; }
+        });
+        window.addEventListener('unhandledrejection', function(e) {
+            if (isWasmNoise(e.reason?.message)) { e.preventDefault(); return; }
+        });
+    </script>
+
+    <script type="module">
+        const loadingBar = document.getElementById('loading-bar');
+        const loadingStatus = document.getElementById('loading-status');
+        const loadingOverlay = document.getElementById('loading');
+        const errorOverlay = document.getElementById('error');
+        const errorMsg = document.getElementById('error-msg');
+        const audioUnlock = document.getElementById('audio-unlock');
+        const gameCanvas = document.getElementById('game');
+
+        function showError(msg) {
+            errorMsg.textContent = msg;
+            errorOverlay.style.display = 'flex';
+            loadingOverlay.style.display = 'none';
+        }
+
+        function setProgress(pct, status) {
+            loadingBar.style.width = pct + '%';
+            if (status) loadingStatus.textContent = status;
+        }
+
+        // Check WebGL2 support
+        try {
+            const gl = gameCanvas.getContext('webgl2');
+            if (!gl) throw new Error();
+        } catch {
+            showError(
+                'Your browser does not support WebGL2, which is required to run Voidrunner. ' +
+                'Please try a recent version of Chrome, Firefox, or Edge.'
+            );
+            throw new Error('WebGL2 not supported');
+        }
+
+        setProgress(10, 'Loading WASM module...');
+
+        // --- Audio unlock strategy ---
+        // Browsers block AudioContext until a user gesture (click/tap).
+        // Bevy creates AudioContext lazily during its game loop (not during init),
+        // so we patch the constructor to track ALL contexts and resume them on click.
+        const OrigAudioContext = window.AudioContext || window.webkitAudioContext;
+        const trackedContexts = [];
+        let userHasInteracted = false;
+
+        if (OrigAudioContext) {
+            const Patched = function(...args) {
+                const ctx = new OrigAudioContext(...args);
+                trackedContexts.push(ctx);
+                if (userHasInteracted && ctx.state === 'suspended') {
+                    ctx.resume();
+                }
+                return ctx;
+            };
+            Patched.prototype = OrigAudioContext.prototype;
+            Object.defineProperty(Patched, 'name', { value: 'AudioContext' });
+            window.AudioContext = Patched;
+            if (window.webkitAudioContext) window.webkitAudioContext = Patched;
+        }
+
+        const { default: init } = await import('./gamebient-game.js');
+
+        setProgress(50, 'Initializing engine...');
+
+        // Prefer the brotli-compressed wasm when the server actually serves
+        // it with Content-Encoding: br (production). Falls back transparently
+        // for local dev (python3 -m http.server) where the .br file either
+        // doesn't exist or lacks the header.
+        let wasmUrl;
+        try {
+            const probe = await fetch('./gamebient-game_bg.wasm.br', { method: 'HEAD' });
+            if (probe.ok && (probe.headers.get('content-encoding') || '').toLowerCase() === 'br') {
+                wasmUrl = './gamebient-game_bg.wasm.br';
+            }
+        } catch {}
+
+        try {
+            await init(wasmUrl ? { module_or_path: wasmUrl } : undefined);
+        } catch (e) {
+            // wasm-bindgen uses exceptions for control flow — not a real error
+            if (e?.message?.includes('Using exceptions for control flow')) {
+                console.debug('[wasm-bindgen] Ignoring control-flow exception');
+            } else {
+                showError('Failed to start: ' + e.message);
+                throw e;
+            }
+        }
+
+        setProgress(100, 'Ready');
+
+        // Always show click-to-start since Bevy may create AudioContext later.
+        loadingOverlay.classList.add('hidden');
+        audioUnlock.style.display = 'flex';
+
+        const unlock = () => {
+            userHasInteracted = true;
+            // Resume all existing AudioContexts
+            trackedContexts.forEach(ctx => {
+                if (ctx.state === 'suspended') ctx.resume();
+            });
+            audioUnlock.style.display = 'none';
+            // Focus the canvas so keyboard input works immediately
+            gameCanvas.focus();
+            document.removeEventListener('click', unlock);
+            document.removeEventListener('touchend', unlock);
+            document.removeEventListener('keydown', unlock);
+        };
+        document.addEventListener('click', unlock);
+        document.addEventListener('touchend', unlock);
+        document.addEventListener('keydown', unlock);
+    </script>
+</body>
+</html>

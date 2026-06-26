@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save runner minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt · clippy · test
+    runs-on: ubuntu-latest
+    # Strict gate: deny plain rustc warnings here too (unused imports, etc.).
+    # Scoped to this job so it doesn't also fail the deploy-bundle build, which
+    # mirrors the warning-tolerant Vercel build.
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+
+      # Bevy's native build links against ALSA, libudev and the Linux
+      # windowing stack (wayland/x11 features are enabled for non-wasm targets).
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # No unit tests yet — this currently acts as a "compiles and links"
+      # smoke test on the native target. It starts protecting real assertions
+      # the moment tests are added under src/.
+      - name: Test
+        run: cargo test --all-targets
+
+  build-web:
+    name: build wasm bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Separate cache key from the native `check` job — different target,
+          # different artifacts.
+          key: wasm
+
+      # Pinned to the wasm-bindgen *library* version in Cargo.lock. A CLI/lib
+      # version skew produces a bundle that fails to load at runtime, so this
+      # must be bumped in lockstep with the dependency.
+      - name: Install wasm-bindgen-cli
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@0.2.108
+
+      - name: Install binaryen (wasm-opt)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends binaryen
+
+      # build_web.sh: cargo build (wasm-release) → wasm-bindgen → wasm-opt -Oz
+      # → brotli. node is preinstalled on ubuntu-latest for the brotli step.
+      - name: Build web bundle
+        run: bash build_web.sh
+
+      - name: Upload web bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: gamebient-game-web
+          path: dist/
+          retention-days: 14

@@ -1,0 +1,18 @@
+# The Docker build stage compiles dist/ from source, so the context must keep
+# src/, Cargo.*, build_web.sh, .cargo/, assets/, index.html and nginx.conf.
+# Exclude only build outputs and things the image never needs.
+
+# Build outputs (the image regenerates dist/)
+.git/
+target/
+dist/
+dist-pi/
+
+# Docs and source art (top-level marketing PNGs + GIMP sources).
+# Note: *.png matches only top-level files, so assets/voidrunner.png is kept.
+docs/
+*.xcf
+*.png
+
+# OS noise
+.DS_Store

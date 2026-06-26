@@ -1,0 +1,20 @@
+# Cranelift backend for faster debug builds on nightly
+# [unstable]
+# codegen-backend = true
+
+# [profile.dev]
+# codegen-backend = "cranelift"
+
+# getrandom 0.3+ requires this flag for wasm32-unknown-unknown.
+#
+# target-feature flags enable WebAssembly extensions that are universally
+# available in modern browsers (Chrome 91+, Firefox 89+, Safari 16+, including
+# Chromium on Raspberry Pi OS Bookworm). They produce smaller, faster code:
+#   +bulk-memory          memory.fill / memory.copy instructions
+#   +nontrapping-fptoint  float-to-int conversions that saturate instead of trap
+#   +sign-ext             sign-extension instructions (i32.extend8_s etc.)
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "--cfg", "getrandom_backend=\"wasm_js\"",
+    "-C", "target-feature=+bulk-memory,+nontrapping-fptoint,+sign-ext",
+]

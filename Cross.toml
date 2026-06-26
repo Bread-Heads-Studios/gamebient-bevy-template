@@ -1,0 +1,26 @@
+# cross-rs configuration. The native Linux build links ALSA, libudev and the
+# wayland/xkb windowing stack, so each target's dev libraries are installed into
+# the (minimal) cross image before building. For aarch64 these come from the
+# arm64 multiarch repos.
+
+# Forward cargo profile overrides from the host into the build container. CI
+# sets these for the aarch64 build to relax LTO — fat LTO with codegen-units=1
+# OOM-kills rustc (SIGKILL) in the container. Unset on the host, they no-op.
+[build.env]
+passthrough = [
+    "CARGO_PROFILE_RELEASE_LTO",
+    "CARGO_PROFILE_RELEASE_CODEGEN_UNITS",
+]
+
+[target.aarch64-unknown-linux-gnu]
+pre-build = [
+    "dpkg --add-architecture arm64",
+    "apt-get update",
+    "apt-get install --assume-yes --no-install-recommends libasound2-dev:arm64 libudev-dev:arm64 libwayland-dev:arm64 libxkbcommon-dev:arm64",
+]
+
+[target.x86_64-unknown-linux-gnu]
+pre-build = [
+    "apt-get update",
+    "apt-get install --assume-yes --no-install-recommends libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev",
+]

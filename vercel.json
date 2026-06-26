@@ -1,0 +1,20 @@
+{
+  "buildCommand": "bash build_web.sh",
+  "installCommand": "bash install.sh",
+  "outputDirectory": "dist",
+  "headers": [
+    {
+      "source": "/(.*).wasm.br",
+      "headers": [
+        { "key": "Content-Type", "value": "application/wasm" },
+        { "key": "Content-Encoding", "value": "br" }
+      ]
+    },
+    {
+      "source": "/(.*).wasm",
+      "headers": [
+        { "key": "Content-Type", "value": "application/wasm" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+    "name": "Gamebient Game",
+    "description": "A Bevy game on the Gamebient ColecoVision GX platform.",
+    "image": "https://gamebient-game.vercel.app/assets/cartridge.png",
+    "external_url": "https://ColecoVisionGX.com",
+    "attributes": [
+        { "trait_type": "Genre", "value": "Arcade" },
+        { "trait_type": "Platform", "value": "Web" },
+        { "trait_type": "Players", "value": "1" }
+    ],
+    "properties": {
+        "files": [
+            { "uri": "https://gamebient-game.vercel.app/assets/cartridge.png", "type": "image/png" }
+        ],
+        "category": "game",
+        "game_url": "https://gamebient-game.vercel.app",
+        "demo_url": "https://gamebient-game.vercel.app",
+        "binary_url": "https://gamebient-game.vercel.app/assets/gamebient-game.tar.gz",
+        "binary_type": "bevy-tar"
+    }
+}

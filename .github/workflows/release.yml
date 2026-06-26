@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+# Required for the release job to create a GitHub Release.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [pi, x86, web]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross (pi)
+        if: matrix.target == 'pi'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Install x86 build dependencies
+        if: matrix.target == 'x86'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev pkg-config
+
+      - name: Install web build dependencies
+        if: matrix.target == 'web'
+        run: |
+          rustup target add wasm32-unknown-unknown
+          sudo apt-get update
+          # zip: used to bundle dist/ into gamebient-game-web.zip; not guaranteed
+          # preinstalled, so install it explicitly. binaryen provides wasm-opt.
+          sudo apt-get install -y --no-install-recommends binaryen zip
+
+      - name: Install wasm-bindgen-cli (web)
+        if: matrix.target == 'web'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@0.2.108
+
+      # The aarch64 release build uses fat LTO with codegen-units=1, which peaks
+      # past the runner's RAM and gets OOM-killed (SIGKILL) inside the cross
+      # container. Give it extra swap and relax LTO to thin (parallel, much
+      # lower peak memory) for the Pi build only. x86/web keep fat LTO.
+      - name: Add swap for the memory-heavy Pi LTO
+        if: matrix.target == 'pi'
+        run: |
+          sudo fallocate -l 8G /mnt/ci-swapfile
+          sudo chmod 600 /mnt/ci-swapfile
+          sudo mkswap /mnt/ci-swapfile
+          sudo swapon /mnt/ci-swapfile
+          free -h
+
+      - name: Build (Pi — thin LTO to fit memory)
+        if: matrix.target == 'pi'
+        env:
+          # Forwarded into the cross container via Cross.toml passthrough.
+          CARGO_PROFILE_RELEASE_LTO: thin
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+        run: bash build.sh pi
+
+      - name: Build (x86/web)
+        if: matrix.target != 'pi'
+        run: bash build.sh ${{ matrix.target }}
+
+      - name: Package Linux tarball
+        if: matrix.target != 'web'
+        run: bash package.sh ${{ matrix.target }}
+
+      # Flat, old-format cartridge tarball (./gamebient-game + ./assets, no nested
+      # dir) that assets/info.json's binary_url consumers expect. Served from
+      # Vercel, which fetches it from this release at build time.
+      - name: Package cartridge tarball (flat layout)
+        if: matrix.target == 'pi'
+        run: |
+          rm -rf cart && mkdir -p cart build
+          cp target/aarch64-unknown-linux-gnu/release/gamebient-game cart/gamebient-game
+          cp -r assets cart/assets
+          tar -czf build/gamebient-game.tar.gz -C cart --exclude='*.tar.gz' .
+          rm -rf cart
+
+      - name: Upload cartridge tarball
+        if: matrix.target == 'pi'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gamebient-game-cartridge
+          path: build/gamebient-game.tar.gz
+          if-no-files-found: error
+
+      - name: Zip web bundle
+        if: matrix.target == 'web'
+        run: |
+          mkdir -p build
+          (cd dist && zip -r ../build/gamebient-game-web.zip .)
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gamebient-game-${{ matrix.target }}
+          path: build/gamebient-game-${{ matrix.target }}.*
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
