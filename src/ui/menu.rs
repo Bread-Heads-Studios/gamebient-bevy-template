@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::game::states::GameState;
-use crate::ui::how_to_play::{start_target, SeenHowToPlay};
+use crate::ui::how_to_play::{SeenHowToPlay, start_target};
 use crate::ui::transition::{Pulse, ScreenFade};
 
 #[derive(Component)]

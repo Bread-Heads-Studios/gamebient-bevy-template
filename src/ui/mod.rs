@@ -19,12 +19,18 @@ impl Plugin for UiPlugin {
             .add_systems(Startup, transition::spawn_fade_overlay)
             .add_systems(Update, (transition::update_fade, transition::pulse_text))
             // Studio logo boot screen
-            .add_systems(OnEnter(GameState::StudioLogo), studio_logo::spawn_studio_logo)
+            .add_systems(
+                OnEnter(GameState::StudioLogo),
+                studio_logo::spawn_studio_logo,
+            )
             .add_systems(
                 Update,
                 studio_logo::advance_studio_logo.run_if(in_state(GameState::StudioLogo)),
             )
-            .add_systems(OnExit(GameState::StudioLogo), studio_logo::despawn_studio_logo)
+            .add_systems(
+                OnExit(GameState::StudioLogo),
+                studio_logo::despawn_studio_logo,
+            )
             // How-to-play screen (shown once per session before the first game)
             .init_resource::<how_to_play::SeenHowToPlay>()
             .add_systems(
@@ -40,7 +46,10 @@ impl Plugin for UiPlugin {
                 )
                     .run_if(in_state(GameState::HowToPlay)),
             )
-            .add_systems(OnExit(GameState::HowToPlay), how_to_play::despawn_how_to_play)
+            .add_systems(
+                OnExit(GameState::HowToPlay),
+                how_to_play::despawn_how_to_play,
+            )
             // Menu / Game Over
             .add_systems(OnEnter(GameState::Menu), menu::spawn_menu)
             .add_systems(OnExit(GameState::Menu), menu::despawn_menu)

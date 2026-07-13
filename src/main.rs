@@ -43,6 +43,9 @@ fn main() {
             }),
             ..default()
         }))
+        // Near-black clear color: visible wherever no geometry/UI covers the
+        // viewport (notably the how-to-play showcase background).
+        .insert_resource(ClearColor(Color::srgb(0.008, 0.012, 0.03)))
         .add_plugins((game::GamePlugin, assets::AssetsPlugin, ui::UiPlugin))
         .add_systems(Update, update_ui_scale)
         .run();

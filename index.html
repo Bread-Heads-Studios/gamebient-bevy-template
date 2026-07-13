@@ -210,8 +210,6 @@
 
         const { default: init } = await import('./gamebient-game.js');
 
-        setProgress(50, 'Initializing engine...');
-
         // Prefer the brotli-compressed wasm when the server actually serves
         // it with Content-Encoding: br (production). Falls back transparently
         // for local dev (python3 -m http.server) where the .br file either
@@ -224,36 +222,55 @@
             }
         } catch {}
 
+        // Prefetch and compile the wasm bytes NOW (behind the progress bar) so
+        // the network cost is paid before the user clicks — the engine start is
+        // deferred to the unlock click so that the studio-logo screen plays only
+        // after the user has seen "Click to Start" and interacted.
+        let wasmModule;
         try {
-            await init(wasmUrl ? { module_or_path: wasmUrl } : undefined);
-        } catch (e) {
-            // wasm-bindgen uses exceptions for control flow — not a real error
-            if (e?.message?.includes('Using exceptions for control flow')) {
-                console.debug('[wasm-bindgen] Ignoring control-flow exception');
-            } else {
-                showError('Failed to start: ' + e.message);
-                throw e;
+            setProgress(30, 'Downloading game...');
+            const wasmResponse = await fetch(wasmUrl || './gamebient-game_bg.wasm');
+            if (!wasmResponse.ok) {
+                throw new Error('HTTP ' + wasmResponse.status);
             }
+            setProgress(60, 'Compiling...');
+            wasmModule = await WebAssembly.compile(await wasmResponse.arrayBuffer());
+            setProgress(100, 'Ready');
+        } catch (e) {
+            showError('Failed to download game: ' + (e?.message || e));
+            throw e;
         }
 
-        setProgress(100, 'Ready');
-
-        // Always show click-to-start since Bevy may create AudioContext later.
+        // Show click-to-start. The engine (init) runs only after the click so
+        // the studio-logo screen timer begins when the user is actually watching.
         loadingOverlay.classList.add('hidden');
         audioUnlock.style.display = 'flex';
 
-        const unlock = () => {
+        let started = false;
+        const unlock = async () => {
+            // Guard against re-entry: set flag synchronously before any await.
+            if (started) return;
+            started = true;
+            document.removeEventListener('click', unlock);
+            document.removeEventListener('touchend', unlock);
+            document.removeEventListener('keydown', unlock);
             userHasInteracted = true;
-            // Resume all existing AudioContexts
             trackedContexts.forEach(ctx => {
                 if (ctx.state === 'suspended') ctx.resume();
             });
             audioUnlock.style.display = 'none';
-            // Focus the canvas so keyboard input works immediately
             gameCanvas.focus();
-            document.removeEventListener('click', unlock);
-            document.removeEventListener('touchend', unlock);
-            document.removeEventListener('keydown', unlock);
+            try {
+                await init({ module_or_path: wasmModule });
+            } catch (e) {
+                // wasm-bindgen uses exceptions for control flow — not a real error
+                if (e?.message?.includes('Using exceptions for control flow')) {
+                    console.debug('[wasm-bindgen] Ignoring control-flow exception');
+                } else {
+                    showError('Failed to start: ' + e.message);
+                    throw e;
+                }
+            }
         };
         document.addEventListener('click', unlock);
         document.addEventListener('touchend', unlock);
