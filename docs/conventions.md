@@ -83,3 +83,25 @@ documented inline.
 `main.rs` sets `RENDER_SCALE = 0.5` (internal framebuffer scale) and pins vsync — the
 game runs on Raspberry Pi kiosk hardware. UI is authored against `REFERENCE_HEIGHT`
 (720) and scaled by `update_ui_scale`, so hardcoded pixel sizes hold on any display.
+
+## Boot flow & presentation kit
+
+The template ships the Gamebient presentation kit: `StudioLogo` (Bread Heads
+splash, auto-advance ~2.8 s, any button skips) → `Menu` → `HowToPlay` (once
+per session) → `Playing` → `GameOver` → `Menu`. Every transition goes through
+`ui::transition::ScreenFade` — never set `NextState<GameState>` directly;
+call `fade.request(target)` and gate input handlers on `fade.is_idle()`.
+
+Per-game work when building on the template:
+- **Title:** keep the text title, or switch to full-bleed artwork (see the
+  commented example in `src/ui/menu.rs`).
+- **How to play:** replace the placeholder item in
+  `src/ui/how_to_play.rs::spawn_how_to_play` with your game's real entities —
+  spawn from the same meshes/materials gameplay uses, one `Spin` +
+  `HowToPlayScreen` entity per item, one `ItemLabel` per entity. Labels track
+  automatically. `HowToPlay` must only be entered through the fade (see the
+  comment on `position_labels`).
+- **Pause:** gate every gameplay `Update` system on `states::not_paused`.
+- **Web boot:** `index.html` starts the engine on the "Click to Start"
+  gesture; the wasm is prefetched behind the progress bar. Don't move
+  `init()` back before the unlock.
