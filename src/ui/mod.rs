@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+pub mod how_to_play;
 pub mod hud;
 pub mod menu;
 pub mod studio_logo;
@@ -24,6 +25,22 @@ impl Plugin for UiPlugin {
                 studio_logo::advance_studio_logo.run_if(in_state(GameState::StudioLogo)),
             )
             .add_systems(OnExit(GameState::StudioLogo), studio_logo::despawn_studio_logo)
+            // How-to-play screen (shown once per session before the first game)
+            .init_resource::<how_to_play::SeenHowToPlay>()
+            .add_systems(
+                OnEnter(GameState::HowToPlay),
+                (how_to_play::spawn_how_to_play, how_to_play::mark_seen),
+            )
+            .add_systems(
+                Update,
+                (
+                    how_to_play::spin_items,
+                    how_to_play::position_labels,
+                    how_to_play::how_to_play_input,
+                )
+                    .run_if(in_state(GameState::HowToPlay)),
+            )
+            .add_systems(OnExit(GameState::HowToPlay), how_to_play::despawn_how_to_play)
             // Menu / Game Over
             .add_systems(OnEnter(GameState::Menu), menu::spawn_menu)
             .add_systems(OnExit(GameState::Menu), menu::despawn_menu)
