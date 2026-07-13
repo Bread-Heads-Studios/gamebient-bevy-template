@@ -66,4 +66,23 @@ mod tests {
         assert_eq!(d.score, 210);
         assert_eq!(d.high_score, 500);
     }
+
+    #[test]
+    fn reset_preserves_high_score_clears_run_data() {
+        // Simulate a completed run.
+        let mut d = GameData::default();
+        d.add_score(300);
+        d.lives = 1;
+        assert_eq!(d.high_score, 300);
+
+        // Simulate reset_game_data logic.
+        let high_score = d.high_score;
+        d = GameData::default();
+        d.high_score = high_score;
+
+        // Score and lives reset; high score survives.
+        assert_eq!(d.score, 0);
+        assert_eq!(d.lives, 3);
+        assert_eq!(d.high_score, 300);
+    }
 }

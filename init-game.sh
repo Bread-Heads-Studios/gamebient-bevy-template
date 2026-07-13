@@ -26,6 +26,7 @@ fi
 # Derive slugs from the display name.
 slug=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')
 snake=$(echo "$slug" | tr '-' '_')
+upper=$(echo "$NAME" | tr '[:lower:]' '[:upper:]')
 
 echo "Name:  $NAME"
 echo "Slug:  $slug   (crate, artifacts, wasm bundle)"
@@ -50,6 +51,7 @@ while IFS= read -r f; do
     sed -i '' \
         -e "s/gamebient_game/${snake}/g" \
         -e "s/gamebient-game/${slug}/g" \
+        -e "s/GAMEBIENT GAME/${upper}/g" \
         -e "s/Gamebient Game/${NAME}/g" \
         -e "s#OWNER/REPO#${REPO}#g" \
         "$f" 2>/dev/null || true

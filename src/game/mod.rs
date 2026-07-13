@@ -27,7 +27,7 @@ impl Plugin for GamePlugin {
             )
             .add_systems(OnExit(GameState::Playing), cleanup_game_entities)
             .init_resource::<states::Paused>()
-            .add_systems(OnEnter(GameState::Playing), reset_paused)
+            .add_systems(OnEnter(GameState::Playing), (reset_paused, reset_game_data))
             .add_systems(
                 Update,
                 (toggle_pause, pause_quit)
@@ -64,6 +64,13 @@ struct PauseOverlay;
 /// Resets pause state when a run starts.
 fn reset_paused(mut paused: ResMut<states::Paused>) {
     paused.0 = false;
+}
+
+/// Resets per-run data when a run starts (preserving the cross-run high score).
+fn reset_game_data(mut data: ResMut<scoring::GameData>) {
+    let high_score = data.high_score;
+    *data = scoring::GameData::default();
+    data.high_score = high_score;
 }
 
 /// Despawns the pause overlay when leaving Playing (e.g. quit while paused).

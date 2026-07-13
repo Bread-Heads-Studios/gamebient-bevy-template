@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Voidrunner</title>
+    <title>Gamebient Game</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
@@ -103,7 +103,7 @@
     </div>
 
     <div id="loading">
-        <h1>Voidrunner</h1>
+        <h1>Gamebient Game</h1>
         <div id="loading-bar-track"><div id="loading-bar"></div></div>
         <div id="loading-status">Initializing...</div>
     </div>
@@ -177,7 +177,7 @@
             if (!gl) throw new Error();
         } catch {
             showError(
-                'Your browser does not support WebGL2, which is required to run Voidrunner. ' +
+                'Your browser does not support WebGL2, which is required to run Gamebient Game. ' +
                 'Please try a recent version of Chrome, Firefox, or Edge.'
             );
             throw new Error('WebGL2 not supported');
@@ -251,15 +251,21 @@
             // Guard against re-entry: set flag synchronously before any await.
             if (started) return;
             started = true;
+
+            // Remove listeners immediately (synchronous) so no second invocation
+            // can slip in while the async init is running.
             document.removeEventListener('click', unlock);
             document.removeEventListener('touchend', unlock);
             document.removeEventListener('keydown', unlock);
+
             userHasInteracted = true;
             trackedContexts.forEach(ctx => {
                 if (ctx.state === 'suspended') ctx.resume();
             });
             audioUnlock.style.display = 'none';
             gameCanvas.focus();
+
+            // Start the Bevy engine now — studio-logo timer begins here.
             try {
                 await init({ module_or_path: wasmModule });
             } catch (e) {
