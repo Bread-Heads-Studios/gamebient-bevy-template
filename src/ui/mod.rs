@@ -1,21 +1,63 @@
 use bevy::prelude::*;
 
+pub mod how_to_play;
 pub mod hud;
 pub mod menu;
+pub mod studio_logo;
+pub mod transition;
 
 use crate::game::states::GameState;
 
-/// Title screen, game-over screen, and in-run HUD.
+/// Title screen, game-over screen, in-run HUD, and cross-state transitions.
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(GameState::Menu), menu::spawn_menu)
+        app
+            // Cross-state fade overlay + shared prompt pulse
+            .insert_resource(transition::ScreenFade::boot())
+            .add_systems(Startup, transition::spawn_fade_overlay)
+            .add_systems(Update, (transition::update_fade, transition::pulse_text))
+            // Studio logo boot screen
+            .add_systems(
+                OnEnter(GameState::StudioLogo),
+                studio_logo::spawn_studio_logo,
+            )
+            .add_systems(
+                Update,
+                studio_logo::advance_studio_logo.run_if(in_state(GameState::StudioLogo)),
+            )
+            .add_systems(
+                OnExit(GameState::StudioLogo),
+                studio_logo::despawn_studio_logo,
+            )
+            // How-to-play screen (shown once per session before the first game)
+            .init_resource::<how_to_play::SeenHowToPlay>()
+            .add_systems(
+                OnEnter(GameState::HowToPlay),
+                (how_to_play::spawn_how_to_play, how_to_play::mark_seen),
+            )
+            .add_systems(
+                Update,
+                (
+                    how_to_play::spin_items,
+                    how_to_play::position_labels,
+                    how_to_play::how_to_play_input,
+                )
+                    .run_if(in_state(GameState::HowToPlay)),
+            )
+            .add_systems(
+                OnExit(GameState::HowToPlay),
+                how_to_play::despawn_how_to_play,
+            )
+            // Menu / Game Over
+            .add_systems(OnEnter(GameState::Menu), menu::spawn_menu)
             .add_systems(OnExit(GameState::Menu), menu::despawn_menu)
             .add_systems(OnEnter(GameState::GameOver), menu::spawn_game_over)
             .add_systems(OnExit(GameState::GameOver), menu::despawn_menu)
+            .add_systems(Update, menu::menu_input)
+            // In-run HUD
             .add_systems(OnEnter(GameState::Playing), hud::spawn_hud)
-            .add_systems(Update, hud::update_hud.run_if(in_state(GameState::Playing)))
-            .add_systems(Update, menu::menu_input);
+            .add_systems(Update, hud::update_hud.run_if(in_state(GameState::Playing)));
     }
 }
