@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+pub mod input;
 pub mod player;
 pub mod scoring;
 pub mod states;
@@ -16,6 +17,8 @@ pub struct GamePlugin;
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<GameState>()
+            .init_resource::<input::GameInput>()
+            .add_systems(PreUpdate, input::collect_input)
             .init_resource::<scoring::GameData>()
             .add_message::<scoring::ScoreEvent>()
             .add_systems(Startup, setup_scene)
