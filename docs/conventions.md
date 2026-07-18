@@ -105,3 +105,24 @@ Per-game work when building on the template:
 - **Web boot:** `index.html` starts the engine on the "Click to Start"
   gesture; the wasm is prefetched behind the progress bar. Don't move
   `init()` back before the unlock.
+
+## Controls (the Gamebient canon)
+
+Every gameplay action must be reachable on all three surfaces. Gameplay
+systems read ONLY the `GameInput` resource (src/game/input.rs); menus and
+pause use the kit systems with the same key sets.
+
+| Logical | Keyboard | Gamepad | Virtual pad / cabinet |
+|---|---|---|---|
+| Move / aim | Arrows + WASD | Left stick + D-pad | D-pad |
+| A (primary/jump) | Z (+ Space) | South or North | A |
+| B (secondary/fire) | X (+ Shift) | West or East | B |
+| Confirm (menus) | Enter / Space / Z | any face button | Start or A |
+| Pause | Esc | Start | Pause |
+| Quit (while paused) | Enter | East | Start |
+
+The website's virtual controller injects exactly these keys (A→Z, B→X,
+D-pad→arrows, Start→Enter, Pause→Esc, Select→Shift) via the keyEvent bridge
+in index.html — a game that follows the canon is automatically
+mobile-playable. Legacy per-game key aliases are fine but must never be an
+action's only binding. Control text shown to players is ASCII only.
