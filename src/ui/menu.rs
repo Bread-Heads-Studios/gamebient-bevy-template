@@ -75,7 +75,7 @@ pub fn spawn_menu(mut commands: Commands) {
                         },
                     ),
                     (
-                        Text::new("WASD / Arrows: Move  |  Esc: Pause"),
+                        Text::new("Arrows / WASD: Move  |  Z: A  X: B  |  Esc: Pause"),
                         TextFont {
                             font_size: 18.0,
                             ..default()
@@ -146,10 +146,14 @@ pub fn menu_input(
     if !fade.is_idle() {
         return;
     }
-    let mut confirm = input.just_pressed(KeyCode::Enter) || input.just_pressed(KeyCode::Space);
+    let mut confirm = input.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyZ]);
     if !confirm {
         for gamepad in &gamepads {
-            if gamepad.just_pressed(GamepadButton::South) {
+            if gamepad.just_pressed(GamepadButton::South)
+                || gamepad.just_pressed(GamepadButton::North)
+                || gamepad.just_pressed(GamepadButton::West)
+                || gamepad.just_pressed(GamepadButton::East)
+            {
                 confirm = true;
                 break;
             }

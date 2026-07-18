@@ -26,30 +26,19 @@ pub fn spawn_player(
     ));
 }
 
-/// WASD / arrow-key movement in the XY plane. This is the canonical "add a
-/// gameplay system" example: a plain `fn` reading input and a `Query`, gated to
-/// the `Playing` state by `GamePlugin`.
+/// Moves the player using the canonical [`GameInput`] resource populated by
+/// `collect_input`. This is the canonical "add a gameplay system" example: a
+/// plain `fn` reading a resource and a `Query`, gated to the `Playing` state
+/// by `GamePlugin`.
 pub fn move_player(
     time: Res<Time>,
-    input: Res<ButtonInput<KeyCode>>,
+    input: Res<crate::game::input::GameInput>,
     mut query: Query<&mut Transform, With<Player>>,
 ) {
     let Ok(mut tf) = query.single_mut() else {
         return;
     };
-    let mut dir = Vec2::ZERO;
-    if input.any_pressed([KeyCode::KeyW, KeyCode::ArrowUp]) {
-        dir.y += 1.0;
-    }
-    if input.any_pressed([KeyCode::KeyS, KeyCode::ArrowDown]) {
-        dir.y -= 1.0;
-    }
-    if input.any_pressed([KeyCode::KeyA, KeyCode::ArrowLeft]) {
-        dir.x -= 1.0;
-    }
-    if input.any_pressed([KeyCode::KeyD, KeyCode::ArrowRight]) {
-        dir.x += 1.0;
-    }
+    let dir = Vec2::new(input.move_x, input.move_y);
     let delta = dir.normalize_or_zero() * PLAYER_SPEED * time.delta_secs();
     tf.translation.x += delta.x;
     tf.translation.y += delta.y;

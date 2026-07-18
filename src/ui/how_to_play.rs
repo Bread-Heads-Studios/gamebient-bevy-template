@@ -181,10 +181,14 @@ pub fn how_to_play_input(
     if !fade.is_idle() {
         return;
     }
-    let mut start = keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::Space);
+    let mut start = keyboard.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyZ]);
     if !start {
         for gamepad in &gamepads {
-            if gamepad.just_pressed(GamepadButton::South) {
+            if gamepad.just_pressed(GamepadButton::South)
+                || gamepad.just_pressed(GamepadButton::North)
+                || gamepad.just_pressed(GamepadButton::West)
+                || gamepad.just_pressed(GamepadButton::East)
+            {
                 start = true;
                 break;
             }
