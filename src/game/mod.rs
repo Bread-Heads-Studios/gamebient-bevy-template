@@ -18,7 +18,13 @@ impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<GameState>()
             .init_resource::<input::GameInput>()
-            .add_systems(PreUpdate, input::collect_input)
+            // After Bevy's input systems: without this ordering, collect_input is
+            // order-ambiguous with keyboard/gamepad event processing and press
+            // edges become nondeterministic (dropped or doubled just_* flags).
+            .add_systems(
+                PreUpdate,
+                input::collect_input.after(bevy::input::InputSystems),
+            )
             .init_resource::<scoring::GameData>()
             .add_message::<scoring::ScoreEvent>()
             .add_systems(Startup, setup_scene)

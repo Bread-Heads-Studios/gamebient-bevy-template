@@ -119,6 +119,12 @@ pub fn collect_input(
         input.move_x = dx.clamp(-1.0, 1.0);
         input.move_y = dy.clamp(-1.0, 1.0);
     }
+
+    // Cross-device invariant: "released" is only true when NO device still
+    // holds A. The per-device guards above can't see each other (e.g.
+    // keyboard Z released while gamepad South is held), so mask at the end.
+    // Hold-to-charge consumers rely on this never firing mid-hold.
+    input.primary_just_released &= !input.primary_held;
 }
 
 /// -1/0/+1 from a digital negative/positive button pair.
