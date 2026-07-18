@@ -72,11 +72,8 @@ pub fn collect_input(
         keyboard.any_just_released(a_keys) && !keyboard.any_pressed(a_keys);
     input.secondary_just_pressed = keyboard.any_just_pressed(b_keys);
     input.secondary_held = keyboard.any_pressed(b_keys);
-    input.confirm_just_pressed = keyboard.any_just_pressed([
-        KeyCode::Enter,
-        KeyCode::Space,
-        KeyCode::KeyZ,
-    ]);
+    input.confirm_just_pressed =
+        keyboard.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyZ]);
     input.pause_just_pressed = keyboard.just_pressed(KeyCode::Escape);
 
     // --- Gamepads ---
@@ -106,8 +103,8 @@ pub fn collect_input(
 
         // B = West or East
         let b_now = gamepad.pressed(GamepadButton::West) || gamepad.pressed(GamepadButton::East);
-        input.secondary_just_pressed |= gamepad.just_pressed(GamepadButton::West)
-            || gamepad.just_pressed(GamepadButton::East);
+        input.secondary_just_pressed |=
+            gamepad.just_pressed(GamepadButton::West) || gamepad.just_pressed(GamepadButton::East);
         input.secondary_held |= b_now;
 
         // Confirm = any face button; Pause = Start
