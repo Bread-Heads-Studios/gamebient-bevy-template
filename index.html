@@ -18,9 +18,37 @@
         #game-container {
             position: fixed; inset: 0;
             z-index: 0;
+            /* Center the fixed-size canvas so its transform-scaled result is
+               letterboxed within the viewport. */
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
+        /* The canvas LAYOUT box is pinned to 1280×720 px. This is deliberate and
+           load-bearing: winit's web backend runs a ResizeObserver on the canvas
+           and reports its layout-box size back to Bevy, which sets the render
+           backbuffer to match (bevy_winit react_to_resize). If we sized the
+           canvas to the viewport (e.g. width: 100vw) the backbuffer would track
+           the element and render full-resolution — exactly the fill-rate cost we
+           are eliminating. scale_factor_override alone does NOT prevent this.
+           So we keep the layout box fixed (→ backbuffer stays 1280×720) and scale
+           the canvas *visually* with a CSS transform, which does not affect the
+           layout box the ResizeObserver measures. --game-scale is the contain
+           factor computed in JS (see the fit() handler below); it only touches a
+           CSS variable, never the window resolution. !important defeats any inline
+           width/height winit may write on the element. */
         #game {
-            width: 100%; height: 100%;
+            width: 1280px !important;
+            height: 720px !important;
+            /* The container is a flex box, and a flex item's default
+               flex-shrink: 1 overrides the specified width during layout on
+               viewports narrower than 1280px — squeezing the layout box to a
+               portrait sliver that the ResizeObserver then reports as the
+               window size. flex: none exempts the canvas from flex sizing so
+               the 1280×720 box holds at every viewport size. */
+            flex: none;
+            transform: scale(var(--game-scale, 1));
+            transform-origin: center center;
             display: block;
             outline: none;
         }
@@ -97,7 +125,7 @@
 </head>
 <body>
     <!-- Pre-created canvas inside a fixed container. Bevy targets #game via
-         Window { canvas: Some("#game"), fit_canvas_to_parent: true }. -->
+         Window { canvas: Some("#game"), fit_canvas_to_parent: false }. -->
     <div id="game-container">
         <canvas id="game"></canvas>
     </div>
@@ -120,6 +148,19 @@
     <!-- Suppress wasm-bindgen control-flow exceptions globally.
          Must be a regular script (not module) so it registers before WASM loads. -->
     <script>
+        // Letterbox fit: scale the fixed 1280×720 canvas up to fill the viewport
+        // while preserving 16:9. Sets ONLY the --game-scale CSS variable (a visual
+        // transform); it never touches the window resolution, so the render
+        // backbuffer stays pinned at 1280×720. See the #game CSS comment.
+        (function () {
+            var fit = function () {
+                var s = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
+                document.documentElement.style.setProperty('--game-scale', String(s));
+            };
+            window.addEventListener('resize', fit);
+            fit();
+        })();
+
         // Listen for virtual controller messages from parent iframe wrapper
         window.addEventListener('message', function(e) {
             if (e.data && e.data.type === 'keyEvent') {
@@ -171,9 +212,12 @@
             if (status) loadingStatus.textContent = status;
         }
 
-        // Check WebGL2 support
+        // Check WebGL2 support. Probe on a throwaway canvas, never #game: a
+        // canvas gets exactly one context whose attributes are fixed by the
+        // FIRST getContext call. Touching #game here would lock in default
+        // attributes (MSAA, alpha) and silently override wgpu's later request.
         try {
-            const gl = gameCanvas.getContext('webgl2');
+            const gl = document.createElement('canvas').getContext('webgl2');
             if (!gl) throw new Error();
         } catch {
             showError(
