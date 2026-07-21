@@ -35,7 +35,11 @@ impl Plugin for UiPlugin {
             .init_resource::<how_to_play::SeenHowToPlay>()
             .add_systems(
                 OnEnter(GameState::HowToPlay),
-                (how_to_play::spawn_how_to_play, how_to_play::mark_seen),
+                (
+                    how_to_play::spawn_how_to_play,
+                    how_to_play::mark_seen,
+                    how_to_play::sweep_on_enter,
+                ),
             )
             .add_systems(
                 Update,
