@@ -71,7 +71,7 @@ pub fn music_director(
     state: Res<State<GameState>>,
     mut current: ResMut<CurrentTrack>,
     asset_server: Res<AssetServer>,
-    playing: Query<Entity, With<MusicTrack>>,
+    playing: Query<(Entity, &AudioSink), With<MusicTrack>>,
 ) {
     if !state.is_changed() {
         return;
@@ -111,13 +111,23 @@ pub struct MusicFadeOut {
 
 /// Crossfades from any current music to a new track.
 /// `handle` is `None` to fade out everything and start nothing (silence slot).
+///
+/// The template's `MUSIC` table carries no per-track parameters, so the fade
+/// timings, loop mode, and target volume are fixed here (1.5 s out, 2.0 s in,
+/// looping, full volume). If a game needs per-track control — e.g. a one-shot
+/// game-over sting (`PlaybackMode::Once`) or a boosted boss theme — reintroduce
+/// voidrunner's `looping` / `fade_out_secs` / `fade_in_secs` / `target_volume`
+/// parameters and extend the table.
 fn crossfade_to(
     commands: &mut Commands,
-    music_query: &Query<Entity, With<MusicTrack>>,
+    music_query: &Query<(Entity, &AudioSink), With<MusicTrack>>,
     handle: Option<Handle<AudioSource>>,
 ) {
-    // Fade out all current music entities
-    for entity in music_query.iter() {
+    // Fade out all current music entities. Sampling the sink's current volume
+    // (rather than assuming 1.0) keeps a track interrupted mid-fade-in from
+    // popping to full volume before it fades out.
+    for (entity, sink) in music_query.iter() {
+        let current_vol = sink.volume().to_linear();
         commands
             .entity(entity)
             .remove::<MusicTrack>()
@@ -125,7 +135,7 @@ fn crossfade_to(
             .insert(MusicFadeOut {
                 elapsed: 0.0,
                 duration: 1.5,
-                start_volume: 1.0,
+                start_volume: current_vol,
             });
     }
 

@@ -138,7 +138,8 @@ one place).
 
 Music is table-driven: fill a slot in `MUSIC` (src/game/audio/mod.rs) with a
 path under `assets/audio/music/` and the crossfade director handles the rest.
-`None` slots load nothing. Authored-asset precedent: voidrunner /
-Gravestone_Gauntlet; procedural precedent: Hunted.
+`None` slots load nothing. A `GameState` variant absent from the table also
+resolves to silence — when you add a state, add its row. Authored-asset
+precedent: voidrunner / Gravestone_Gauntlet; procedural precedent: Hunted.
 
 Web autoplay is already handled by the boot flow's AudioContext unlock.
