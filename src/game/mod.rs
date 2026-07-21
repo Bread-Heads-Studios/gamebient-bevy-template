@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+pub mod audio;
 pub mod input;
 pub mod player;
 pub mod scoring;
