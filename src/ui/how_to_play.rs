@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::game::input::GameInput;
 use crate::game::states::GameState;
 use crate::ui::transition::{Pulse, ScreenFade};
 
@@ -173,28 +174,12 @@ pub fn position_labels(
 }
 
 /// Launch input: Enter/Space or gamepad South, gated on the fade being idle.
-pub fn how_to_play_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    gamepads: Query<&Gamepad>,
-    mut fade: ResMut<ScreenFade>,
-) {
+pub fn how_to_play_input(input: Res<GameInput>, mut fade: ResMut<ScreenFade>) {
     if !fade.is_idle() {
         return;
     }
-    let mut start = keyboard.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyZ]);
-    if !start {
-        for gamepad in &gamepads {
-            if gamepad.just_pressed(GamepadButton::South)
-                || gamepad.just_pressed(GamepadButton::North)
-                || gamepad.just_pressed(GamepadButton::West)
-                || gamepad.just_pressed(GamepadButton::East)
-            {
-                start = true;
-                break;
-            }
-        }
-    }
-    if start {
+    // Canon Confirm: Enter / Space / Z, any face button, pad Start or A.
+    if input.confirm_just_pressed {
         let _ = fade.request(GameState::Playing);
     }
 }

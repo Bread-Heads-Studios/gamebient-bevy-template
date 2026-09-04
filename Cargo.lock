@@ -2452,8 +2452,18 @@ name = "gamebient-game"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "gamebient-input",
  "getrandom",
  "rand",
+]
+
+[[package]]
+name = "gamebient-input"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]

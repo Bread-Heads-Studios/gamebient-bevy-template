@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::game::input::GameInput;
 use crate::game::states::GameState;
 use crate::ui::how_to_play::{SeenHowToPlay, start_target};
 use crate::ui::transition::{Pulse, ScreenFade};
@@ -137,29 +138,13 @@ pub fn despawn_menu(mut commands: Commands, query: Query<Entity, With<MenuRoot>>
 /// ENTER routes `Menu -> HowToPlay/Playing` (once-per-session gate) and
 /// `GameOver -> Menu`, always through the fade.
 pub fn menu_input(
-    input: Res<ButtonInput<KeyCode>>,
-    gamepads: Query<&Gamepad>,
+    input: Res<GameInput>,
     state: Res<State<GameState>>,
     seen: Res<SeenHowToPlay>,
     mut fade: ResMut<ScreenFade>,
 ) {
-    if !fade.is_idle() {
-        return;
-    }
-    let mut confirm = input.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyZ]);
-    if !confirm {
-        for gamepad in &gamepads {
-            if gamepad.just_pressed(GamepadButton::South)
-                || gamepad.just_pressed(GamepadButton::North)
-                || gamepad.just_pressed(GamepadButton::West)
-                || gamepad.just_pressed(GamepadButton::East)
-            {
-                confirm = true;
-                break;
-            }
-        }
-    }
-    if !confirm {
+    // Canon Confirm: Enter / Space / Z, any face button, pad Start or A.
+    if !fade.is_idle() || !input.confirm_just_pressed {
         return;
     }
     match state.get() {

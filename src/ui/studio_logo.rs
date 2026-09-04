@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::game::input::GameInput;
 use crate::game::states::GameState;
 use crate::ui::transition::ScreenFade;
 
@@ -60,15 +61,12 @@ pub fn spawn_studio_logo(mut commands: Commands, asset_server: Res<AssetServer>)
 pub fn advance_studio_logo(
     time: Res<Time>,
     mut timer: ResMut<StudioLogoTimer>,
-    keyboard: Res<ButtonInput<KeyCode>>,
-    gamepads: Query<&Gamepad>,
+    input: Res<GameInput>,
     mut fade: ResMut<ScreenFade>,
 ) {
     timer.0.tick(time.delta());
-    let skip = keyboard.get_just_pressed().next().is_some()
-        || gamepads
-            .iter()
-            .any(|g| g.get_just_pressed().next().is_some());
+    // Any canon button (keyboard, gamepad, pad or host) skips.
+    let skip = input.any_just_pressed;
     if latch_and_should_advance(&mut timer.0, skip) {
         let _ = fade.request_with(GameState::Menu, 0.6);
     }
