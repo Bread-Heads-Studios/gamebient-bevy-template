@@ -162,7 +162,13 @@
         })();
 
         // Listen for virtual controller messages from parent iframe wrapper
+        // Hosts allowed to drive this game over the postMessage bridge: the
+        // ColecoVision GX site (production + Vercel previews) and local dev.
+        // Input injection is the only exposure, but an explicit list keeps a
+        // stray embedder from steering the game. Add partner hosts here.
+        var GX_HOST_ORIGINS = /^https:\/\/([a-z0-9-]+\.)*colecovisiongx\.com$|^https:\/\/[a-z0-9-]+\.vercel\.app$|^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
         window.addEventListener('message', function(e) {
+            if (!GX_HOST_ORIGINS.test(e.origin)) return;
             if (e.data && e.data.type === 'keyEvent') {
                 var evt = new KeyboardEvent(e.data.eventType, {
                     key: e.data.key,
@@ -278,7 +284,22 @@
                 throw new Error('HTTP ' + wasmResponse.status);
             }
             setProgress(60, 'Compiling...');
-            wasmModule = await WebAssembly.compile(await wasmResponse.arrayBuffer());
+            // Stream-compile so compilation overlaps the download instead of
+            // waiting for the last byte. Requires Content-Type: application/wasm
+            // (set in vercel.json). A dev server that serves another type makes
+            // compileStreaming reject; refetch and buffer in that case (the
+            // second fetch is an HTTP-cache hit).
+            if (typeof WebAssembly.compileStreaming === 'function') {
+                try {
+                    wasmModule = await WebAssembly.compileStreaming(wasmResponse);
+                } catch (streamErr) {
+                    console.debug('[loader] compileStreaming rejected, buffering:', streamErr?.message);
+                }
+            }
+            if (!wasmModule) {
+                const buffered = await fetch(wasmUrl || './gamebient-game_bg.wasm');
+                wasmModule = await WebAssembly.compile(await buffered.arrayBuffer());
+            }
             setProgress(100, 'Ready');
         } catch (e) {
             showError('Failed to download game: ' + (e?.message || e));

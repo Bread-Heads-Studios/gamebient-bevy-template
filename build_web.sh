@@ -60,11 +60,34 @@ wasm-opt -Oz \
     --enable-sign-ext \
     dist/gamebient-game_bg.wasm -o dist/gamebient-game_bg.wasm
 
+# --- Content-hash the immutable assets ---------------------------------------
+# index.html stays unhashed (served no-cache); the wasm and the JS glue get an
+# 8-char content hash so vercel.json can mark them immutable and repeat visits
+# (store Wi-Fi, kiosks) skip the network entirely. dist/index.html is rewritten
+# to the hashed names; the source index.html keeps plain names for local dev.
+hash8() {
+    if command -v sha256sum &> /dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -c1-8
+}
+rm -f dist/gamebient-game_bg.????????.wasm dist/gamebient-game_bg.????????.wasm.br dist/gamebient-game_bg.????????.wasm.gz \
+      dist/gamebient-game.????????.js dist/gamebient-game.????????.js.br dist/gamebient-game.????????.js.gz \
+      dist/gamebient-game_bg.wasm.br dist/gamebient-game_bg.wasm.gz dist/gamebient-game.js.br dist/gamebient-game.js.gz
+WASM_HASH=$(hash8 dist/gamebient-game_bg.wasm)
+JS_HASH=$(hash8 dist/gamebient-game.js)
+WASM_OUT="gamebient-game_bg.${WASM_HASH}.wasm"
+JS_OUT="gamebient-game.${JS_HASH}.js"
+mv dist/gamebient-game_bg.wasm "dist/${WASM_OUT}"
+mv dist/gamebient-game.js "dist/${JS_OUT}"
+# The glue's default wasm path is only used when init() is called without a
+# precompiled module; keep it correct anyway.
+sed -i.bak "s#gamebient-game_bg\.wasm#${WASM_OUT}#g" "dist/${JS_OUT}" && rm -f "dist/${JS_OUT}.bak"
+sed -i.bak -e "s#\./gamebient-game_bg\.wasm#./${WASM_OUT}#g" -e "s#\./gamebient-game\.js#./${JS_OUT}#g" dist/index.html && rm -f dist/index.html.bak
+echo "Hashed assets: ${WASM_OUT}, ${JS_OUT}"
+
 # Brotli-compress the wasm for production delivery. Uses Node's built-in
 # zlib so we don't need a separate brotli binary on the build host.
 if command -v node &> /dev/null; then
     echo "Brotli-compressing WASM..."
-    node -e "const fs=require('fs'),zlib=require('zlib');const src=fs.readFileSync('dist/gamebient-game_bg.wasm');const out=zlib.brotliCompressSync(src,{params:{[zlib.constants.BROTLI_PARAM_QUALITY]:11}});fs.writeFileSync('dist/gamebient-game_bg.wasm.br',out);console.log('  '+src.length+' -> '+out.length+' bytes ('+(out.length*100/src.length).toFixed(1)+'%)')"
+    node -e "const fs=require('fs'),zlib=require('zlib');const src=fs.readFileSync('dist/${WASM_OUT}');const out=zlib.brotliCompressSync(src,{params:{[zlib.constants.BROTLI_PARAM_QUALITY]:11}});fs.writeFileSync('dist/${WASM_OUT}.br',out);console.log('  '+src.length+' -> '+out.length+' bytes ('+(out.length*100/src.length).toFixed(1)+'%)')"
 else
     echo "WARNING: node not found; skipping brotli compression. Production builds should produce gamebient-game_bg.wasm.br." >&2
 fi
