@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+pub mod audio;
 pub mod input;
 pub mod player;
 pub mod scoring;
@@ -23,7 +24,17 @@ impl Plugin for GamePlugin {
             .add_plugins(gamebient_input::StateEvents::<GameState>::default())
             .init_resource::<scoring::GameData>()
             .add_message::<scoring::ScoreEvent>()
-            .add_systems(Startup, setup_scene)
+            .add_message::<audio::SfxEvent>()
+            .init_resource::<audio::CurrentTrack>()
+            .add_systems(Startup, (setup_scene, audio::setup_sfx))
+            .add_systems(
+                Update,
+                (
+                    audio::play_sfx,
+                    audio::music_director,
+                    audio::update_music_fades,
+                ),
+            )
             .add_systems(OnEnter(GameState::Playing), player::spawn_player)
             .add_systems(
                 Update,
@@ -93,12 +104,14 @@ fn toggle_pause(
     mut paused: ResMut<states::Paused>,
     overlay_query: Query<Entity, With<PauseOverlay>>,
     fade: Res<crate::ui::transition::ScreenFade>,
+    mut sfx: MessageWriter<audio::SfxEvent>,
 ) {
     if !fade.is_idle() || !input.pause_just_pressed {
         return;
     }
 
     paused.0 = !paused.0;
+    sfx.write(audio::SfxEvent::Pause);
 
     if paused.0 {
         commands

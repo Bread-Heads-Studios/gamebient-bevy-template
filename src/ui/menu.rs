@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::game::audio::SfxEvent;
 use crate::game::input::GameInput;
 use crate::game::states::GameState;
 use crate::ui::how_to_play::{SeenHowToPlay, start_target};
@@ -142,18 +143,20 @@ pub fn menu_input(
     state: Res<State<GameState>>,
     seen: Res<SeenHowToPlay>,
     mut fade: ResMut<ScreenFade>,
+    mut sfx: MessageWriter<SfxEvent>,
 ) {
     // Canon Confirm: Enter / Space / Z, any face button, pad Start or A.
     if !fade.is_idle() || !input.confirm_just_pressed {
         return;
     }
-    match state.get() {
-        GameState::Menu => {
-            let _ = fade.request(start_target(seen.0));
-        }
-        GameState::GameOver => {
-            let _ = fade.request(GameState::Menu);
-        }
-        _ => {}
+    let target = match state.get() {
+        GameState::Menu => Some(start_target(seen.0)),
+        GameState::GameOver => Some(GameState::Menu),
+        _ => None,
+    };
+    if let Some(t) = target
+        && fade.request(t)
+    {
+        sfx.write(SfxEvent::Confirm);
     }
 }

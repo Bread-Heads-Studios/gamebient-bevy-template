@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::game::audio::SfxEvent;
 use crate::game::input::GameInput;
 use crate::game::states::GameState;
 use crate::ui::transition::{Pulse, ScreenFade};
@@ -173,14 +174,23 @@ pub fn position_labels(
     }
 }
 
-/// Launch input: Enter/Space or gamepad South, gated on the fade being idle.
-pub fn how_to_play_input(input: Res<GameInput>, mut fade: ResMut<ScreenFade>) {
+/// Fires a ScreenSweep SFX when the how-to-play screen is entered.
+pub fn sweep_on_enter(mut sfx: MessageWriter<SfxEvent>) {
+    sfx.write(SfxEvent::ScreenSweep);
+}
+
+/// Launch input: the canon Confirm action (Enter / Space / Z, any face
+/// button, pad Start or A), gated on the fade being idle.
+pub fn how_to_play_input(
+    input: Res<GameInput>,
+    mut fade: ResMut<ScreenFade>,
+    mut sfx: MessageWriter<SfxEvent>,
+) {
     if !fade.is_idle() {
         return;
     }
-    // Canon Confirm: Enter / Space / Z, any face button, pad Start or A.
-    if input.confirm_just_pressed {
-        let _ = fade.request(GameState::Playing);
+    if input.confirm_just_pressed && fade.request(GameState::Playing) {
+        sfx.write(SfxEvent::Confirm);
     }
 }
 
