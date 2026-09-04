@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::game::audio::SfxEvent;
+use crate::game::input::GameInput;
 use crate::game::states::GameState;
 use crate::ui::transition::{Pulse, ScreenFade};
 
@@ -178,30 +179,17 @@ pub fn sweep_on_enter(mut sfx: MessageWriter<SfxEvent>) {
     sfx.write(SfxEvent::ScreenSweep);
 }
 
-/// Launch input: Enter/Space or gamepad South, gated on the fade being idle.
+/// Launch input: the canon Confirm action (Enter / Space / Z, any face
+/// button, pad Start or A), gated on the fade being idle.
 pub fn how_to_play_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    gamepads: Query<&Gamepad>,
+    input: Res<GameInput>,
     mut fade: ResMut<ScreenFade>,
     mut sfx: MessageWriter<SfxEvent>,
 ) {
     if !fade.is_idle() {
         return;
     }
-    let mut start = keyboard.any_just_pressed([KeyCode::Enter, KeyCode::Space, KeyCode::KeyZ]);
-    if !start {
-        for gamepad in &gamepads {
-            if gamepad.just_pressed(GamepadButton::South)
-                || gamepad.just_pressed(GamepadButton::North)
-                || gamepad.just_pressed(GamepadButton::West)
-                || gamepad.just_pressed(GamepadButton::East)
-            {
-                start = true;
-                break;
-            }
-        }
-    }
-    if start && fade.request(GameState::Playing) {
+    if input.confirm_just_pressed && fade.request(GameState::Playing) {
         sfx.write(SfxEvent::Confirm);
     }
 }

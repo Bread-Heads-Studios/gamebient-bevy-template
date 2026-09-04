@@ -161,25 +161,22 @@
             fit();
         })();
 
-        // Listen for virtual controller messages from parent iframe wrapper
         // Hosts allowed to drive this game over the postMessage bridge: the
         // ColecoVision GX site (production + Vercel previews) and local dev.
         // Input injection is the only exposure, but an explicit list keeps a
         // stray embedder from steering the game. Add partner hosts here.
         var GX_HOST_ORIGINS = /^https:\/\/([a-z0-9-]+\.)*colecovisiongx\.com$|^https:\/\/[a-z0-9-]+\.vercel\.app$|^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+        // Before the engine starts, a host's first press counts as the
+        // "Click to Start" gesture (a phone host can't tap inside this frame).
+        // Once init() has run, the gamebient-input crate's glue owns every
+        // bridge message (keyEvent, gx:input, gx:hello, Presentation).
         window.addEventListener('message', function(e) {
             if (!GX_HOST_ORIGINS.test(e.origin)) return;
-            if (e.data && e.data.type === 'keyEvent') {
-                var evt = new KeyboardEvent(e.data.eventType, {
-                    key: e.data.key,
-                    code: e.data.code,
-                    bubbles: true,
-                    cancelable: true,
-                });
-                window.dispatchEvent(evt);
-                var canvas = document.getElementById('game');
-                if (canvas) canvas.dispatchEvent(evt);
-            }
+            var d = e.data;
+            if (!d || typeof window.__gxUnlock !== 'function') return;
+            var press = (d.type === 'keyEvent' && d.eventType !== 'keyup') ||
+                        (d.type === 'gx:input' && (d.buttons | 0) !== 0);
+            if (press) window.__gxUnlock();
         });
 
         function isWasmNoise(msg) {
@@ -346,6 +343,7 @@
         document.addEventListener('click', unlock);
         document.addEventListener('touchend', unlock);
         document.addEventListener('keydown', unlock);
+        window.__gxUnlock = unlock;
     </script>
 </body>
 </html>

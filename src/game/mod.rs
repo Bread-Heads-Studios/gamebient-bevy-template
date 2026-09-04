@@ -18,14 +18,10 @@ pub struct GamePlugin;
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<GameState>()
-            .init_resource::<input::GameInput>()
-            // After Bevy's input systems: without this ordering, collect_input is
-            // order-ambiguous with keyboard/gamepad event processing and press
-            // edges become nondeterministic (dropped or doubled just_* flags).
-            .add_systems(
-                PreUpdate,
-                input::collect_input.after(bevy::input::InputSystems),
-            )
+            // Canon input + web glue. StateEvents posts every GameState
+            // transition to the embedding host (website analytics, cabinet).
+            .add_plugins(gamebient_input::GxInputPlugin::named("Gamebient Game"))
+            .add_plugins(gamebient_input::StateEvents::<GameState>::default())
             .init_resource::<scoring::GameData>()
             .add_message::<scoring::ScoreEvent>()
             .add_message::<audio::SfxEvent>()
@@ -100,27 +96,17 @@ fn cleanup_pause_overlay(mut commands: Commands, query: Query<Entity, With<Pause
     }
 }
 
-/// Toggles pause on Escape or gamepad Start and shows/hides the overlay.
+/// Toggles pause on the canon Pause action (Escape, gamepad Start, pad
+/// Pause) and shows/hides the overlay.
 fn toggle_pause(
     mut commands: Commands,
-    keyboard: Res<ButtonInput<KeyCode>>,
-    gamepads: Query<&Gamepad>,
+    input: Res<input::GameInput>,
     mut paused: ResMut<states::Paused>,
     overlay_query: Query<Entity, With<PauseOverlay>>,
     fade: Res<crate::ui::transition::ScreenFade>,
     mut sfx: MessageWriter<audio::SfxEvent>,
 ) {
-    if !fade.is_idle() {
-        return;
-    }
-    let mut pressed = keyboard.just_pressed(KeyCode::Escape);
-    for gamepad in &gamepads {
-        if gamepad.just_pressed(GamepadButton::Start) {
-            pressed = true;
-            break;
-        }
-    }
-    if !pressed {
+    if !fade.is_idle() || !input.pause_just_pressed {
         return;
     }
 
@@ -177,28 +163,18 @@ fn toggle_pause(
     }
 }
 
-/// While paused, Enter (or gamepad East) quits back to the title screen
-/// through the fade. Run state resets on the next Playing entry
-/// (`reset_paused`); OnExit(Playing) systems handle cleanup.
+/// While paused, Start (Enter / pad Start) or B (X / gamepad East) quits
+/// back to the title screen through the fade. Run state resets on the next
+/// Playing entry (`reset_paused`); OnExit(Playing) systems handle cleanup.
 fn pause_quit(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    gamepads: Query<&Gamepad>,
+    input: Res<input::GameInput>,
     paused: Res<states::Paused>,
     mut fade: ResMut<crate::ui::transition::ScreenFade>,
 ) {
     if !paused.0 || !fade.is_idle() {
         return;
     }
-    let mut quit = keyboard.just_pressed(KeyCode::Enter);
-    if !quit {
-        for gamepad in &gamepads {
-            if gamepad.just_pressed(GamepadButton::East) {
-                quit = true;
-                break;
-            }
-        }
-    }
-    if quit {
+    if input.start_just_pressed || input.secondary_just_pressed {
         let _ = fade.request(GameState::Menu);
     }
 }

@@ -42,6 +42,10 @@ bevy = { version = "0.18", default-features = false, features = [
     "std",
     "tonemapping_luts",
     "vorbis",
+    # wav: the synth palette (src/game/audio/synth.rs) bakes SFX as in-memory
+    # WAVs; without this decoder the first sound played panics at runtime with
+    # UnrecognizedFormat (compiles fine, so CI cannot catch it).
+    "wav",
     "webgl2",
     # zstd_rust: required by bevy_pbr/core_pipeline/anti_alias which
     # unconditionally enable bevy_image/zstd. Pure-Rust backend keeps the
@@ -49,6 +53,9 @@ bevy = { version = "0.18", default-features = false, features = [
     "zstd_rust",
 ] }
 rand = "0.9"
+# The Gamebient control canon + web glue (host protocol, touch overlay,
+# Gamepad API, legacy keyEvent bridge). Pin a tag; bump deliberately.
+gamebient-input = { git = "https://github.com/Bread-Heads-Studios/gamebient-input", tag = "v0.1.0" }
 
 # Native-only Bevy features: linux window backends and gilrs gamepad support.
 # Excluded from the wasm build so they don't add dead code paths.

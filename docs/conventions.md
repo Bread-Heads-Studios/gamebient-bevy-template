@@ -109,8 +109,12 @@ Per-game work when building on the template:
 ## Controls (the Gamebient canon)
 
 Every gameplay action must be reachable on all three surfaces. Gameplay
-systems read ONLY the `GameInput` resource (src/game/input.rs); menus and
-pause use the kit systems with the same key sets.
+systems read ONLY the `GameInput` resource, which comes from the
+`gamebient-input` crate (re-exported at src/game/input.rs); menus and
+pause use the kit systems with the same key sets. The crate also ships the
+web glue: the `gx:` host protocol, the legacy `keyEvent` bridge, a Gamepad
+API poller, the Presentation receiver and a DOM touch overlay, so none of
+that lives in index.html any more.
 
 | Logical | Keyboard | Gamepad | Virtual pad / cabinet |
 |---|---|---|---|
@@ -122,8 +126,9 @@ pause use the kit systems with the same key sets.
 | Quit (while paused) | Enter | East | Start |
 
 The website's virtual controller injects exactly these keys (A→Z, B→X,
-D-pad→arrows, Start→Enter, Pause→Esc, Select→Shift) via the keyEvent bridge
-in index.html — a game that follows the canon is automatically
+D-pad→arrows, Start→Enter, Pause→Esc, Select→Shift) via the keyEvent bridge,
+or the same buttons as a `gx:input` bitmask (see gamebient-input's
+docs/host-protocol.md) — a game that follows the canon is automatically
 mobile-playable. Legacy per-game key aliases are fine but must never be an
 action's only binding. Control text shown to players is ASCII only.
 
