@@ -9,11 +9,6 @@ mod ui;
 use bevy::prelude::*;
 use bevy::window::{PresentMode, WindowResolution};
 
-/// Internal-render scale: shade fewer pixels and let the browser upscale the
-/// result. 0.5 quarters the shaded pixel count — good for low-power kiosk
-/// hardware (e.g. a Raspberry Pi).
-const RENDER_SCALE: f32 = 0.5;
-
 /// Reference height that all UI pixel values are authored against.
 const REFERENCE_HEIGHT: f32 = 720.0;
 
@@ -34,10 +29,19 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Gamebient Game".into(),
-                resolution:
-                    WindowResolution::new(1280, 720).with_scale_factor_override(RENDER_SCALE),
+                // On web, pin the backbuffer to a fixed 1280×720 with a 1.0
+                // scale factor and let CSS scale the fixed-size canvas up to
+                // fill the viewport (letterboxed). We must NOT fit the canvas
+                // to its parent: winit would then resize the backbuffer to the
+                // element's pixel size, shading full-resolution pixels and
+                // defeating the low-res render target the Pi 5 depends on.
+                #[cfg(target_arch = "wasm32")]
+                resolution: WindowResolution::new(1280, 720).with_scale_factor_override(1.0),
+                #[cfg(not(target_arch = "wasm32"))]
+                resolution: WindowResolution::new(1280, 720),
                 canvas: Some("#game".to_string()),
-                fit_canvas_to_parent: true,
+                #[cfg(target_arch = "wasm32")]
+                fit_canvas_to_parent: false,
                 present_mode: PresentMode::AutoVsync,
                 ..default()
             }),
