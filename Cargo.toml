@@ -50,9 +50,8 @@ bevy = { version = "0.18", default-features = false, features = [
 ] }
 rand = "0.9"
 # The Gamebient control canon + web glue (host protocol, touch overlay,
-# Gamepad API, legacy keyEvent bridge). Games pin a git tag; the template
-# tracks the monorepo checkout.
-gamebient-input = { path = "../gamebient-input" }
+# Gamepad API, legacy keyEvent bridge). Pin a tag; bump deliberately.
+gamebient-input = { git = "https://github.com/Bread-Heads-Studios/gamebient-input", tag = "v0.1.0" }
 
 # Native-only Bevy features: linux window backends and gilrs gamepad support.
 # Excluded from the wasm build so they don't add dead code paths.

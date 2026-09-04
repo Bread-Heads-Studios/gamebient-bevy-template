@@ -2460,6 +2460,7 @@ dependencies = [
 [[package]]
 name = "gamebient-input"
 version = "0.1.0"
+source = "git+https://github.com/Bread-Heads-Studios/gamebient-input?tag=v0.1.0#39df4509746b9021d8eb1539959fc8bf1a699fcf"
 dependencies = [
  "bevy",
  "js-sys",
