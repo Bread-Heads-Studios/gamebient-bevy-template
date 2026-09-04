@@ -42,6 +42,10 @@ bevy = { version = "0.18", default-features = false, features = [
     "std",
     "tonemapping_luts",
     "vorbis",
+    # wav: the synth palette (src/game/audio/synth.rs) bakes SFX as in-memory
+    # WAVs; without this decoder the first sound played panics at runtime with
+    # UnrecognizedFormat (compiles fine, so CI cannot catch it).
+    "wav",
     "webgl2",
     # zstd_rust: required by bevy_pbr/core_pipeline/anti_alias which
     # unconditionally enable bevy_image/zstd. Pure-Rust backend keeps the
