@@ -126,3 +126,20 @@ D-pad→arrows, Start→Enter, Pause→Esc, Select→Shift) via the keyEvent bri
 in index.html — a game that follows the canon is automatically
 mobile-playable. Legacy per-game key aliases are fine but must never be an
 action's only binding. Control text shown to players is ASCII only.
+
+## Audio
+
+The kit is asset-free by default: SFX are synthesized at startup
+(`src/game/audio/synth.rs` — pure `f(t)` generators rendered to in-memory
+WAV). To add a sound: add an `SfxEvent` variant, bake its source in
+`setup_sfx`, emit the event from gameplay. Never play audio directly from
+gameplay systems — always go through the bus (keeps mixing/despawn policy in
+one place).
+
+Music is table-driven: fill a slot in `MUSIC` (src/game/audio/mod.rs) with a
+path under `assets/audio/music/` and the crossfade director handles the rest.
+`None` slots load nothing. A `GameState` variant absent from the table also
+resolves to silence — when you add a state, add its row. Authored-asset
+precedent: voidrunner / Gravestone_Gauntlet; procedural precedent: Hunted.
+
+Web autoplay is already handled by the boot flow's AudioContext unlock.

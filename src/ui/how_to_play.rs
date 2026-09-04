@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::game::audio::SfxEvent;
 use crate::game::states::GameState;
 use crate::ui::transition::{Pulse, ScreenFade};
 
@@ -172,11 +173,17 @@ pub fn position_labels(
     }
 }
 
+/// Fires a ScreenSweep SFX when the how-to-play screen is entered.
+pub fn sweep_on_enter(mut sfx: MessageWriter<SfxEvent>) {
+    sfx.write(SfxEvent::ScreenSweep);
+}
+
 /// Launch input: Enter/Space or gamepad South, gated on the fade being idle.
 pub fn how_to_play_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     gamepads: Query<&Gamepad>,
     mut fade: ResMut<ScreenFade>,
+    mut sfx: MessageWriter<SfxEvent>,
 ) {
     if !fade.is_idle() {
         return;
@@ -194,8 +201,8 @@ pub fn how_to_play_input(
             }
         }
     }
-    if start {
-        let _ = fade.request(GameState::Playing);
+    if start && fade.request(GameState::Playing) {
+        sfx.write(SfxEvent::Confirm);
     }
 }
 
