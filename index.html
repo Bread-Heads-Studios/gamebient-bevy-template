@@ -15,40 +15,18 @@
         }
 
         /* --- Game container + canvas --- */
+        /* Sizing, centring and the letterbox transform are applied by the
+           gamebient-input glue once the engine starts (pinned canvas policy,
+           see the crate README). Pre-engine the canvas sits under the
+           loading overlay, so nothing here is visible. */
         #game-container {
             position: fixed; inset: 0;
             z-index: 0;
-            /* Center the fixed-size canvas so its transform-scaled result is
-               letterboxed within the viewport. */
             display: flex;
             align-items: center;
             justify-content: center;
         }
-        /* The canvas LAYOUT box is pinned to 1280×720 px. This is deliberate and
-           load-bearing: winit's web backend runs a ResizeObserver on the canvas
-           and reports its layout-box size back to Bevy, which sets the render
-           backbuffer to match (bevy_winit react_to_resize). If we sized the
-           canvas to the viewport (e.g. width: 100vw) the backbuffer would track
-           the element and render full-resolution — exactly the fill-rate cost we
-           are eliminating. scale_factor_override alone does NOT prevent this.
-           So we keep the layout box fixed (→ backbuffer stays 1280×720) and scale
-           the canvas *visually* with a CSS transform, which does not affect the
-           layout box the ResizeObserver measures. --game-scale is the contain
-           factor computed in JS (see the fit() handler below); it only touches a
-           CSS variable, never the window resolution. !important defeats any inline
-           width/height winit may write on the element. */
         #game {
-            width: 1280px !important;
-            height: 720px !important;
-            /* The container is a flex box, and a flex item's default
-               flex-shrink: 1 overrides the specified width during layout on
-               viewports narrower than 1280px — squeezing the layout box to a
-               portrait sliver that the ResizeObserver then reports as the
-               window size. flex: none exempts the canvas from flex sizing so
-               the 1280×720 box holds at every viewport size. */
-            flex: none;
-            transform: scale(var(--game-scale, 1));
-            transform-origin: center center;
             display: block;
             outline: none;
         }
@@ -125,7 +103,8 @@
 </head>
 <body>
     <!-- Pre-created canvas inside a fixed container. Bevy targets #game via
-         Window { canvas: Some("#game"), fit_canvas_to_parent: false }. -->
+         Window { canvas: Some("#game"), fit_canvas_to_parent: false }; the
+         gamebient-input glue owns its size. -->
     <div id="game-container">
         <canvas id="game"></canvas>
     </div>
@@ -148,19 +127,6 @@
     <!-- Suppress wasm-bindgen control-flow exceptions globally.
          Must be a regular script (not module) so it registers before WASM loads. -->
     <script>
-        // Letterbox fit: scale the fixed 1280×720 canvas up to fill the viewport
-        // while preserving 16:9. Sets ONLY the --game-scale CSS variable (a visual
-        // transform); it never touches the window resolution, so the render
-        // backbuffer stays pinned at 1280×720. See the #game CSS comment.
-        (function () {
-            var fit = function () {
-                var s = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
-                document.documentElement.style.setProperty('--game-scale', String(s));
-            };
-            window.addEventListener('resize', fit);
-            fit();
-        })();
-
         // Hosts allowed to drive this game over the postMessage bridge: the
         // ColecoVision GX site (production + Vercel previews) and local dev.
         // Input injection is the only exposure, but an explicit list keeps a
