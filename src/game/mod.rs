@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 pub mod audio;
+pub mod host;
 pub mod input;
 pub mod player;
 pub mod scoring;
@@ -22,6 +23,9 @@ impl Plugin for GamePlugin {
             // transition to the embedding host (website analytics, cabinet).
             .add_plugins(gamebient_input::GxInputPlugin::named("Gamebient Game"))
             .add_plugins(gamebient_input::StateEvents::<GameState>::default())
+            // Host commands (pause / resume / mute) and the events hosts act
+            // on (started, gameover, score, paused).
+            .add_plugins(host::HostBridgePlugin)
             .init_resource::<scoring::GameData>()
             .add_message::<scoring::ScoreEvent>()
             .add_message::<audio::SfxEvent>()
@@ -46,7 +50,7 @@ impl Plugin for GamePlugin {
             .add_systems(OnEnter(GameState::Playing), (reset_paused, reset_game_data))
             .add_systems(
                 Update,
-                (toggle_pause, pause_quit)
+                (toggle_pause, pause_quit, sync_pause_overlay)
                     .chain()
                     .run_if(in_state(GameState::Playing)),
             )
@@ -97,23 +101,35 @@ fn cleanup_pause_overlay(mut commands: Commands, query: Query<Entity, With<Pause
 }
 
 /// Toggles pause on the canon Pause action (Escape, gamepad Start, pad
-/// Pause) and shows/hides the overlay.
+/// Pause). The overlay is driven by `sync_pause_overlay`, so a host pause
+/// (gx:set) looks exactly the same.
 fn toggle_pause(
-    mut commands: Commands,
     input: Res<input::GameInput>,
     mut paused: ResMut<states::Paused>,
-    overlay_query: Query<Entity, With<PauseOverlay>>,
     fade: Res<crate::ui::transition::ScreenFade>,
     mut sfx: MessageWriter<audio::SfxEvent>,
 ) {
     if !fade.is_idle() || !input.pause_just_pressed {
         return;
     }
-
     paused.0 = !paused.0;
     sfx.write(audio::SfxEvent::Pause);
+}
 
+/// Shows or hides the "PAUSED" overlay whenever `Paused` changes, whoever
+/// changed it (player input or a host command).
+fn sync_pause_overlay(
+    mut commands: Commands,
+    paused: Res<states::Paused>,
+    overlay_query: Query<Entity, With<PauseOverlay>>,
+) {
+    if !paused.is_changed() {
+        return;
+    }
     if paused.0 {
+        if !overlay_query.is_empty() {
+            return;
+        }
         commands
             .spawn((
                 PauseOverlay,
