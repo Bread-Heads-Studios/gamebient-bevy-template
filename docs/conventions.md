@@ -80,9 +80,13 @@ documented inline.
 
 ## Rendering for low-power targets
 
-`main.rs` sets `RENDER_SCALE = 0.5` (internal framebuffer scale) and pins vsync — the
-game runs on Raspberry Pi kiosk hardware. UI is authored against `REFERENCE_HEIGHT`
-(720) and scaled by `update_ui_scale`, so hardcoded pixel sizes hold on any display.
+The window is **pinned**: `fit_canvas_to_parent: false` with a 1280×720
+resolution, so the web backbuffer is 0.92 MP on every display (the Pi
+fill-rate budget); the gamebient-input glue sizes the canvas per
+`devicePixelRatio` and letterboxes it. There is no render-scale constant:
+`with_scale_factor_override` never changes the pixel count. UI is authored
+against `REFERENCE_HEIGHT` (720) and scaled by `update_ui_scale`, so hardcoded
+pixel sizes hold on any display. Vsync is pinned.
 
 ## Boot flow & presentation kit
 

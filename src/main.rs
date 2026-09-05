@@ -29,12 +29,10 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Gamebient Game".into(),
-                // On web, pin the backbuffer to a fixed 1280×720 with a 1.0
-                // scale factor and let CSS scale the fixed-size canvas up to
-                // fill the viewport (letterboxed). We must NOT fit the canvas
-                // to its parent: winit would then resize the backbuffer to the
-                // element's pixel size, shading full-resolution pixels and
-                // defeating the low-res render target the Pi 5 depends on.
+                // Pinned canvas policy: fit_canvas_to_parent: false keeps the
+                // backbuffer at 1280×720 on every display; the gamebient-input
+                // glue sizes the canvas box per devicePixelRatio and
+                // letterboxes it. See the crate's README, "Canvas policy".
                 #[cfg(target_arch = "wasm32")]
                 resolution: WindowResolution::new(1280, 720).with_scale_factor_override(1.0),
                 #[cfg(not(target_arch = "wasm32"))]
