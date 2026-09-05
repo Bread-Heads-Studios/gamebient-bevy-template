@@ -132,6 +132,19 @@ docs/host-protocol.md) — a game that follows the canon is automatically
 mobile-playable. Legacy per-game key aliases are fine but must never be an
 action's only binding. Control text shown to players is ASCII only.
 
+## Host protocol (embedding)
+
+Games built on this template speak the ColecoVision GX host protocol through
+`gamebient-input` (docs/host-protocol.md in that repo). The crate posts
+`ready` and every `GameState` transition; `src/game/host.rs` adds what a host
+acts on: `started` on entering `Playing`, `gameover` plus the final `score`
+on entering `GameOver`, `score` whenever `GameData.score` changes, and
+`paused` whenever `Paused` changes. It also honours host commands: pause and
+resume (only while `Playing`; the pause overlay follows the `Paused` resource,
+so a host pause looks like a player pause) and mute/unmute (`GlobalVolume`
+plus live sinks). Report anything else with `HostEvent::Custom`. Hosts treat
+all of it as untrusted.
+
 ## Audio
 
 The kit is asset-free by default: SFX are synthesized at startup
