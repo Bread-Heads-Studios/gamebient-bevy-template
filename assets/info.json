@@ -1,6 +1,6 @@
 {
     "name": "Gamebient Game",
-    "description": "A Bevy game on the Gamebient ColecoVision GX platform.",
+    "description": "PLACEHOLDER: one or two sentences with the hook and the core loop of Gamebient Game. Replace before publishing.",
     "image": "https://gamebient-game.vercel.app/assets/cartridge.png",
     "external_url": "https://ColecoVisionGX.com",
     "attributes": [

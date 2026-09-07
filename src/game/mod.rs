@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 
 pub mod audio;
+#[cfg(feature = "autopilot")]
+pub mod autopilot;
 pub mod host;
 pub mod input;
 pub mod player;
@@ -55,6 +57,8 @@ impl Plugin for GamePlugin {
                     .run_if(in_state(GameState::Playing)),
             )
             .add_systems(OnExit(GameState::Playing), cleanup_pause_overlay);
+        #[cfg(feature = "autopilot")]
+        app.add_plugins(autopilot::AutopilotPlugin);
     }
 }
 

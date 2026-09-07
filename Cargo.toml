@@ -3,6 +3,11 @@ name = "gamebient-game"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Self-playtest harness: scripted input + periodic screenshots
+# (src/game/autopilot.rs). Dev-only; never enabled in shipping builds.
+autopilot = []
+
 [dependencies]
 # Curated Bevy feature set — drops bevy_gltf, bevy_animation, bevy_gizmos,
 # bevy_scene, bevy_picking, morph, ktx2, custom_cursor, sysinfo_plugin and the

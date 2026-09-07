@@ -37,12 +37,28 @@ one-responsibility files.
   resource of handles), then reference that resource where you spawn.
 - **A test:** pull the rule into a pure method/function, add a `#[cfg(test)] mod tests`.
   `cargo test` runs in CI.
+- **A visual check:** `cargo run --features autopilot` plays a scripted ~60 s
+  session (logo → title → how-to-play → bot-played run → pause → game over) and
+  saves renderer screenshots `01-studio-logo` … `09-game-over` to
+  `/tmp/gamebient-game-shots` (override with `AUTOPILOT_DIR`). No OS capture or
+  input permissions needed. The bot and the `06-…` signature beat in
+  `src/game/autopilot.rs` are the two game-specific parts; customize them when
+  gameplay exists. The feature is dev-only and never ships.
+- **The box cover and mint metadata:** `assets/cartridge.png` (768x1024) and
+  `assets/info.json` are what the marketplace mints. Both ship as placeholders:
+  `make-cartridge.sh` composes the cover from an autopilot shot and
+  `tools/cartridge-cover.svg`, which must be redesigned in the game's own voice,
+  and `info.json`'s description/genre/hosts must be filled in. Use the
+  `designing-cartridge-covers` and `generating-cartridge-metadata` skills.
 
 ## Build / CI / release model
 
 - **Scripts:** `build.sh <pi|x86|web>` compiles one target (`web` delegates to
   `build_web.sh`, the Vercel build command); `package.sh <pi|x86>` makes a tarball;
-  `fetch-cartridge.sh` pulls the cartridge binary from the latest GitHub release.
+  `fetch-cartridge.sh` pulls the cartridge binary from the latest GitHub release;
+  `make-cartridge.sh` regenerates the `assets/cartridge.png` box cover (an
+  autopilot gameplay screenshot composed into `tools/cartridge-cover.svg`,
+  rendered with `rsvg-convert` — `brew install librsvg`).
 - **`ci.yml`** runs on PRs/pushes: `fmt --check`, `clippy -D warnings`, `cargo test`,
   and a `build-web` job mirroring Vercel.
 - **`release.yml`** runs on `v*` tags only: a matrix builds web/x86/pi, packages

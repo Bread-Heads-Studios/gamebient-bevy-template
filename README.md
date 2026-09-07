@@ -43,6 +43,40 @@ cargo run                    # debug, native host
 cargo run --release          # release, native host
 ```
 
+### Visual check (autopilot)
+
+```bash
+cargo run --features autopilot                       # scripted tour, shots in /tmp/gamebient-game-shots
+AUTOPILOT_DIR=shots AUTOPILOT_SCALE=1.5 cargo run --features autopilot   # 1920x1080 captures
+```
+
+A bot plays the game through the real input path and saves a screenshot at
+each beat (`01-studio-logo` … `09-game-over`). The bot policy and the
+signature-moment beat live in `src/game/autopilot.rs`; replace them once the
+game has gameplay. Dev-only; never compiled into shipping builds.
+
+### Box cover (`assets/cartridge.png`)
+
+```bash
+./make-cartridge.sh                    # capture gameplay (autopilot) + compose
+./make-cartridge.sh --skip-capture     # reuse the last capture
+./make-cartridge.sh --beat 07-late-play
+```
+
+Composes the 768x1024 cover that `assets/info.json` points at from a real
+gameplay shot and `tools/cartridge-cover.svg`. The shipped SVG is a labelled
+placeholder: redesign it in the game's own voice (typeface, words, drawings,
+palette) before release. Needs `rsvg-convert` (`brew install librsvg`).
+
+### Mint metadata (`assets/info.json`)
+
+The marketplace mints from `assets/info.json`: `name`, a real one-to-two
+sentence `description`, `image` → the cover, `attributes` (Genre, Platform,
+Players), and `properties` with `game_url`/`demo_url` (the live Vercel host),
+`binary_url` (the flat cartridge tarball the release workflow produces) and
+`binary_type: "bevy-tar"`. Fill in the placeholder description and check every
+URL resolves before publishing.
+
 ## Deploying (web)
 
 **Vercel** runs `build_web.sh` to build `dist/` and serves it as a static site.

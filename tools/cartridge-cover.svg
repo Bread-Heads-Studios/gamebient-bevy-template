@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PLACEHOLDER cartridge cover for Gamebient Game. Rendered by make-cartridge.sh
+  via rsvg-convert; expects the gameplay screenshot at ./shot.png (16:9).
+
+  This layout is deliberately plain so it is obvious it has not been designed
+  yet. Before shipping, redesign it in the game's own voice: typeface, words,
+  drawings, palette and composition should all come from the game's tone.
+  Only these elements are fixed for the shelf: a "Bread Heads Studios" credit,
+  a "ColecoVision GX" credit, the player count, and a real-gameplay panel with
+  a "real gameplay" tag. See the `designing-cartridge-covers` skill.
+
+  rsvg-convert uses system fonts. On macOS, Impact, DIN Condensed, plain
+  Courier, Hoefler, Big Caslon and Superclarendon silently fall back to
+  Helvetica; verify any face with a probe render before relying on it.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="768" height="1024" viewBox="0 0 768 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16213a"/>
+      <stop offset="1" stop-color="#05070f"/>
+    </linearGradient>
+    <clipPath id="panelClip">
+      <rect x="48" y="430" width="672" height="378" rx="12"/>
+    </clipPath>
+  </defs>
+
+  <rect width="768" height="1024" fill="url(#bg)"/>
+
+  <!-- studio credit -->
+  <text x="384" y="70" text-anchor="middle" font-family="Futura, 'Helvetica Neue', sans-serif"
+        font-weight="bold" font-size="20" letter-spacing="6" fill="#7fb4d8">BREAD HEADS STUDIOS</text>
+
+  <!-- title: replace with title art in the game's voice -->
+  <text x="384" y="230" text-anchor="middle" font-family="'Arial Black', 'Helvetica Neue', sans-serif"
+        font-weight="900" font-size="56" fill="#eaf4ff">GAMEBIENT GAME</text>
+  <text x="384" y="290" text-anchor="middle" font-family="Futura, 'Helvetica Neue', sans-serif"
+        font-size="22" letter-spacing="3" fill="#9fb8cc">A TAGLINE IN THE GAME'S OWN VOICE</text>
+
+  <!-- placeholder notice: delete when the cover is designed -->
+  <rect x="184" y="330" width="400" height="44" rx="8" fill="#3a2a06" stroke="#ffd94d" stroke-width="2"/>
+  <text x="384" y="359" text-anchor="middle" font-family="Menlo, monospace" font-size="16"
+        fill="#ffd94d">PLACEHOLDER COVER — DESIGN ME</text>
+
+  <!-- real gameplay panel -->
+  <rect x="40" y="422" width="688" height="394" rx="16" fill="#0a0f1c"/>
+  <g clip-path="url(#panelClip)">
+    <!-- 16:9 shot letterboxed into the panel; tune x/y/width/height to frame the action -->
+    <image xlink:href="shot.png" x="48" y="430" width="672" height="378"/>
+  </g>
+  <rect x="48" y="430" width="672" height="378" rx="12" fill="none" stroke="#7fb4d8" stroke-width="3"/>
+  <g transform="translate(120,808)">
+    <rect x="-72" y="-14" width="144" height="28" rx="6" fill="#16213a" stroke="#7fb4d8" stroke-width="2"/>
+    <text x="0" y="6" text-anchor="middle" font-family="Futura, 'Helvetica Neue', sans-serif"
+          font-weight="bold" font-size="14" letter-spacing="2" fill="#bfe3ff">REAL GAMEPLAY</text>
+  </g>
+
+  <!-- footer credits -->
+  <rect x="0" y="930" width="768" height="94" fill="#060a14"/>
+  <g font-family="Futura, 'Helvetica Neue', sans-serif" font-weight="bold">
+    <text x="44" y="975" font-size="30" fill="#e8edf5">ColecoVision <tspan fill="#33ccff">GX</tspan></text>
+    <text x="44" y="1000" font-size="14" letter-spacing="2" fill="#5c6b80">REVIVAL SERIES</text>
+    <text x="724" y="975" text-anchor="end" font-size="19" letter-spacing="2" fill="#ffd94d">1 PLAYER</text>
+    <text x="724" y="1000" text-anchor="end" font-size="14" letter-spacing="2" fill="#5c6b80">WEB • PI CARTRIDGE</text>
+  </g>
+</svg>
