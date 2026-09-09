@@ -4,9 +4,13 @@
 //! (`TimeUpdateStrategy::ManualDuration`), every frame is captured with
 //! `Screenshot` into `$RECORD_DIR/frames/000001.png…`, and an `events.jsonl`
 //! records state changes, autopilot beats, score, pause and any game message
-//! registered through the generic loggers. `tools/record.sh` turns the frames
-//! into `tour.mp4`; `tools/cut_clips.py` cuts beat clips and renders
-//! `chapters.md`. Never compiled into shipping builds.
+//! registered through the generic loggers. Capture warms up first: since the
+//! window's surface can take a few frames to resize to match a startup scale
+//! override, unsaved, uncounted probe screenshots are taken until one comes
+//! back at the window's current physical size, and only then does numbered
+//! frame 1 begin. `tools/record.sh` turns the frames into `tour.mp4`;
+//! `tools/cut_clips.py` cuts beat clips and renders `chapters.md`. Never
+//! compiled into shipping builds.
 //!
 //! Wiring (see `GamePlugin`): `app.add_plugins(RecordPlugin)`, then
 //! `log_state::<GameState>(app)`, `log_messages::<SfxEvent>(app)`,
@@ -148,6 +152,17 @@ pub struct Recorder {
     log: BufWriter<File>,
     beats: Vec<(String, u64)>,
     finished: bool,
+    /// Set once a captured screenshot's size matches the window's requested
+    /// size, ending the warm-up phase described on `capture_frame`.
+    ready: bool,
+    /// The frame size warm-up settled on; `None` until `ready` flips.
+    /// Numbered frames are captured at this size, and it's what
+    /// `manifest.json`'s `width`/`height` come from — not the `Window`
+    /// component, which reports the requested size immediately rather than
+    /// the surface's actual size.
+    expected: Option<(u32, u32)>,
+    /// Warm-up probes sent so far; bounds the warm-up (see `capture_frame`).
+    probes: u32,
 }
 
 impl Recorder {
@@ -162,6 +177,9 @@ impl Recorder {
             log: BufWriter::new(file),
             beats: Vec::new(),
             finished: false,
+            ready: false,
+            expected: None,
+            probes: 0,
         }
     }
 
@@ -218,22 +236,92 @@ impl Plugin for RecordPlugin {
         .insert_resource(Recorder::open(&dir))
         .add_message::<RecordBeat>()
         .configure_sets(PostUpdate, RecordSet::Capture.before(RecordSet::Log))
+        .configure_sets(PostUpdate, RecordSet::Log.run_if(recorder_ready))
         .add_systems(PostUpdate, capture_frame.in_set(RecordSet::Capture))
         .add_systems(PostUpdate, log_beats.in_set(RecordSet::Log))
         .add_systems(Last, finish_on_exit);
     }
 }
 
-/// One screenshot per frame, named by frame number. `Recorder::saved` is
-/// incremented only once the image is actually written, so the manifest's
-/// frame count matches the PNG sequence on disk even if trailing screenshots
-/// requested near exit never make it out of Bevy's async pipeline.
-fn capture_frame(mut commands: Commands, mut rec: ResMut<Recorder>) {
+fn recorder_ready(rec: Res<Recorder>) -> bool {
+    rec.ready
+}
+
+/// One screenshot per frame, named by frame number, once warmed up.
+///
+/// `apply_scale_override` (autopilot) requests a window resize at `Startup`,
+/// but the platform surface the `Screenshot` render node reads from can lag
+/// that request by several frames. Capturing from frame 1 unconditionally
+/// would record a handful of frames at the old size before `ffmpeg`'s
+/// glob-based encoder locks its output size to whichever frame it sees
+/// first, silently downscaling the rest. So before any numbered frame is
+/// written, this probes with unsaved, uncounted screenshots — logging
+/// nothing and never advancing `rec.frame` — until one comes back at the
+/// window's current physical size, bounded at 300 probes so a platform that
+/// never converges (e.g. headless) can't hang the recording.
+///
+/// `Recorder::saved` is incremented only once an image both matches the
+/// warmed-up size and is actually written, so the manifest's frame count
+/// matches the PNG sequence on disk even if trailing screenshots requested
+/// near exit never make it out of Bevy's async pipeline.
+fn capture_frame(
+    mut commands: Commands,
+    mut rec: ResMut<Recorder>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+) {
+    if !rec.ready {
+        rec.probes += 1;
+        if rec.probes > 300 {
+            let expected = windows
+                .single()
+                .map(|w| (w.physical_width(), w.physical_height()))
+                .unwrap_or((0, 0));
+            warn!(
+                "record: capture never matched window size {expected:?} after 300 probes; starting anyway"
+            );
+            rec.ready = true;
+            rec.expected = Some(expected);
+        } else {
+            // Compare against the window's size when the screenshot's async
+            // GPU readback actually completes, not when it was requested:
+            // the render extraction that sizes the surface reads the same
+            // `Window` field this queries, so a snapshot taken at request
+            // time always trivially matches that same frame's screenshot
+            // even before any resize has happened. Querying fresh here
+            // catches the resize landing in between.
+            commands.spawn(Screenshot::primary_window()).observe(
+                |captured: On<ScreenshotCaptured>,
+                 mut rec: ResMut<Recorder>,
+                 windows: Query<&Window, With<PrimaryWindow>>| {
+                    if rec.ready {
+                        return;
+                    }
+                    let expected = windows
+                        .single()
+                        .map(|w| (w.physical_width(), w.physical_height()))
+                        .unwrap_or((0, 0));
+                    let size = (captured.image.width(), captured.image.height());
+                    if size == expected {
+                        rec.ready = true;
+                        rec.expected = Some(size);
+                    }
+                },
+            );
+            return;
+        }
+    }
+
+    let expected = rec.expected.expect("record: expected size set once ready");
     rec.frame += 1;
     let path = rec.dir.join("frames").join(frame_filename(rec.frame));
     let mut save = save_to_disk(path);
     commands.spawn(Screenshot::primary_window()).observe(
         move |captured: On<ScreenshotCaptured>, mut rec: ResMut<Recorder>| {
+            let size = (captured.image.width(), captured.image.height());
+            if size != expected {
+                warn!("record: dropped a frame captured at {size:?}, expected {expected:?}");
+                return;
+            }
             save(captured);
             rec.saved += 1;
         },
@@ -248,19 +336,15 @@ fn log_beats(mut beats: MessageReader<RecordBeat>, mut rec: ResMut<Recorder>) {
     }
 }
 
-/// Writes `manifest.json` on the frame the autopilot requests exit.
-fn finish_on_exit(
-    mut exits: MessageReader<AppExit>,
-    mut rec: ResMut<Recorder>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-) {
+/// Writes `manifest.json` on the frame the autopilot requests exit, sizing it
+/// from the warmed-up capture size (see `Recorder::expected`) rather than the
+/// `Window` component, which reports the requested size immediately rather
+/// than the surface's actual size.
+fn finish_on_exit(mut exits: MessageReader<AppExit>, mut rec: ResMut<Recorder>) {
     if exits.read().next().is_none() {
         return;
     }
-    let (w, h) = windows
-        .single()
-        .map(|w| (w.physical_width(), w.physical_height()))
-        .unwrap_or((0, 0));
+    let (w, h) = rec.expected.unwrap_or((0, 0));
     rec.finish(w, h);
 }
 

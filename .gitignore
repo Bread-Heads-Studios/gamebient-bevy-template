@@ -25,3 +25,6 @@
 *.swp
 .idea/
 *.code-workspace
+
+# Python bytecode cache (tools/ test scripts)
+__pycache__/
