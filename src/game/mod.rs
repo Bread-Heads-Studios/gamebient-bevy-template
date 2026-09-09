@@ -61,6 +61,14 @@ impl Plugin for GamePlugin {
             .add_systems(OnExit(GameState::Playing), cleanup_pause_overlay);
         #[cfg(feature = "autopilot")]
         app.add_plugins(autopilot::AutopilotPlugin);
+        #[cfg(feature = "record")]
+        {
+            app.add_plugins(record::RecordPlugin);
+            record::log_state::<GameState>(app);
+            record::log_messages::<audio::SfxEvent>(app);
+            record::log_value::<scoring::GameData>(app, "score", |d| i64::from(d.score));
+            record::log_value::<states::Paused>(app, "pause", |p| i64::from(p.0));
+        }
     }
 }
 

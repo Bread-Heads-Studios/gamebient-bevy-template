@@ -15,14 +15,21 @@
 //! screenshot (a second `Screenshot` on the same window in one frame is
 //! dropped as a duplicate by Bevy).
 
-use std::path::PathBuf;
+use std::fs::{self, File};
+use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use bevy::app::AppExit;
+use bevy::prelude::*;
+use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+use bevy::time::TimeUpdateStrategy;
+use bevy::window::PrimaryWindow;
 
 /// Frames per second of the recording and the sim step (1/FPS s per frame).
-#[allow(dead_code)]
 pub const FPS: u32 = 60;
 
 /// Output root; override with `RECORD_DIR`. `build/` is gitignored.
-#[allow(dead_code)]
 pub fn record_dir() -> PathBuf {
     std::env::var("RECORD_DIR")
         .map(PathBuf::from)
@@ -30,12 +37,10 @@ pub fn record_dir() -> PathBuf {
 }
 
 /// `frames/<this>`; six digits so ffmpeg's glob sorts them.
-#[allow(dead_code)]
 pub fn frame_filename(frame: u64) -> String {
     format!("{frame:06}.png")
 }
 
-#[allow(dead_code)]
 pub fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -53,13 +58,11 @@ pub fn json_escape(s: &str) -> String {
 }
 
 /// A quoted, escaped JSON string.
-#[allow(dead_code)]
 pub fn json_str(s: &str) -> String {
     format!("\"{}\"", json_escape(s))
 }
 
 /// A JSON object from already-rendered values (`json_str`, numbers as text).
-#[allow(dead_code)]
 pub fn json_obj(fields: &[(&str, String)]) -> String {
     let body: Vec<String> = fields
         .iter()
@@ -69,7 +72,6 @@ pub fn json_obj(fields: &[(&str, String)]) -> String {
 }
 
 /// One `events.jsonl` line. `data` is an already-rendered JSON object.
-#[allow(dead_code)]
 pub fn event_line(frame: u64, fps: u32, kind: &str, data: &str) -> String {
     let t = frame as f64 / f64::from(fps);
     format!(
@@ -79,7 +81,6 @@ pub fn event_line(frame: u64, fps: u32, kind: &str, data: &str) -> String {
 }
 
 /// What `manifest.json` carries; written when the tour exits.
-#[allow(dead_code)]
 pub struct Manifest {
     pub name: String,
     pub fps: u32,
@@ -89,7 +90,6 @@ pub struct Manifest {
     pub beats: Vec<(String, u64)>,
 }
 
-#[allow(dead_code)]
 pub fn manifest_json(m: &Manifest) -> String {
     let beats: Vec<String> = m
         .beats
@@ -110,7 +110,6 @@ pub fn manifest_json(m: &Manifest) -> String {
 }
 
 /// The `"name"` field of `assets/info.json`, without a JSON dependency.
-#[allow(dead_code)]
 pub fn name_from_info_json(text: &str) -> Option<String> {
     let idx = text.find("\"name\"")?;
     let rest = &text[idx + "\"name\"".len()..];
@@ -118,6 +117,176 @@ pub fn name_from_info_json(text: &str) -> Option<String> {
     let rest = rest.strip_prefix('"')?;
     let end = rest.find('"')?;
     Some(rest[..end].to_string())
+}
+
+/// The autopilot fired a named beat on this frame (`01-studio-logo` …).
+#[derive(Message, Debug, Clone)]
+pub struct RecordBeat(pub String);
+
+/// Capture runs first so every logger in the same frame stamps the frame
+/// that was just captured.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RecordSet {
+    Capture,
+    Log,
+}
+
+#[derive(Resource)]
+pub struct Recorder {
+    /// Frames captured so far; the current frame's number after `Capture`.
+    pub frame: u64,
+    pub fps: u32,
+    dir: PathBuf,
+    log: BufWriter<File>,
+    beats: Vec<(String, u64)>,
+    finished: bool,
+}
+
+impl Recorder {
+    fn open(dir: &Path) -> Self {
+        fs::create_dir_all(dir.join("frames")).expect("record: create frames dir");
+        let file = File::create(dir.join("events.jsonl")).expect("record: create events.jsonl");
+        Self {
+            frame: 0,
+            fps: FPS,
+            dir: dir.to_path_buf(),
+            log: BufWriter::new(file),
+            beats: Vec::new(),
+            finished: false,
+        }
+    }
+
+    /// Append one event at the current frame. `data` is a rendered JSON object.
+    pub fn log(&mut self, kind: &str, data: &str) {
+        let line = event_line(self.frame, self.fps, kind, data);
+        writeln!(self.log, "{line}").expect("record: write events.jsonl");
+    }
+
+    fn finish(&mut self, width: u32, height: u32) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        self.log.flush().expect("record: flush events.jsonl");
+        let name = fs::read_to_string("assets/info.json")
+            .ok()
+            .and_then(|s| name_from_info_json(&s))
+            .unwrap_or_else(|| env!("CARGO_PKG_NAME").to_string());
+        let manifest = Manifest {
+            name,
+            fps: self.fps,
+            width,
+            height,
+            frames: self.frame,
+            beats: self.beats.clone(),
+        };
+        fs::write(self.dir.join("manifest.json"), manifest_json(&manifest))
+            .expect("record: write manifest.json");
+        info!("record: {} frames -> {}", self.frame, self.dir.display());
+    }
+}
+
+impl Drop for Recorder {
+    fn drop(&mut self) {
+        let _ = self.log.flush();
+    }
+}
+
+pub struct RecordPlugin;
+
+impl Plugin for RecordPlugin {
+    fn build(&self, app: &mut App) {
+        let dir = record_dir();
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / f64::from(FPS),
+        )))
+        .insert_resource(Recorder::open(&dir))
+        .add_message::<RecordBeat>()
+        .configure_sets(PostUpdate, RecordSet::Capture.before(RecordSet::Log))
+        .add_systems(PostUpdate, capture_frame.in_set(RecordSet::Capture))
+        .add_systems(PostUpdate, log_beats.in_set(RecordSet::Log))
+        .add_systems(Last, finish_on_exit);
+    }
+}
+
+/// One screenshot per frame, named by frame number.
+fn capture_frame(mut commands: Commands, mut rec: ResMut<Recorder>) {
+    rec.frame += 1;
+    let path = rec.dir.join("frames").join(frame_filename(rec.frame));
+    commands
+        .spawn(Screenshot::primary_window())
+        .observe(save_to_disk(path));
+}
+
+fn log_beats(mut beats: MessageReader<RecordBeat>, mut rec: ResMut<Recorder>) {
+    for RecordBeat(name) in beats.read() {
+        let frame = rec.frame;
+        rec.beats.push((name.clone(), frame));
+        rec.log("beat", &json_obj(&[("name", json_str(name))]));
+    }
+}
+
+/// Writes `manifest.json` on the frame the autopilot requests exit.
+fn finish_on_exit(
+    mut exits: MessageReader<AppExit>,
+    mut rec: ResMut<Recorder>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+) {
+    if exits.read().next().is_none() {
+        return;
+    }
+    let (w, h) = windows
+        .single()
+        .map(|w| (w.physical_width(), w.physical_height()))
+        .unwrap_or((0, 0));
+    rec.finish(w, h);
+}
+
+/// Logs `{"kind":"state","data":{"name":"Playing"}}` whenever `S` changes.
+pub fn log_state<S: States + std::fmt::Debug>(app: &mut App) {
+    fn system<S: States + std::fmt::Debug>(
+        state: Res<State<S>>,
+        mut last: Local<Option<String>>,
+        mut rec: ResMut<Recorder>,
+    ) {
+        let now = format!("{:?}", state.get());
+        if last.as_deref() == Some(now.as_str()) {
+            return;
+        }
+        rec.log("state", &json_obj(&[("name", json_str(&now))]));
+        *last = Some(now);
+    }
+    app.add_systems(PostUpdate, system::<S>.in_set(RecordSet::Log));
+}
+
+/// Logs every `T` message as `{"kind":"<TypeName>","data":{"debug":"..."}}`.
+pub fn log_messages<T: Message + std::fmt::Debug>(app: &mut App) {
+    fn system<T: Message + std::fmt::Debug>(
+        mut reader: MessageReader<T>,
+        mut rec: ResMut<Recorder>,
+    ) {
+        let kind = std::any::type_name::<T>()
+            .rsplit("::")
+            .next()
+            .unwrap_or("message");
+        for msg in reader.read() {
+            rec.log(kind, &json_obj(&[("debug", json_str(&format!("{msg:?}")))]));
+        }
+    }
+    app.add_systems(PostUpdate, system::<T>.in_set(RecordSet::Log));
+}
+
+/// Logs `{"kind":<kind>,"data":{"value":N}}` whenever `read(&R)` changes.
+pub fn log_value<R: Resource>(app: &mut App, kind: &'static str, read: fn(&R) -> i64) {
+    let system = move |res: Res<R>, mut last: Local<Option<i64>>, mut rec: ResMut<Recorder>| {
+        let now = read(&res);
+        if *last == Some(now) {
+            return;
+        }
+        rec.log(kind, &json_obj(&[("value", now.to_string())]));
+        *last = Some(now);
+    };
+    app.add_systems(PostUpdate, system.in_set(RecordSet::Log));
 }
 
 #[cfg(test)]

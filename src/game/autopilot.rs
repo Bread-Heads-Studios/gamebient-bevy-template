@@ -42,6 +42,7 @@
 
 use bevy::app::AppExit;
 use bevy::prelude::*;
+#[cfg(not(feature = "record"))]
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use gamebient_input::{Buttons, VirtualInput};
 
@@ -116,12 +117,24 @@ fn tap(virt: &mut VirtualInput, button: Buttons) {
     virt.latched |= button;
 }
 
+/// Captures a named beat. Under `record` every frame is already captured
+/// (and a second `Screenshot` of the same window in one frame is dropped as
+/// a duplicate), so the beat is logged instead and `tools/cut_clips.py`
+/// extracts the still from `tour.mp4`.
 fn shot(commands: &mut Commands, name: &str) {
-    let path = format!("{}/{name}.png", shot_dir());
-    info!("autopilot: screenshot {path}");
-    commands
-        .spawn(Screenshot::primary_window())
-        .observe(save_to_disk(path));
+    #[cfg(feature = "record")]
+    {
+        info!("autopilot: beat {name}");
+        commands.write_message(super::record::RecordBeat(name.to_string()));
+    }
+    #[cfg(not(feature = "record"))]
+    {
+        let path = format!("{}/{name}.png", shot_dir());
+        info!("autopilot: screenshot {path}");
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(path));
+    }
 }
 
 /// Steers the whole session. Runs before `collect_input` so the injected
