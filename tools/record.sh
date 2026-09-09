@@ -23,6 +23,22 @@ export RECORD_DIR="${RECORD_DIR:-build/record}"
 export AUTOPILOT_DIR="$RECORD_DIR/autopilot"
 export AUTOPILOT_SCALE="${AUTOPILOT_SCALE:-1.5}"
 
+# Refuse to wipe anything outside the repo -- a stray or malicious
+# RECORD_DIR (e.g. an absolute path, or one full of "..") must not turn
+# this into `rm -rf` of something else on disk. Resolved lexically in
+# python3 (already a hard dependency above) rather than `cd`/`dirname`, so
+# this works even on a first run where RECORD_DIR's parent doesn't exist
+# yet, never creates anything before the check passes, and (comparing
+# against a single os.getcwd() call for both sides) can't be fooled by
+# bash's $PWD and python's cwd disagreeing over a symlinked path (e.g.
+# macOS's /tmp -> /private/tmp).
+python3 -c '
+import os, sys
+root = os.getcwd()
+target = os.path.normpath(os.path.join(root, sys.argv[1]))
+sys.exit(0 if target.startswith(root + os.sep) else 1)
+' "$RECORD_DIR" || { echo "record.sh: RECORD_DIR must be inside the repo" >&2; exit 2; }
+
 rm -rf "$RECORD_DIR"
 mkdir -p "$RECORD_DIR"
 [ -w "$RECORD_DIR" ] || { echo "record.sh: $RECORD_DIR is not writable" >&2; exit 1; }
