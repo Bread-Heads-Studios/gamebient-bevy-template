@@ -55,6 +55,21 @@ each beat (`01-studio-logo` … `09-game-over`). The bot policy and the
 signature-moment beat live in `src/game/autopilot.rs`; replace them once the
 game has gameplay. Dev-only; never compiled into shipping builds.
 
+### Footage (record)
+
+```bash
+tools/record.sh                       # 60 fps tour video + beat clips -> build/record/
+AUTOPILOT_SCALE=1.0 tools/record.sh   # 1280x720 instead of 1920x1080
+tools/record.sh --keep-frames         # keep the PNG frames after encoding
+```
+
+Runs the autopilot tour on a fixed 1/60 s clock, captures every frame, and
+encodes `build/record/tour.mp4` with ffmpeg. `events.jsonl` logs state
+changes, beats, score, pause and every `SfxEvent`; `tools/cut_clips.py` cuts
+`clips/<beat>.mp4` (2 s before to 4 s after each beat), `shots/<beat>.png`,
+and `chapters.md`. Needs `ffmpeg` and `python3`. A tour is ~3,700 frames of
+PNG (several GB) until the script deletes them. Dev-only; never ships.
+
 ### Box cover (`assets/cartridge.png`)
 
 ```bash

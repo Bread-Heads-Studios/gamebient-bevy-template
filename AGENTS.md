@@ -44,6 +44,15 @@ one-responsibility files.
   input permissions needed. The bot and the `06-…` signature beat in
   `src/game/autopilot.rs` are the two game-specific parts; customize them when
   gameplay exists. The feature is dev-only and never ships.
+- **Footage:** `tools/record.sh` records the same tour offline (fixed 1/60 s
+  clock, one `Screenshot` per frame, `events.jsonl`) into `build/record/`
+  and cuts beat clips + `chapters.md` (`src/game/record.rs`,
+  `tools/cut_clips.py`). Under `record` the autopilot's `shot()` logs a
+  `RecordBeat` instead of taking its own screenshot (Bevy drops a second
+  `Screenshot` of the same window in one frame). Add game messages to the log
+  with `record::log_messages::<T>(app)` in `GamePlugin`. The
+  `recording-game-footage` skill rolls this out and writes
+  `docs/video-notes.md`.
 - **The box cover and mint metadata:** `assets/cartridge.png` (768x1024) and
   `assets/info.json` are what the marketplace mints. Both ship as placeholders:
   `make-cartridge.sh` composes the cover from an autopilot shot and
