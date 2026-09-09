@@ -155,11 +155,13 @@ pub struct Recorder {
     /// Set once a captured screenshot's size matches the window's requested
     /// size, ending the warm-up phase described on `capture_frame`.
     ready: bool,
-    /// The frame size warm-up settled on; `None` until `ready` flips.
-    /// Numbered frames are captured at this size, and it's what
-    /// `manifest.json`'s `width`/`height` come from — not the `Window`
-    /// component, which reports the requested size immediately rather than
-    /// the surface's actual size.
+    /// The frame size warm-up settled on. `None` until `ready` flips, and
+    /// still `None` right after a timed-out warm-up — see `accept_frame`,
+    /// which adopts the first numbered frame's size in that case. Numbered
+    /// frames are captured at this size, and it's what `manifest.json`'s
+    /// `width`/`height` come from — not the `Window` component, which
+    /// reports the requested size immediately rather than the surface's
+    /// actual size.
     expected: Option<(u32, u32)>,
     /// Warm-up probes sent so far; bounds the warm-up (see `capture_frame`).
     probes: u32,
@@ -247,6 +249,22 @@ fn recorder_ready(rec: Res<Recorder>) -> bool {
     rec.ready
 }
 
+/// Decide whether a just-captured frame should be saved, and what
+/// `Recorder::expected` should be afterward.
+///
+/// `expected == None` means "not decided yet" — the warm-up timed out
+/// without ever matching the window's reported size (see `capture_frame`).
+/// In that case the first frame offered adopts its size unconditionally.
+/// Once `expected` is `Some`, only a matching frame saves; a mismatch is
+/// skipped and `expected` is left unchanged.
+fn accept_frame(expected: Option<(u32, u32)>, actual: (u32, u32)) -> (bool, Option<(u32, u32)>) {
+    match expected {
+        None => (true, Some(actual)),
+        Some(e) if e == actual => (true, Some(e)),
+        Some(e) => (false, Some(e)),
+    }
+}
+
 /// One screenshot per frame, named by frame number, once warmed up.
 ///
 /// `apply_scale_override` (autopilot) requests a window resize at `Startup`,
@@ -258,29 +276,25 @@ fn recorder_ready(rec: Res<Recorder>) -> bool {
 /// written, this probes with unsaved, uncounted screenshots — logging
 /// nothing and never advancing `rec.frame` — until one comes back at the
 /// window's current physical size, bounded at 300 probes so a platform that
-/// never converges (e.g. headless) can't hang the recording.
+/// never converges (e.g. headless) can't hang the recording. If it never
+/// converges, `expected` is left `None` rather than pinned to the window's
+/// reported size (which is exactly the size that never matched a capture);
+/// `accept_frame` then adopts whatever size the first numbered frame
+/// actually comes back at, so the recording isn't silently discarded frame
+/// by frame.
 ///
 /// `Recorder::saved` is incremented only once an image both matches the
 /// warmed-up size and is actually written, so the manifest's frame count
 /// matches the PNG sequence on disk even if trailing screenshots requested
 /// near exit never make it out of Bevy's async pipeline.
-fn capture_frame(
-    mut commands: Commands,
-    mut rec: ResMut<Recorder>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-) {
+fn capture_frame(mut commands: Commands, mut rec: ResMut<Recorder>) {
     if !rec.ready {
         rec.probes += 1;
         if rec.probes > 300 {
-            let expected = windows
-                .single()
-                .map(|w| (w.physical_width(), w.physical_height()))
-                .unwrap_or((0, 0));
             warn!(
-                "record: capture never matched window size {expected:?} after 300 probes; starting anyway"
+                "record: capture never matched window size after 300 probes; adopting the first captured frame's size"
             );
             rec.ready = true;
-            rec.expected = Some(expected);
         } else {
             // Compare against the window's size when the screenshot's async
             // GPU readback actually completes, not when it was requested:
@@ -311,15 +325,16 @@ fn capture_frame(
         }
     }
 
-    let expected = rec.expected.expect("record: expected size set once ready");
     rec.frame += 1;
     let path = rec.dir.join("frames").join(frame_filename(rec.frame));
     let mut save = save_to_disk(path);
     commands.spawn(Screenshot::primary_window()).observe(
         move |captured: On<ScreenshotCaptured>, mut rec: ResMut<Recorder>| {
             let size = (captured.image.width(), captured.image.height());
-            if size != expected {
-                warn!("record: dropped a frame captured at {size:?}, expected {expected:?}");
+            let (accept, new_expected) = accept_frame(rec.expected, size);
+            rec.expected = new_expected;
+            if !accept {
+                warn!("record: dropped a frame captured at {size:?}, expected {new_expected:?}");
                 return;
             }
             save(captured);
@@ -456,5 +471,26 @@ mod tests {
         let info = "{\n    \"name\": \"Tire Stack\",\n    \"image\": \"x\"\n}";
         assert_eq!(name_from_info_json(info).as_deref(), Some("Tire Stack"));
         assert_eq!(name_from_info_json("{}"), None);
+    }
+
+    #[test]
+    fn accept_frame_with_no_expected_size_adopts_and_saves() {
+        assert_eq!(accept_frame(None, (1920, 1080)), (true, Some((1920, 1080))));
+    }
+
+    #[test]
+    fn accept_frame_matching_expected_size_saves() {
+        assert_eq!(
+            accept_frame(Some((1920, 1080)), (1920, 1080)),
+            (true, Some((1920, 1080)))
+        );
+    }
+
+    #[test]
+    fn accept_frame_mismatched_size_skips_without_changing_expected() {
+        assert_eq!(
+            accept_frame(Some((1920, 1080)), (1280, 720)),
+            (false, Some((1920, 1080)))
+        );
     }
 }
