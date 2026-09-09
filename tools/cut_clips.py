@@ -9,6 +9,8 @@ Reads manifest.json + events.jsonl, writes:
   clips/game-over.mp4  copy of the 09-game-over clip
   shots/<beat>.png     the exact beat frame (the autopilot's screenshot contract)
   chapters.md          timestamped table of states, beats, pause, score milestones
+Exits with a friendly message (no traceback) if manifest.json, events.jsonl,
+or tour.mp4 is missing from <record_dir>, or ffmpeg is not on PATH.
 Stdlib only; needs ffmpeg on PATH.
 """
 
@@ -27,6 +29,16 @@ def clip_window(beat_t, duration, pre=PRE_S, post=POST_S):
     start = max(0.0, beat_t - pre)
     end = min(duration, beat_t + post)
     return (start, max(0.0, end - start))
+
+
+def still_time(t, duration, fps):
+    """Clamp a still's timestamp so ffmpeg can always seek to a real frame.
+
+    A beat logged on the tour's last frame (or past it, in a partial log)
+    would otherwise seek at or beyond `duration`, where there is no frame
+    to grab.
+    """
+    return min(t, max(0.0, duration - 1.0 / fps))
 
 
 def fmt_time(t):
@@ -94,31 +106,53 @@ def ffmpeg(*args):
 
 def main(record_dir):
     root = pathlib.Path(record_dir)
-    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-    events = load_events(root / "events.jsonl")
+    manifest_path = root / "manifest.json"
+    events_path = root / "events.jsonl"
     tour = root / "tour.mp4"
+    for what, path in (
+        ("manifest.json", manifest_path),
+        ("events.jsonl", events_path),
+        ("tour.mp4", tour),
+    ):
+        if not path.exists():
+            sys.exit(f"cut_clips: {what} not found in {root}")
+    if shutil.which("ffmpeg") is None:
+        sys.exit("cut_clips: ffmpeg not found on PATH")
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    events = load_events(events_path)
     clips_dir = root / "clips"
     shots_dir = root / "shots"
     clips_dir.mkdir(exist_ok=True)
     shots_dir.mkdir(exist_ok=True)
     duration = manifest["duration_s"]
     fps = manifest["fps"]
+
+    # Computed from the manifest's beats alone, so chapters.md can be
+    # written before any clip is cut — a run that dies partway through
+    # cutting still leaves a complete chapters table naming every clip.
     written = []
+    for beat in manifest["beats"]:
+        name = beat["name"]
+        written.append(f"clips/{name}.mp4")
+        if name.startswith("06-"):
+            written.append("clips/signature.mp4")
+        if name == "09-game-over":
+            written.append("clips/game-over.mp4")
+    (root / "chapters.md").write_text(render_chapters(manifest, events, written), encoding="utf-8")
+
     for beat in manifest["beats"]:
         name, t = beat["name"], beat["frame"] / fps
         start, length = clip_window(t, duration)
         out = clips_dir / f"{name}.mp4"
         ffmpeg("-ss", f"{start:.3f}", "-i", str(tour), "-t", f"{length:.3f}",
                "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-an", str(out))
-        written.append(f"clips/{name}.mp4")
-        ffmpeg("-ss", f"{t:.3f}", "-i", str(tour), "-frames:v", "1", str(shots_dir / f"{name}.png"))
+        t_still = still_time(t, duration, fps)
+        ffmpeg("-ss", f"{t_still:.3f}", "-i", str(tour), "-frames:v", "1", str(shots_dir / f"{name}.png"))
         if name.startswith("06-"):
             shutil.copyfile(out, clips_dir / "signature.mp4")
-            written.append("clips/signature.mp4")
         if name == "09-game-over":
             shutil.copyfile(out, clips_dir / "game-over.mp4")
-            written.append("clips/game-over.mp4")
-    (root / "chapters.md").write_text(render_chapters(manifest, events, written), encoding="utf-8")
     print(f"cut_clips: {len(manifest['beats'])} beats -> {clips_dir}")
 
 

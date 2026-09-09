@@ -1,6 +1,6 @@
 import unittest
 
-from cut_clips import clip_window, fmt_time, milestones, render_chapters
+from cut_clips import clip_window, fmt_time, milestones, render_chapters, still_time
 
 
 class ClipWindowTests(unittest.TestCase):
@@ -12,6 +12,18 @@ class ClipWindowTests(unittest.TestCase):
 
     def test_window_clamps_to_end(self):
         self.assertEqual(clip_window(58.0, 60.0), (56.0, 4.0))
+
+
+class StillTimeTests(unittest.TestCase):
+    def test_inside_range_is_unchanged(self):
+        self.assertEqual(still_time(10.0, 60.0, 60), 10.0)
+
+    def test_past_end_is_clamped_to_last_frame(self):
+        self.assertAlmostEqual(still_time(60.0, 60.0, 60), 60.0 - 1.0 / 60)
+        self.assertAlmostEqual(still_time(75.0, 60.0, 60), 60.0 - 1.0 / 60)
+
+    def test_clamp_never_goes_negative_on_a_near_zero_duration(self):
+        self.assertEqual(still_time(0.0, 0.0, 60), 0.0)
 
 
 class FormatTests(unittest.TestCase):
