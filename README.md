@@ -70,6 +70,8 @@ changes, beats, score, pause and every `SfxEvent`; `tools/cut_clips.py` cuts
 and `chapters.md`. Needs `ffmpeg` and `python3`. A tour is ~3,700 frames of
 PNG (several GB) until the script deletes them. Dev-only; never ships.
 
+Run the cutter's own unit tests with `cd tools && python3 -m unittest test_cut_clips`.
+
 ### Box cover (`assets/cartridge.png`)
 
 ```bash

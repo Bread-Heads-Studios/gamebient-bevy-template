@@ -145,3 +145,52 @@ ten lines of diff, no bot changes. The skill performs this.
    lines appear in the log.
 3. The skill, given a game name, ends with a committed `docs/video-notes.md`
    and clips under `build/record/clips/`.
+
+## Implementation notes (2026-09-09)
+
+The build (`src/game/record.rs`, `tools/record.sh`, `tools/cut_clips.py`)
+diverged from the design above in a few places. Recorded here rather than
+edited into the design proper, since they were accepted trade-offs made
+while building, not a re-approval of the design:
+
+- **Capture runs in `PostUpdate`**, not `Last`. `RecordSet::Capture` is
+  ordered before `RecordSet::Log` within `PostUpdate` so every logger in a
+  frame stamps the frame that was just captured; nothing needed `Last`
+  specifically.
+- **State and score are logged by polling**, not by reacting to
+  `OnEnter`/`ScoreEvent`. `log_state` and `log_value` are generic
+  change-detecting systems (`Local<Option<T>>` diffed each frame) registered
+  once per type from the game, rather than one `OnEnter` system per
+  `GameState` variant or a dedicated score-event reader.
+- **ffmpeg's input is a glob** (`-pattern_type glob -i frames/*.png`), not
+  the sequential `%06d.png` pattern the design sketched. Frame numbers are
+  still six-digit and gap-free for `Recorder::saved` frames, so the glob
+  sorts identically either way.
+- **A warm-up phase precedes numbered capture** — not in the original
+  design at all. The autopilot's startup window-resize can lag the
+  `Screenshot` render node by several frames; capturing from frame 1
+  unconditionally would lock ffmpeg's glob-based encoder to whichever size
+  it saw first. Unsaved, uncounted probe screenshots run until one matches
+  the window's current physical size (bounded at 300 probes; past that,
+  the first captured frame's size is adopted instead — see `accept_frame`
+  in `record.rs`).
+- **`manifest.json`'s `frames` counts saved screenshots**, i.e.
+  `Recorder::saved`, not frames requested (`Recorder::frame`). Trailing
+  screenshots requested near `AppExit` can be dropped by Bevy's async
+  screenshot pipeline before they reach disk; counting only what was
+  actually written keeps the manifest matching the PNG sequence.
+- **Clips are always re-encoded**, not stream-copied with a re-encode
+  fallback. `-c:v libx264 -crf 18` unconditionally; simpler to reason about
+  and cheap at six seconds per clip.
+- **Stills are extracted by the cutter**, not captured live during the
+  tour. A second `Screenshot` of the same window in the same frame is
+  silently dropped by Bevy, so `shots/<beat>.png` can't be taken alongside
+  the beat's numbered frame; `tools/cut_clips.py` instead grabs the exact
+  beat frame from the encoded `tour.mp4` with `ffmpeg -ss <t> -frames:v 1`
+  (timestamp clamped by `still_time` so a beat at or past the tour's last
+  frame still has something to seek to).
+- **`AUTOPILOT_DIR` is `$RECORD_DIR/autopilot`**, not `$RECORD_DIR/shots`.
+  The autopilot's own screenshot path is unused under `record` (its
+  `shot()` writes a `RecordBeat` instead — see the module doc on
+  `record.rs`), so the directory just needs to exist and not collide with
+  `frames/`, `clips/`, or `shots/` (the cutter's still output).
