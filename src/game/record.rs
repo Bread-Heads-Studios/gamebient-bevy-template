@@ -10,7 +10,8 @@
 //!
 //! Wiring (see `GamePlugin`): `app.add_plugins(RecordPlugin)`, then
 //! `log_state::<GameState>(app)`, `log_messages::<SfxEvent>(app)`,
-//! `log_value::<GameData>(app, "score", |d| i64::from(d.score))`. Under this
+//! `log_value::<GameData>(app, "score", |d| i64::from(d.score))`, and
+//! `log_value::<Paused>(app, "pause", |p| i64::from(p.0))`. Under this
 //! feature the autopilot's `shot()` writes a `RecordBeat` instead of its own
 //! screenshot (a second `Screenshot` on the same window in one frame is
 //! dropped as a duplicate by Bevy).
@@ -22,7 +23,7 @@ use std::time::Duration;
 
 use bevy::app::AppExit;
 use bevy::prelude::*;
-use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
 use bevy::time::TimeUpdateStrategy;
 use bevy::window::PrimaryWindow;
 
@@ -133,8 +134,15 @@ pub enum RecordSet {
 
 #[derive(Resource)]
 pub struct Recorder {
-    /// Frames captured so far; the current frame's number after `Capture`.
+    /// Frames requested so far; the current frame's number after `Capture`.
+    /// Event lines are stamped with this — it is the frame they were logged
+    /// on, not a count of files written.
     pub frame: u64,
+    /// Frames actually written to disk by a `ScreenshotCaptured` observer.
+    /// This is what the manifest reports, since a few trailing screenshots
+    /// requested on the exit frame can be dropped when the window closes
+    /// before Bevy's async screenshot pipeline flushes them.
+    pub saved: u64,
     pub fps: u32,
     dir: PathBuf,
     log: BufWriter<File>,
@@ -148,6 +156,7 @@ impl Recorder {
         let file = File::create(dir.join("events.jsonl")).expect("record: create events.jsonl");
         Self {
             frame: 0,
+            saved: 0,
             fps: FPS,
             dir: dir.to_path_buf(),
             log: BufWriter::new(file),
@@ -168,6 +177,12 @@ impl Recorder {
         }
         self.finished = true;
         self.log.flush().expect("record: flush events.jsonl");
+        if self.saved != self.frame {
+            info!(
+                "record: {} frames requested, {} saved to disk (trailing screenshots dropped at exit)",
+                self.frame, self.saved
+            );
+        }
         let name = fs::read_to_string("assets/info.json")
             .ok()
             .and_then(|s| name_from_info_json(&s))
@@ -177,12 +192,12 @@ impl Recorder {
             fps: self.fps,
             width,
             height,
-            frames: self.frame,
+            frames: self.saved,
             beats: self.beats.clone(),
         };
         fs::write(self.dir.join("manifest.json"), manifest_json(&manifest))
             .expect("record: write manifest.json");
-        info!("record: {} frames -> {}", self.frame, self.dir.display());
+        info!("record: {} frames -> {}", self.saved, self.dir.display());
     }
 }
 
@@ -209,13 +224,20 @@ impl Plugin for RecordPlugin {
     }
 }
 
-/// One screenshot per frame, named by frame number.
+/// One screenshot per frame, named by frame number. `Recorder::saved` is
+/// incremented only once the image is actually written, so the manifest's
+/// frame count matches the PNG sequence on disk even if trailing screenshots
+/// requested near exit never make it out of Bevy's async pipeline.
 fn capture_frame(mut commands: Commands, mut rec: ResMut<Recorder>) {
     rec.frame += 1;
     let path = rec.dir.join("frames").join(frame_filename(rec.frame));
-    commands
-        .spawn(Screenshot::primary_window())
-        .observe(save_to_disk(path));
+    let mut save = save_to_disk(path);
+    commands.spawn(Screenshot::primary_window()).observe(
+        move |captured: On<ScreenshotCaptured>, mut rec: ResMut<Recorder>| {
+            save(captured);
+            rec.saved += 1;
+        },
+    );
 }
 
 fn log_beats(mut beats: MessageReader<RecordBeat>, mut rec: ResMut<Recorder>) {
