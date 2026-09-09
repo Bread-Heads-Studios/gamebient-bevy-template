@@ -45,11 +45,12 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      # No unit tests yet — this currently acts as a "compiles and links"
-      # smoke test on the native target. It starts protecting real assertions
-      # the moment tests are added under src/.
       - name: Test
-        run: cargo test --all-targets
+        run: cargo test --all-targets --all-features
+
+      - name: Cutter tests
+        working-directory: tools
+        run: python3 -m unittest test_cut_clips -v
 
   build-web:
     name: build wasm bundle
