@@ -24,13 +24,13 @@ grep -q '^record = ' "$GAME/Cargo.toml" || echo "HAND EDIT: add 'record = [\"aut
 # Module declaration + plugin block.
 MOD="$GAME/src/game/mod.rs"
 if [ -f "$MOD" ]; then
-  if ! grep -q 'pub mod record' "$MOD"; then
+  if ! grep -qE '^\s*pub mod record;' "$MOD"; then
     perl -0pi -e 's/(#\[cfg\(feature = "autopilot"\)\]\npub mod autopilot;\n)/$1#[cfg(feature = "record")]\npub mod record;\n/' "$MOD"
   fi
   if ! grep -q 'record::RecordPlugin' "$MOD"; then
     perl -0pi -e 's/^([ \t]*)(app\.add_plugins\(autopilot::AutopilotPlugin\);\n)/$1$2$1#[cfg(feature = "record")]\n$1\{\n$1    app.add_plugins(record::RecordPlugin);\n$1    record::log_state::<GameState>(app);\n$1    record::log_messages::<audio::SfxEvent>(app);\n$1    record::log_value::<scoring::GameData>(app, "score", |d| i64::from(d.score));\n$1    record::log_value::<states::Paused>(app, "pause", |p| i64::from(p.0));\n$1\}\n/m' "$MOD"
   fi
-  grep -q 'pub mod record' "$MOD" || echo "HAND EDIT: declare 'pub mod record' in $MOD"
+  grep -qE '^\s*pub mod record;' "$MOD" || echo "HAND EDIT: declare 'pub mod record' in $MOD"
   grep -q 'record::RecordPlugin' "$MOD" || echo "HAND EDIT: add the RecordPlugin block next to AutopilotPlugin in $MOD"
 else
   echo "HAND EDIT: no src/game/mod.rs; declare 'mod record' and add the RecordPlugin block where AutopilotPlugin is registered"
