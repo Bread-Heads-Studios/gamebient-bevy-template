@@ -6,6 +6,8 @@ pub mod autopilot;
 pub mod host;
 pub mod input;
 pub mod player;
+#[cfg(feature = "record")]
+pub mod record;
 pub mod scoring;
 pub mod states;
 
