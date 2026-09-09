@@ -10,6 +10,7 @@ set -euo pipefail
 TEMPLATE="$(cd "$(dirname "$0")/.." && pwd)"
 GAME="$(cd "${1:?usage: $0 <game-dir>}" && pwd)"
 
+mkdir -p "$GAME/src/game"
 cp "$TEMPLATE/src/game/record.rs" "$GAME/src/game/record.rs"
 mkdir -p "$GAME/tools"
 cp "$TEMPLATE/tools/record.sh" "$TEMPLATE/tools/cut_clips.py" "$TEMPLATE/tools/test_cut_clips.py" "$GAME/tools/"
@@ -43,15 +44,21 @@ if [ -f "$AUTO" ] && ! grep -q 'RecordBeat' "$AUTO"; then
   perl -0pi -e 's/^use bevy::render::view::screenshot::/#[cfg(not(feature = "record"))]\nuse bevy::render::view::screenshot::/m' "$AUTO"
   perl -0pi -e 's/fn shot\(commands: &mut Commands, name: &str\) \{\n    let path = format!\("\{\}\/\{name\}\.png", shot_dir\(\)\);\n    info!\("autopilot: screenshot \{path\}"\);\n    commands\n        \.spawn\(Screenshot::primary_window\(\)\)\n        \.observe\(save_to_disk\(path\)\);\n\}/fn shot(commands: &mut Commands, name: &str) {\n    #[cfg(feature = "record")]\n    {\n        info!("autopilot: beat {name}");\n        commands.write_message(super::record::RecordBeat(name.to_string()));\n    }\n    #[cfg(not(feature = "record"))]\n    {\n        let path = format!("{}\/{name}.png", shot_dir());\n        info!("autopilot: screenshot {path}");\n        commands\n            .spawn(Screenshot::primary_window())\n            .observe(save_to_disk(path));\n    }\n}/' "$AUTO"
 fi
-grep -q 'RecordBeat' "$AUTO" 2>/dev/null || echo "HAND EDIT: make shot() write RecordBeat under cfg(feature = \"record\") in ${AUTO:-the autopilot file}"
+grep -q 'RecordBeat' "$AUTO" 2>/dev/null || echo "HAND EDIT: make shot() write RecordBeat under cfg(feature = \"record\") in $AUTO"
 
 # SfxEvent must be Debug for log_messages.
 SFX="$(grep -rl 'pub enum SfxEvent' "$GAME/src" | head -1 || true)"
 if [ -n "$SFX" ]; then
   perl -0pi -e 's/#\[derive\(([^)]*)\)\]\npub enum SfxEvent/my $d=$1; $d =~ \/\bDebug\b\/ ? "#[derive($d)]\npub enum SfxEvent" : "#[derive($d, Debug)]\npub enum SfxEvent"/e' "$SFX"
+  perl -0ne 'exit(m/#\[derive\([^)]*\bDebug\b[^)]*\)\]\npub enum SfxEvent/s ? 0 : 1)' "$SFX" \
+    || echo "HAND EDIT: Debug did not land on the derive line above 'pub enum SfxEvent' in $SFX"
 else
   echo "HAND EDIT: no 'pub enum SfxEvent' found; drop or retarget the log_messages line"
 fi
+
+# __pycache__/ from the cutter's test run shouldn't get committed.
+GITIGNORE="$GAME/.gitignore"
+grep -qxF '__pycache__/' "$GITIGNORE" 2>/dev/null || echo '__pycache__/' >> "$GITIGNORE"
 
 echo "rollout-record: files in place for $GAME"
 echo "next: (cd $GAME && cargo check --features record && cargo clippy --all-targets --all-features -- -D warnings)"
