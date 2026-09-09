@@ -19,6 +19,10 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(fmt_time(0.0), "00:00.00")
         self.assertEqual(fmt_time(65.5), "01:05.50")
 
+    def test_fmt_time_rounding_carries_to_minutes(self):
+        self.assertEqual(fmt_time(119.996), "02:00.00")
+        self.assertEqual(fmt_time(59.997), "01:00.00")
+
 
 class MilestoneTests(unittest.TestCase):
     def test_first_score_and_power_of_ten_crossings(self):
@@ -27,6 +31,10 @@ class MilestoneTests(unittest.TestCase):
 
     def test_no_scores_gives_nothing(self):
         self.assertEqual(milestones([]), [])
+
+    def test_float_scores_coerced_to_int(self):
+        scores = [(1.0, 100.0), (2.0, 1000.0)]
+        self.assertEqual(milestones(scores), [(1.0, 100), (2.0, 1000)])
 
 
 class ChaptersTests(unittest.TestCase):

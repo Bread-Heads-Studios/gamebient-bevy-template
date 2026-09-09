@@ -30,9 +30,9 @@ def clip_window(beat_t, duration, pre=PRE_S, post=POST_S):
 
 
 def fmt_time(t):
-    minutes = int(t // 60)
-    seconds = t - 60 * minutes
-    return f"{minutes:02d}:{seconds:05.2f}"
+    total = round(t * 100)
+    minutes, cs = divmod(total, 6000)
+    return f"{minutes:02d}:{cs // 100:02d}.{cs % 100:02d}"
 
 
 def milestones(scores):
@@ -40,6 +40,7 @@ def milestones(scores):
     out = []
     threshold = None
     for t, value in scores:
+        value = int(value)
         if value <= 0:
             continue
         if threshold is None:
