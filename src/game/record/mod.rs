@@ -93,6 +93,7 @@ pub struct Manifest {
     pub height: u32,
     pub frames: u64,
     pub beats: Vec<(String, u64)>,
+    pub audio: Option<(usize, f32)>,
 }
 
 pub fn manifest_json(m: &Manifest) -> String {
@@ -102,8 +103,15 @@ pub fn manifest_json(m: &Manifest) -> String {
         .map(|(name, frame)| json_obj(&[("name", json_str(name)), ("frame", frame.to_string())]))
         .collect();
     let duration = m.frames as f64 / f64::from(m.fps);
+    let audio = match m.audio {
+        None => "null".to_string(),
+        Some((voices, peak)) => json_obj(&[
+            ("voices", voices.to_string()),
+            ("peak", format!("{peak:.3}")),
+        ]),
+    };
     format!(
-        "{{\"name\":{},\"fps\":{},\"width\":{},\"height\":{},\"frames\":{},\"duration_s\":{:.3},\"beats\":[{}]}}",
+        "{{\"name\":{},\"fps\":{},\"width\":{},\"height\":{},\"frames\":{},\"duration_s\":{:.3},\"beats\":[{}],\"audio\":{audio}}}",
         json_str(&m.name),
         m.fps,
         m.width,
@@ -165,6 +173,15 @@ pub struct Recorder {
     expected: Option<(u32, u32)>,
     /// Warm-up probes sent so far; bounds the warm-up (see `capture_frame`).
     probes: u32,
+    /// Every `capture_frame` call, warm-up included: the audio clock.
+    pub sim_frame: u64,
+    /// `sim_frame` on which numbered frame 1 was requested; converts audio
+    /// times to video time (see `audio.rs`).
+    #[allow(dead_code)]
+    first_video_sim_frame: Option<u64>, // read by record::audio (next tasks)
+    /// `(voices, peak)` from `audio::finish_audio`; `None` when nothing played.
+    #[allow(dead_code)]
+    audio: Option<(usize, f32)>, // read by record::audio (next tasks)
 }
 
 impl Recorder {
@@ -182,6 +199,9 @@ impl Recorder {
             ready: false,
             expected: None,
             probes: 0,
+            sim_frame: 0,
+            first_video_sim_frame: None,
+            audio: None,
         }
     }
 
@@ -214,6 +234,7 @@ impl Recorder {
             height,
             frames: self.saved,
             beats: self.beats.clone(),
+            audio: self.audio,
         };
         fs::write(self.dir.join("manifest.json"), manifest_json(&manifest))
             .expect("record: write manifest.json");
@@ -288,6 +309,7 @@ fn accept_frame(expected: Option<(u32, u32)>, actual: (u32, u32)) -> (bool, Opti
 /// matches the PNG sequence on disk even if trailing screenshots requested
 /// near exit never make it out of Bevy's async pipeline.
 fn capture_frame(mut commands: Commands, mut rec: ResMut<Recorder>) {
+    rec.sim_frame += 1;
     if !rec.ready {
         rec.probes += 1;
         if rec.probes > 300 {
@@ -326,6 +348,9 @@ fn capture_frame(mut commands: Commands, mut rec: ResMut<Recorder>) {
     }
 
     rec.frame += 1;
+    if rec.frame == 1 {
+        rec.first_video_sim_frame = Some(rec.sim_frame);
+    }
     let path = rec.dir.join("frames").join(frame_filename(rec.frame));
     let mut save = save_to_disk(path);
     commands.spawn(Screenshot::primary_window()).observe(
@@ -459,11 +484,26 @@ mod tests {
             height: 1080,
             frames: 3600,
             beats: vec![("01-studio-logo".into(), 72), ("02-title".into(), 150)],
+            audio: None,
         };
         assert_eq!(
             manifest_json(&m),
-            r#"{"name":"Gamebient Game","fps":60,"width":1920,"height":1080,"frames":3600,"duration_s":60.000,"beats":[{"name":"01-studio-logo","frame":72},{"name":"02-title","frame":150}]}"#
+            r#"{"name":"Gamebient Game","fps":60,"width":1920,"height":1080,"frames":3600,"duration_s":60.000,"beats":[{"name":"01-studio-logo","frame":72},{"name":"02-title","frame":150}],"audio":null}"#
         );
+    }
+
+    #[test]
+    fn manifest_json_reports_audio_voices_and_peak() {
+        let m = Manifest {
+            name: "G".into(),
+            fps: 60,
+            width: 2,
+            height: 2,
+            frames: 60,
+            beats: vec![],
+            audio: Some((12, 0.8126)),
+        };
+        assert!(manifest_json(&m).ends_with(r#""beats":[],"audio":{"voices":12,"peak":0.813}}"#));
     }
 
     #[test]
