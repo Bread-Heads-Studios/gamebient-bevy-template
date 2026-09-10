@@ -49,13 +49,36 @@ captions beyond the title/CTA banners, OS audio capture.
     `settings.spatial_scale.unwrap_or(DefaultSpatialScale)`; ears follow
     Bevy's `EarPositions` rule (one listener ⇒ its transformed ear offsets,
     otherwise the raw offsets);
+  - until its source is in `Assets<AudioSource>` a voice is keyed paused
+    (silent, playhead held), so an asset still loading does not start early;
   - a voice closes when its entity or `AudioPlayer` disappears, its handle
-    changes, or its sink becomes empty after having played.
-  - At `AppExit` (before the manifest is written) it decodes each distinct
-    source once via `Decodable::decoder()` (`channels()`, `sample_rate()`,
-    `i16` items → `f32`), converts voice times to video time
-    (`(sim_frame − first_video_sim_frame) / fps`), calls the mixer, and
-    writes `audio.wav` (48 kHz, 16-bit stereo) plus the manifest fields.
+    changes, or its sink becomes empty after having played. rodio plays on
+    the wall clock while the recorder's sim clock is decoupled from it and
+    often several times slower (each frame waits on a PNG capture), so a
+    one-shot's sink empties (and `PlaybackMode::Despawn`/`Remove` strip it)
+    after only a fraction of its length in sim time; ending it there
+    truncates it. So
+    each voice accumulates `played`, the clip seconds rodio has played
+    (`wall_dt × speed` while heard and not paused, `wall_dt` from
+    `std::time::Instant`, since `Time<Real>` is manual under
+    `ManualDuration` too). When a non-looping voice goes silent (sink empty,
+    entity or `AudioPlayer` gone) with
+    `played + max(2·wall_dt, 0.1 s) ≥ clip length`, rodio finished it: it
+    gets no end and the mixer stops it at the clip's end on the sim clock.
+    Otherwise the game stopped it early (a despawn, a crossfade) and it ends
+    on that frame. A handle change, a looping voice, a source that never
+    loaded and the close at exit always end on that frame. Known limit: a
+    game that cuts a one-shot on the sim clock after rodio has already
+    finished it on the wall clock gets the whole clip.
+  - Each distinct source is decoded once, the first frame it is in
+    `Assets<AudioSource>` (any still missing are decoded at exit), via
+    `Decodable::decoder()` (`channels()`, `sample_rate()`, `i16` items →
+    `f32`). At `AppExit` (before the manifest is written) it converts voice
+    times to video time (`(sim_frame − first_video_sim_frame) / fps`), drops
+    voices that stop before video time 0, calls the mixer, and writes
+    `audio.wav` (48 kHz, 16-bit stereo) plus the manifest fields; with no
+    saved frame or no remaining voice it writes no file and the manifest
+    says `"audio":null`.
 - `record/mixer.rs` — pure, unit-tested:
   `render(voices, clips, fps, out_rate, total_frames) -> Vec<f32>` (interleaved
   stereo), `limit(&mut [f32]) -> f32` (returns pre-limit peak; soft-knee

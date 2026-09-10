@@ -22,6 +22,15 @@ impl Clip {
         }
     }
 
+    /// Length in seconds at speed 1.
+    pub fn secs(&self) -> f64 {
+        if self.rate == 0 {
+            0.0
+        } else {
+            self.frames() as f64 / f64::from(self.rate)
+        }
+    }
+
     /// (left, right) at fractional source frame `pos`, linearly interpolated.
     /// Mono feeds both ears; stereo maps L/R (extra channels ignored);
     /// `downmix` averages every channel into both.
@@ -135,6 +144,30 @@ pub fn render(
     out
 }
 
+/// Video frame at which a voice with no `end` runs off the end of its clip,
+/// following its speed and pause keys as `render` does; infinite when it
+/// never does (looping, or held paused or at speed 0 for good).
+pub fn natural_stop(v: &Voice, clip: &Clip, fps: u32) -> f64 {
+    if v.looping || fps == 0 {
+        return f64::INFINITY;
+    }
+    let mut left = clip.secs();
+    for (i, k) in v.keys.iter().enumerate() {
+        let next = v.keys.get(i + 1).map_or(f64::INFINITY, |n| n.frame);
+        if k.paused || k.speed <= 0.0 {
+            continue;
+        }
+        // Clip seconds consumed per video frame.
+        let rate = f64::from(k.speed) / f64::from(fps);
+        let stop = k.frame + left / rate;
+        if stop <= next {
+            return stop;
+        }
+        left -= (next - k.frame) * rate;
+    }
+    f64::INFINITY
+}
+
 pub const KNEE: f32 = 0.9;
 pub const CEILING: f32 = 0.99;
 
@@ -230,6 +263,40 @@ mod tests {
         (0..n).map(|i| i as f32 / 1000.0).collect()
     }
     // fps 10, out_rate 100: 10 output samples per video frame.
+
+    #[test]
+    fn natural_stop_follows_speed_and_pauses() {
+        // 100 frames at 100 Hz = 1 s = 10 video frames at fps 10.
+        let clip = mono(vec![1.0; 100]);
+        assert_eq!(
+            natural_stop(&voice(-3.0, vec![key(-3.0, 1.0)]), &clip, 10),
+            7.0
+        );
+        let fast = Key {
+            speed: 2.0,
+            ..key(0.0, 1.0)
+        };
+        assert_eq!(natural_stop(&voice(0.0, vec![fast]), &clip, 10), 5.0);
+        let held = Key {
+            paused: true,
+            ..key(4.0, 1.0)
+        };
+        let v = voice(0.0, vec![key(0.0, 1.0), held, key(9.0, 1.0)]);
+        assert_eq!(natural_stop(&v, &clip, 10), 15.0);
+        let looping = Voice {
+            looping: true,
+            ..voice(0.0, vec![key(0.0, 1.0)])
+        };
+        assert_eq!(natural_stop(&looping, &clip, 10), f64::INFINITY);
+        let frozen = Key {
+            paused: true,
+            ..key(0.0, 1.0)
+        };
+        assert_eq!(
+            natural_stop(&voice(0.0, vec![frozen]), &clip, 10),
+            f64::INFINITY
+        );
+    }
 
     #[test]
     fn constant_gain_voice_plays_once_then_silence() {
