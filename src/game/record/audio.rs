@@ -163,6 +163,7 @@ fn ears(listeners: &Query<(&GlobalTransform, &SpatialListener)>) -> (Vec3, Vec3)
         })
 }
 
+#[allow(clippy::type_complexity)]
 pub fn capture_audio(
     mut cap: ResMut<AudioCapture>,
     rec: Res<Recorder>,
