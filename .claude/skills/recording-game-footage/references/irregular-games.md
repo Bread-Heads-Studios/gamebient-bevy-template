@@ -31,8 +31,9 @@ script needs no follow-up beyond `cargo check`.
   `record.rs` are siblings under the same parent module.** The script always
   emits `super::record::RecordBeat`. That's correct when both files sit under
   `src/game/` (Gravestone_Gauntlet, BeerPong, voidrunner) or when both are
-  crate-root modules (Hunted, once `record` is also moved to `src/record.rs`).
-  It's wrong when they're *not* siblings — pack-the-ripper has
+  crate-root modules (Hunted, where `rollout-record.sh` drops the recorder
+  folder module straight into `src/record/` alongside the crate-root
+  `autopilot.rs`). It's wrong when they're *not* siblings — pack-the-ripper has
   `src/autopilot.rs` (crate root) but keeps `record.rs` under `src/game/`, so
   `super::record` doesn't resolve and needs to be
   `crate::game::record::RecordBeat` by hand.

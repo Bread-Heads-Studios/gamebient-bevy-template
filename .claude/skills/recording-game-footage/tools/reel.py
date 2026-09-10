@@ -12,6 +12,11 @@ docs/reel.json: {"cta": [line1, line2], "card_secs": 1.5, "end_secs": 3.0,
 a title card (its assets/cartridge.png + title), then its clip trimmed to
 start/length (16:9 from build/record/clips/, 9:16 from clips/vertical/);
 the reel ends on a CTA card. Needs ffmpeg, ffprobe, rsvg-convert. Stdlib only.
+
+Segments (cards and clips) are intermediate Matroska files with lossless
+PCM audio; loudness normalization and near-silent clip windows are handled
+per segment, then the final concat pass copies video and encodes audio to
+AAC exactly once, so segment boundaries stay in sync.
 """
 
 import argparse
@@ -30,8 +35,16 @@ ASPECTS = {"16x9": ((1920, 1080), "clips"), "9x16": ((1080, 1920), "clips/vertic
 FADE = 0.15
 LOUDNORM = "loudnorm=I=-16:TP=-1.5:LRA=11"
 SILENCE = "anullsrc=r=48000:cl=stereo"
+SILENCE_THRESHOLD_DB = -50.0
+# Per-segment encode: lossless PCM audio so silence detection / normalization
+# choices made per clip don't get re-encoded (and potentially blow up) again
+# at concat time. Video is a normal x264 intermediate.
 ENCODE = ["-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p",
-          "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]
+          "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2"]
+# Final concat: copy video untouched, encode audio to AAC exactly once so
+# every segment boundary shares one continuous audio stream (no per-segment
+# AAC priming samples to throw off start_time).
+CONCAT_ARGS = ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart"]
 
 
 def fit_size(text, width, cap):
@@ -93,12 +106,14 @@ def card_args(png, secs, size, out):
             "-map", "0:v", "-map", "1:a", *ENCODE, "-shortest", str(out)]
 
 
-def clip_args(src, start, length, size, has_audio, out):
+def clip_args(src, start, length, size, has_audio, out, normalize=True):
     w, h = size
     args = ["-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", str(src)]
     if not has_audio:
         args += ["-f", "lavfi", "-t", f"{length:.3f}", "-i", SILENCE]
-    af = f"afade=t=in:d={FADE},afade=t=out:st={length - FADE:.3f}:d={FADE},{LOUDNORM}"
+    af = f"afade=t=in:d={FADE},afade=t=out:st={length - FADE:.3f}:d={FADE}"
+    if normalize:
+        af += f",{LOUDNORM}"
     return args + ["-vf", f"scale={w}:{h},fps=60,format=yuv420p", "-af", af,
                    "-map", "0:v", "-map", "0:a" if has_audio else "1:a", *ENCODE, str(out)]
 
@@ -107,8 +122,35 @@ def concat_list(paths):
     return "".join("file '" + str(p).replace("'", "'\\''") + "'\n" for p in paths)
 
 
-def run(*args):
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *args], check=True)
+def parse_max_volume(stderr):
+    """Extract the dB value from ffmpeg volumedetect's 'max_volume: -91.0 dB' line."""
+    m = re.search(r"max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB", stderr)
+    return float(m.group(1)) if m else None
+
+
+def is_near_silent(src, start, length):
+    """True when the [start, start+length) window of src has no meaningful audio.
+
+    A window with no audio at all (volumedetect finds nothing to report) or
+    whose peak is below SILENCE_THRESHOLD_DB is "near silent": loudnorm's
+    single-pass gain computation blows up to NaN/Inf on it and aborts the
+    encoder, so callers should skip normalization for these windows.
+    """
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-ss", f"{start:.3f}", "-t", f"{length:.3f}",
+         "-i", str(src), "-af", "volumedetect", "-f", "null", "-"],
+        capture_output=True, text=True)
+    max_volume = parse_max_volume(result.stderr)
+    return max_volume is None or max_volume < SILENCE_THRESHOLD_DB
+
+
+def run(label, args):
+    result = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *args],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        lines = [l for l in result.stderr.splitlines() if l.strip()]
+        last = lines[-1] if lines else (result.stderr.strip() or "unknown ffmpeg error")
+        sys.exit(f"reel: ffmpeg failed on {label}: {last}")
 
 
 def has_audio(path):
@@ -145,24 +187,27 @@ def build(root, cfg, aspect):
         shutil.copyfile(root / "games" / g["folder"] / "assets" / "cartridge.png", gwork / "cover.png")
         card = render_svg(f"card-{aspect}.svg", gwork, "card.png", TITLE=title,
                           TITLE_SIZE=fit_size(title, 820 if aspect == "16x9" else 960, 110))
-        seg = gwork / "card.mp4"
-        run(*card_args(card, cfg["card_secs"], size, seg))
+        seg = gwork / "card.mkv"
+        run(f"{g['folder']} card", card_args(card, cfg["card_secs"], size, seg))
         segments.append(seg)
         src = rec / clip_dir / f"{beat}.mp4"
         if not src.exists():
             sys.exit(f"reel: {src} missing; re-run tools/record.sh in {g['folder']}")
-        seg = gwork / "clip.mp4"
-        run(*clip_args(src, g["start"], g["length"], size, has_audio(src), seg))
+        seg = gwork / "clip.mkv"
+        normalize = not is_near_silent(src, g["start"], g["length"])
+        run(f"{g['folder']} clip ({src})",
+            clip_args(src, g["start"], g["length"], size, has_audio(src), seg, normalize=normalize))
         segments.append(seg)
     end = render_svg(f"end-{aspect}.svg", work, "end.png", COUNT=f"{len(cfg['games'])} GAMES",
                      CTA_1=cfg["cta"][0], CTA_2=cfg["cta"][1])
-    seg = work / "end.mp4"
-    run(*card_args(end, cfg["end_secs"], size, seg))
+    seg = work / "end.mkv"
+    run("end card", card_args(end, cfg["end_secs"], size, seg))
     segments.append(seg)
     listing = work / "segments.txt"
     listing.write_text(concat_list(segments), encoding="utf-8")
     out = out_dir / f"reel-{aspect}.mp4"
-    run("-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(out))
+    run(f"concat ({aspect})",
+        ["-f", "concat", "-safe", "0", "-i", str(listing), *CONCAT_ARGS, str(out)])
     print(f"reel: {out}")
     return out
 
