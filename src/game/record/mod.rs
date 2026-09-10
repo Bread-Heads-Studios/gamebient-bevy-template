@@ -20,6 +20,8 @@
 //! screenshot (a second `Screenshot` on the same window in one frame is
 //! dropped as a duplicate by Bevy).
 
+mod mixer;
+
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
