@@ -50,9 +50,15 @@ one-responsibility files.
   `tools/cut_clips.py`). Under `record` the autopilot's `shot()` logs a
   `RecordBeat` instead of taking its own screenshot (Bevy drops a second
   `Screenshot` of the same window in one frame). Add game messages to the log
-  with `record::log_messages::<T>(app)` in `GamePlugin`. The
-  `recording-game-footage` skill rolls this out and writes
-  `docs/video-notes.md`.
+  with `record::log_messages::<T>(app)` in `GamePlugin`.
+  `src/game/record/audio.rs` logs every `AudioPlayer` playback each frame and
+  mixes them into `audio.wav` at `AppExit`, which `record.sh` muxes into
+  `tour.mp4` (loudness-normalized) and `cut_clips.py` carries into
+  `clips/<beat>.mp4`. `cut_clips.py` also renders `banner.png` from
+  `tools/vertical-banner.svg` via `rsvg-convert` and reframes the tour and
+  clips to 1080x1920 (`tour-vertical.mp4`, `clips/vertical/<beat>.mp4`) for
+  vertical-format posting. The `recording-game-footage` skill rolls this out
+  and writes `docs/video-notes.md`.
 - **The box cover and mint metadata:** `assets/cartridge.png` (768x1024) and
   `assets/info.json` are what the marketplace mints. Both ship as placeholders:
   `make-cartridge.sh` composes the cover from an autopilot shot and

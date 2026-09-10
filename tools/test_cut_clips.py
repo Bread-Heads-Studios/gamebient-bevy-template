@@ -1,6 +1,18 @@
 import unittest
 
-from cut_clips import clip_window, fmt_time, milestones, render_chapters, still_time
+from cut_clips import (
+    CTA,
+    banner_svg,
+    clip_args,
+    clip_window,
+    fmt_time,
+    milestones,
+    render_chapters,
+    still_time,
+    title_size,
+    vertical_args,
+    vertical_filter,
+)
 
 
 class ClipWindowTests(unittest.TestCase):
@@ -69,6 +81,46 @@ class ChaptersTests(unittest.TestCase):
         self.assertNotIn("SfxEvent", out)
         self.assertIn("- clips/01-studio-logo.mp4", out)
         self.assertIn("Tour length: 01:02.00 (3720 frames @ 60 fps)", out)
+
+
+class VerticalTests(unittest.TestCase):
+    def test_title_size_caps_short_titles_and_shrinks_long_ones(self):
+        self.assertEqual(title_size("GULPER"), 96)
+        self.assertEqual(title_size("GRAND THEFT AUTO-REPLY"), 51)
+
+    def test_banner_svg_fills_and_escapes(self):
+        tpl = "<t s='{{TITLE_SIZE}}'>{{TITLE}}</t><a>{{CTA_1}}</a><b>{{CTA_2}}</b>"
+        out = banner_svg(tpl, "Dough & <Co>", CTA)
+        self.assertIn("DOUGH &amp; &lt;CO&gt;", out)
+        # title_size("DOUGH & <CO>") is 12 glyphs: int(900 / (0.8 * 12)) == 93,
+        # below the 96 cap (verified against the two title_size tests above,
+        # which pin width=900/cap=96/0.8-per-glyph; 96 is unreachable at this
+        # length without breaking the 22-char-title == 51 case).
+        self.assertIn("s='93'", out)
+        self.assertIn("<a>Play the demo at</a><b>colecovisiongx.com</b>", out)
+        self.assertNotIn("{{", out)
+
+    def test_vertical_filter_blurs_background_and_centers_gameplay(self):
+        f = vertical_filter()
+        self.assertIn("crop=1080:1920", f)
+        self.assertIn("gblur", f)
+        self.assertIn("eq=brightness=-0.12", f)
+        self.assertIn("[fg]scale=1080:-2", f)
+        self.assertIn("overlay=(W-w)/2:(H-h)/2", f)
+        self.assertTrue(f.endswith("[base][1:v]overlay=0:0[v]"))
+
+    def test_vertical_args_map_optional_audio(self):
+        a = vertical_args("in.mp4", "banner.png", "out.mp4")
+        self.assertEqual(a[:4], ["-i", "in.mp4", "-i", "banner.png"])
+        self.assertIn("0:a?", a)
+        self.assertEqual(a[-1], "out.mp4")
+
+    def test_clip_args_keep_audio(self):
+        a = clip_args("tour.mp4", 8.0, 6.0, "c.mp4")
+        self.assertNotIn("-an", a)
+        self.assertIn("0:a?", a)
+        self.assertIn("aac", a)
+        self.assertEqual(a[:6], ["-ss", "8.000", "-i", "tour.mp4", "-t", "6.000"])
 
 
 if __name__ == "__main__":

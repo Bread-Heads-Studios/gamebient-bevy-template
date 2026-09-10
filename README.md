@@ -70,6 +70,13 @@ changes, beats, score, pause and every `SfxEvent`; `tools/cut_clips.py` cuts
 and `chapters.md`. Needs `ffmpeg` and `python3`. A tour is ~3,700 frames of
 PNG (several GB) until the script deletes them. Dev-only; never ships.
 
+When the game plays any sound during the tour, `tour.mp4` and every
+`clips/<beat>.mp4` carry the mixed audio, normalized to −16 LUFS. `cut_clips.py`
+also renders `clips/vertical/<beat>.mp4` and `tour-vertical.mp4` (1080x1920,
+blurred fill of the gameplay behind a centered 16:9 band, with a title plate
+and a "Play the demo at colecovisiongx.com" CTA plate) — needs `rsvg-convert`
+(`brew install librsvg`); without it these outputs are skipped.
+
 Run the cutter's own unit tests with `cd tools && python3 -m unittest test_cut_clips`.
 
 ### Box cover (`assets/cartridge.png`)

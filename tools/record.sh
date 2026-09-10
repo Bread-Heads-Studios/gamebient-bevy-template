@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Records the autopilot tour offline into build/record/:
-#   tour.mp4 (60 fps), clips/<beat>.mp4, shots/<beat>.png, events.jsonl,
-#   manifest.json, chapters.md.  See src/game/record.rs and tools/cut_clips.py.
+#   tour.mp4 (60 fps, AAC audio when the game played anything, normalized to
+#   -16 LUFS), clips/<beat>.mp4 (with audio), shots/<beat>.png, events.jsonl,
+#   manifest.json, chapters.md, banner.png, clips/vertical/<beat>.mp4 and
+#   tour-vertical.mp4 (1080x1920).  See src/game/record.rs and
+#   tools/cut_clips.py.
 #
 # Usage: tools/record.sh [--keep-frames]
 # Env:   RECORD_DIR (default build/record), AUTOPILOT_SCALE (default 1.5 = 1920x1080)
@@ -49,9 +52,17 @@ cargo run --release --features record
 frames=$(find "$RECORD_DIR/frames" -name '*.png' | wc -l | tr -d ' ')
 [ "$frames" -gt 0 ] || { echo "record.sh: no frames captured" >&2; exit 1; }
 
-echo "record.sh: encoding $frames frames"
-ffmpeg -y -loglevel error -framerate 60 -pattern_type glob -i "$RECORD_DIR/frames/*.png" \
-  -c:v libx264 -crf 18 -pix_fmt yuv420p "$RECORD_DIR/tour.mp4"
+AUDIO="$RECORD_DIR/audio.wav"
+if [ -f "$AUDIO" ]; then
+  echo "record.sh: encoding $frames frames + audio"
+  ffmpeg -y -loglevel error -framerate 60 -pattern_type glob -i "$RECORD_DIR/frames/*.png" -i "$AUDIO" \
+    -c:v libx264 -crf 18 -pix_fmt yuv420p \
+    -af loudnorm=I=-16:TP=-1.5:LRA=11 -ar 48000 -c:a aac -b:a 192k -shortest "$RECORD_DIR/tour.mp4"
+else
+  echo "record.sh: encoding $frames frames (no audio.wav: nothing played)"
+  ffmpeg -y -loglevel error -framerate 60 -pattern_type glob -i "$RECORD_DIR/frames/*.png" \
+    -c:v libx264 -crf 18 -pix_fmt yuv420p "$RECORD_DIR/tour.mp4"
+fi
 
 python3 tools/cut_clips.py "$RECORD_DIR"
 
