@@ -4,24 +4,37 @@
 # checkout and wires it: feature flag, `pub mod record`, the RecordPlugin block
 # in GamePlugin, the RecordBeat branch in the autopilot's shot(), Debug on
 # SfxEvent. Idempotent. Games whose layout differs from the template (autopilot
-# under src/, no GameData, SfxEvent elsewhere, or a flat src/record.rs) print
-# what still needs a hand edit.
+# under src/, no GameData, SfxEvent elsewhere) print what still needs a hand edit.
 #
 # Usage: tools/rollout-record.sh <game-dir>
 set -euo pipefail
 TEMPLATE="$(cd "$(dirname "$0")/.." && pwd)"
 GAME="$(cd "${1:?usage: $0 <game-dir>}" && pwd)"
 
-mkdir -p "$GAME/src/game/record"
-rm -f "$GAME/src/game/record.rs"
-cp "$TEMPLATE"/src/game/record/*.rs "$GAME/src/game/record/"
+# Detect flat layout BEFORE copying: no src/game/mod.rs AND (src/record.rs exists OR src/record/ exists)
+FLAT_LAYOUT=false
+if [ ! -f "$GAME/src/game/mod.rs" ] && { [ -e "$GAME/src/record.rs" ] || [ -d "$GAME/src/record" ]; }; then
+  FLAT_LAYOUT=true
+fi
+
+# Copy record feature and tools
 mkdir -p "$GAME/tools"
 cp "$TEMPLATE/tools/record.sh" "$TEMPLATE/tools/cut_clips.py" "$TEMPLATE/tools/test_cut_clips.py" \
    "$TEMPLATE/tools/vertical-banner.svg" "$GAME/tools/"
 chmod +x "$GAME/tools/record.sh"
 
-if [ -e "$GAME/src/record.rs" ]; then
-  echo "HAND EDIT: flat layout — move src/game/record/ to src/record/, delete src/record.rs and the now-empty src/game/"
+if [ "$FLAT_LAYOUT" = true ]; then
+  # Flat layout: record goes into src/record/
+  rm -rf "$GAME/src/record"
+  mkdir -p "$GAME/src/record"
+  cp "$TEMPLATE"/src/game/record/* "$GAME/src/record/"
+  rm -f "$GAME/src/record.rs"
+  echo "note: flat layout — recorder copied to src/record/; wire it from main.rs if not already (see irregular-games.md)"
+else
+  # Standard layout: record goes into src/game/record/
+  mkdir -p "$GAME/src/game/record"
+  rm -f "$GAME/src/game/record.rs"
+  cp "$TEMPLATE"/src/game/record/* "$GAME/src/game/record/"
 fi
 
 # Cargo feature.
