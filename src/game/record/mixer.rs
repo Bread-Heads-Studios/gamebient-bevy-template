@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Wired up by audio.rs (next task).
-
 //! Pure offline mixer for the recorder. `audio.rs` turns captured playbacks
 //! into `Voice`s and decoded `Clip`s; `render` mixes them to interleaved
 //! stereo at `out_rate`, `limit` soft-limits, `wav_bytes` encodes 16-bit PCM.

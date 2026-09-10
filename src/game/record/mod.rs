@@ -19,7 +19,12 @@
 //! feature the autopilot's `shot()` writes a `RecordBeat` instead of its own
 //! screenshot (a second `Screenshot` on the same window in one frame is
 //! dropped as a duplicate by Bevy).
+//!
+//! Audio: `audio.rs` captures every `AudioPlayer` playback and mixes it into
+//! `audio.wav` at exit (`mixer.rs`); the manifest's `audio` field reports
+//! voices and pre-limit peak, or `null` when nothing played.
 
+mod audio;
 mod mixer;
 
 use std::fs::{self, File};
@@ -179,11 +184,9 @@ pub struct Recorder {
     pub sim_frame: u64,
     /// `sim_frame` on which numbered frame 1 was requested; converts audio
     /// times to video time (see `audio.rs`).
-    #[allow(dead_code)]
-    first_video_sim_frame: Option<u64>, // read by record::audio (next tasks)
+    first_video_sim_frame: Option<u64>,
     /// `(voices, peak)` from `audio::finish_audio`; `None` when nothing played.
-    #[allow(dead_code)]
-    audio: Option<(usize, f32)>, // read by record::audio (next tasks)
+    audio: Option<(usize, f32)>,
 }
 
 impl Recorder {
@@ -259,12 +262,16 @@ impl Plugin for RecordPlugin {
             1.0 / f64::from(FPS),
         )))
         .insert_resource(Recorder::open(&dir))
+        .init_resource::<audio::AudioCapture>()
         .add_message::<RecordBeat>()
         .configure_sets(PostUpdate, RecordSet::Capture.before(RecordSet::Log))
         .configure_sets(PostUpdate, RecordSet::Log.run_if(recorder_ready))
         .add_systems(PostUpdate, capture_frame.in_set(RecordSet::Capture))
         .add_systems(PostUpdate, log_beats.in_set(RecordSet::Log))
-        .add_systems(Last, finish_on_exit);
+        .add_systems(
+            Last,
+            (audio::capture_audio, audio::finish_audio, finish_on_exit).chain(),
+        );
     }
 }
 
