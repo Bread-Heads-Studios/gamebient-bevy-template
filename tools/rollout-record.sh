@@ -1,24 +1,32 @@
 #!/usr/bin/env bash
-# Copies the record feature from this template into a game checkout and wires
-# it: feature flag, `pub mod record`, the RecordPlugin block in GamePlugin,
-# the RecordBeat branch in the autopilot's shot(), Debug on SfxEvent.
-# Idempotent. Games whose layout differs from the template (autopilot under
-# src/, no GameData, SfxEvent elsewhere) print what still needs a hand edit.
+# Copies the record feature (src/game/record/ folder module, tools/record.sh,
+# tools/cut_clips.py, tools/vertical-banner.svg) from this template into a game
+# checkout and wires it: feature flag, `pub mod record`, the RecordPlugin block
+# in GamePlugin, the RecordBeat branch in the autopilot's shot(), Debug on
+# SfxEvent. Idempotent. Games whose layout differs from the template (autopilot
+# under src/, no GameData, SfxEvent elsewhere, or a flat src/record.rs) print
+# what still needs a hand edit.
 #
 # Usage: tools/rollout-record.sh <game-dir>
 set -euo pipefail
 TEMPLATE="$(cd "$(dirname "$0")/.." && pwd)"
 GAME="$(cd "${1:?usage: $0 <game-dir>}" && pwd)"
 
-mkdir -p "$GAME/src/game"
-cp "$TEMPLATE/src/game/record.rs" "$GAME/src/game/record.rs"
+mkdir -p "$GAME/src/game/record"
+rm -f "$GAME/src/game/record.rs"
+cp "$TEMPLATE"/src/game/record/*.rs "$GAME/src/game/record/"
 mkdir -p "$GAME/tools"
-cp "$TEMPLATE/tools/record.sh" "$TEMPLATE/tools/cut_clips.py" "$TEMPLATE/tools/test_cut_clips.py" "$GAME/tools/"
+cp "$TEMPLATE/tools/record.sh" "$TEMPLATE/tools/cut_clips.py" "$TEMPLATE/tools/test_cut_clips.py" \
+   "$TEMPLATE/tools/vertical-banner.svg" "$GAME/tools/"
 chmod +x "$GAME/tools/record.sh"
+
+if [ -e "$GAME/src/record.rs" ]; then
+  echo "HAND EDIT: flat layout — move src/game/record/ to src/record/, delete src/record.rs and the now-empty src/game/"
+fi
 
 # Cargo feature.
 if ! grep -q '^record = ' "$GAME/Cargo.toml"; then
-  perl -0pi -e 's/^autopilot = \[\]\n/autopilot = []\n# Offline footage recorder layered on the autopilot tour (src\/game\/record.rs,\n# tools\/record.sh). Dev-only; never enabled in shipping builds.\nrecord = ["autopilot"]\n/m' "$GAME/Cargo.toml"
+  perl -0pi -e 's/^autopilot = \[\]\n/autopilot = []\n# Offline footage recorder layered on the autopilot tour (src\/game\/record\/,\n# tools\/record.sh). Dev-only; never enabled in shipping builds.\nrecord = ["autopilot"]\n/m' "$GAME/Cargo.toml"
 fi
 grep -q '^record = ' "$GAME/Cargo.toml" || echo "HAND EDIT: add 'record = [\"autopilot\"]' under [features] in Cargo.toml"
 
