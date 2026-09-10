@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920">
+  <!-- Reel end card (9:16). reel.py fills {{COUNT}}, {{CTA_1}}, {{CTA_2}}. -->
+  <rect width="1080" height="1920" fill="#0b0f1a"/>
+  <text x="540" y="760" text-anchor="middle" font-family="Arial Black, Helvetica Neue, Arial, sans-serif"
+        font-weight="900" font-size="110" fill="#ffffff">{{COUNT}}</text>
+  <text x="540" y="920" text-anchor="middle" font-family="Helvetica Neue, Arial, sans-serif" font-weight="bold"
+        font-size="58" fill="#e8eef7">{{CTA_1}}</text>
+  <text x="540" y="1030" text-anchor="middle" font-family="Helvetica Neue, Arial, sans-serif" font-weight="bold"
+        font-size="76" fill="#ffd23f">{{CTA_2}}</text>
+  <text x="540" y="1700" text-anchor="middle" font-family="Helvetica Neue, Arial, sans-serif" font-size="34"
+        fill="#8a94a8">Bread Heads Studios · ColecoVision GX</text>
+</svg>

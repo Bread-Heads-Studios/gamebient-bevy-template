@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1920" height="1080">
+  <!-- Reel title card (16:9). reel.py fills {{TITLE}} / {{TITLE_SIZE}}; cover.png is copied beside this file. -->
+  <rect width="1920" height="1080" fill="#0b0f1a"/>
+  <image x="180" y="110" width="645" height="860" xlink:href="cover.png" href="cover.png"/>
+  <text x="960" y="520" font-family="Arial Black, Helvetica Neue, Arial, sans-serif" font-weight="900"
+        font-size="{{TITLE_SIZE}}" fill="#ffffff">{{TITLE}}</text>
+  <text x="962" y="600" font-family="Helvetica Neue, Arial, sans-serif" font-weight="bold" font-size="40"
+        fill="#ffd23f">ColecoVision GX</text>
+</svg>
