@@ -23,7 +23,7 @@ Spec: `docs/superpowers/specs/2026-09-10-recording-audio-vertical-reel-design.md
 - Recordings run in the foreground, one at a time (`timeout 1500 tools/record.sh`, Bash timeout 1500000 ms).
 - `build/` is never committed. Game repos commit on `main`; the template works on branch `feat/record-audio`. Nothing is pushed.
 - Commits end with `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
-- Template: `/Users/kelliott/Gamebient/colecovisiongx/libs/gamebient-bevy-template`. Workspace root: `/Users/kelliott/Gamebient/colecovisiongx` (not a git repo).
+- Template: `<workspace>/libs/gamebient-bevy-template`. Workspace root: `<workspace>` (not a git repo).
 
 ---
 
@@ -1036,7 +1036,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - [ ] **Step 1: Move the skill**
 
 ```bash
-W=/Users/kelliott/Gamebient/colecovisiongx
+W=<workspace>
 T=$W/libs/gamebient-bevy-template
 mv "$W/.claude/skills/recording-game-footage" "$T/.claude/skills/recording-game-footage"
 ln -s ../../libs/gamebient-bevy-template/.claude/skills/recording-game-footage "$W/.claude/skills/recording-game-footage"
@@ -1419,7 +1419,7 @@ irregular-games.md: Hunted's row says the recorder is the folder module `src/rec
 Run: `cd .claude/skills/recording-game-footage/tools && python3 -m unittest test_reel -v` (10 OK) and `python3 reel.py --help`.
 
 ```bash
-cd /Users/kelliott/Gamebient/colecovisiongx/libs/gamebient-bevy-template
+cd <workspace>/libs/gamebient-bevy-template
 git add .claude/skills/recording-game-footage
 git commit -m "feat(skills): recording-game-footage skill with the sizzle reel tool
 
@@ -1437,7 +1437,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - [ ] **Step 1: Run the script on each game**
 
 ```bash
-cd /Users/kelliott/Gamebient/colecovisiongx
+cd <workspace>
 for g in pizza-pinball sundae-shooter pack-the-ripper ladder-legend attic-excavator cannonball-putt dough-io gulper grand-theft-auto-reply grand-theft-otto dive-rise voidrunner Gravestone_Gauntlet BeerPong Hunted; do
   echo "=== $g"; libs/gamebient-bevy-template/tools/rollout-record.sh games/$g
 done
@@ -1492,7 +1492,7 @@ Compare the new `build/record/chapters.md` against the chapters table in `docs/v
 - [ ] **Step 1: Generate and review the config**
 
 ```bash
-cd /Users/kelliott/Gamebient/colecovisiongx
+cd <workspace>
 python3 .claude/skills/recording-game-footage/tools/reel.py --init
 cat docs/reel.json
 ```

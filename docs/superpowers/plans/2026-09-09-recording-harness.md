@@ -20,7 +20,7 @@ Spec: `docs/superpowers/specs/2026-09-09-recording-harness-design.md`.
 - Every event line is `{"frame":N,"t":S,"kind":"...","data":{...}}`.
 - CI already runs `cargo clippy --all-targets --all-features -- -D warnings`, so the feature is compile-checked; keep it warning-free.
 - Commits in each repo end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
-- Template repo: `libs/gamebient-bevy-template`. Game repos: `games/<name>`. Workspace root (`/Users/kelliott/Gamebient/colecovisiongx`) is not a git repo; skills live in its `.claude/skills/`.
+- Template repo: `libs/gamebient-bevy-template`. Game repos: `games/<name>`. Workspace root (`<workspace>`) is not a git repo; skills live in its `.claude/skills/`.
 
 ---
 
@@ -992,7 +992,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ### Task 6: The `recording-game-footage` skill
 
 **Files:**
-- Create: `/Users/kelliott/Gamebient/colecovisiongx/.claude/skills/recording-game-footage/SKILL.md`
+- Create: `<workspace>/.claude/skills/recording-game-footage/SKILL.md`
 - Create: `.../references/notes-template.md`
 - Create: `.../references/irregular-games.md`
 - Create: `.../references/catalog-2026-09-09.md`
@@ -1256,7 +1256,7 @@ Tire Stack's on-chain description is still the template placeholder.
 
 - [ ] **Step 5: Verify the skill loads**
 
-Run: `ls -R /Users/kelliott/Gamebient/colecovisiongx/.claude/skills/recording-game-footage && head -4 /Users/kelliott/Gamebient/colecovisiongx/.claude/skills/recording-game-footage/SKILL.md`
+Run: `ls -R <workspace>/.claude/skills/recording-game-footage && head -4 <workspace>/.claude/skills/recording-game-footage/SKILL.md`
 Expected: four files; frontmatter has `name` and `description`. (The workspace root is not a git repo; nothing to commit.)
 
 ---
@@ -1273,7 +1273,7 @@ Expected: four files; frontmatter has `name` and `description`. (The workspace r
 - [ ] **Step 1: Run the rollout loop**
 
 ```bash
-cd /Users/kelliott/Gamebient/colecovisiongx
+cd <workspace>
 for g in attic-excavator cannonball-putt dive-rise dough-io grand-theft-auto-reply grand-theft-otto gulper ladder-legend pizza-pinball sundae-shooter; do
   echo "=== $g"
   libs/gamebient-bevy-template/tools/rollout-record.sh games/$g
@@ -1323,7 +1323,7 @@ Expected: ten new commits. Do not push; the owner pushes.
 - [ ] **Step 1: Run the script and collect the HAND EDIT lines**
 
 ```bash
-cd /Users/kelliott/Gamebient/colecovisiongx
+cd <workspace>
 for g in Hunted pack-the-ripper voidrunner Gravestone_Gauntlet BeerPong; do echo "=== $g"; libs/gamebient-bevy-template/tools/rollout-record.sh games/$g; done
 ```
 
@@ -1395,7 +1395,7 @@ Expected per game: verification passes; notes cite files; the "Not reached by th
 
 - [ ] **Step 2: Summarize**
 
-Write `/Users/kelliott/Gamebient/colecovisiongx/docs/video-notes-index.md`: a table of game, tour length, lead clip path, and the top "not reached" payoff, so the owner has one place to start editing from.
+Write `<workspace>/docs/video-notes-index.md`: a table of game, tour length, lead clip path, and the top "not reached" payoff, so the owner has one place to start editing from.
 
 ---
 
