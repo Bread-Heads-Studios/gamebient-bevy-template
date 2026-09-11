@@ -33,7 +33,9 @@ impl Clip {
 
     /// (left, right) at fractional source frame `pos`, linearly interpolated.
     /// Mono feeds both ears; stereo maps L/R (extra channels ignored);
-    /// `downmix` averages every channel into both.
+    /// `downmix` sums every channel into both, clamped to ±1, as rodio 0.20's
+    /// `ChannelVolume` (under `Spatial`) does with `saturating_add` on the
+    /// decoder's i16 samples.
     fn stereo_at(&self, pos: f64, downmix: bool) -> (f32, f32) {
         let n = self.frames();
         let ch = usize::from(self.channels);
@@ -45,8 +47,10 @@ impl Clip {
         let frac = (pos - i0 as f64) as f32;
         let at = |i: usize| -> (f32, f32) {
             let s = &self.samples[i * ch..i * ch + ch];
-            if downmix || ch == 1 {
-                let m = s.iter().sum::<f32>() / ch as f32;
+            if ch == 1 {
+                (s[0], s[0])
+            } else if downmix {
+                let m = s.iter().sum::<f32>().clamp(-1.0, 1.0);
                 (m, m)
             } else {
                 (s[0], s[1])
@@ -377,7 +381,7 @@ mod tests {
     }
 
     #[test]
-    fn stereo_maps_left_right_and_downmix_averages() {
+    fn stereo_maps_left_right_and_downmix_sums_like_rodio() {
         let clip = Clip {
             channels: 2,
             rate: 100,
@@ -393,8 +397,15 @@ mod tests {
         assert_eq!((plain[0], plain[1]), (1.0, 0.0));
         let mut v = voice(0.0, vec![key(0.0, 1.0)]);
         v.downmix = true;
-        let mixed = render(&[v], std::slice::from_ref(&clip), 10, 100, 1);
-        assert_eq!((mixed[0], mixed[1]), (0.5, 0.5));
+        let mixed = render(&[v.clone()], std::slice::from_ref(&clip), 10, 100, 1);
+        assert_eq!((mixed[0], mixed[1]), (1.0, 1.0));
+        // Both channels loud: the sum saturates at 1, like rodio's i16 add.
+        let loud = Clip {
+            samples: [0.8, 0.8].repeat(100),
+            ..clip
+        };
+        let clamped = render(&[v], &[loud], 10, 100, 1);
+        assert_eq!((clamped[0], clamped[1]), (1.0, 1.0));
     }
 
     #[test]

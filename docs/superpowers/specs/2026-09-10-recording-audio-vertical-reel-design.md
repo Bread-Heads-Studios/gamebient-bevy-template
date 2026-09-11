@@ -88,7 +88,9 @@ captions beyond the title/CTA banners, OS audio capture.
   together, as in rodio); gains linearly interpolated between keys; paused
   holds the playhead and outputs silence; non-looping voices stop at the end
   of the source; looping voices wrap until their end frame; spatial
-  (`downmix`) voices average channels to mono before the per-ear gains;
+  (`downmix`) voices sum channels to mono, clamped to ±1, before the
+  per-ear gains (rodio 0.20's `ChannelVolume` sums with `saturating_add`
+  on i16 samples, so a stereo source is not halved);
   mono sources feed both ears; stereo sources map L/R. Voices that start
   before video time 0 are trimmed, not shifted.
 - Known limit: a screenshot dropped mid-run closes up in the video while
