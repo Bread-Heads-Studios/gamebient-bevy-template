@@ -46,7 +46,7 @@ one-responsibility files.
   gameplay exists. The feature is dev-only and never ships.
 - **Footage:** `tools/record.sh` records the same tour offline (fixed 1/60 s
   clock, one `Screenshot` per frame, `events.jsonl`) into `build/record/`
-  and cuts beat clips + `chapters.md` (`src/game/record.rs`,
+  and cuts beat clips + `chapters.md` (`src/game/record/`,
   `tools/cut_clips.py`). Under `record` the autopilot's `shot()` logs a
   `RecordBeat` instead of taking its own screenshot (Bevy drops a second
   `Screenshot` of the same window in one frame). Add game messages to the log

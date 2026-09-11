@@ -3,7 +3,7 @@
 #   tour.mp4 (60 fps, AAC audio when the game played anything, normalized to
 #   -16 LUFS), clips/<beat>.mp4 (with audio), shots/<beat>.png, events.jsonl,
 #   manifest.json, chapters.md, banner.png, clips/vertical/<beat>.mp4 and
-#   tour-vertical.mp4 (1080x1920).  See src/game/record.rs and
+#   tour-vertical.mp4 (1080x1920).  See src/game/record/ and
 #   tools/cut_clips.py.
 #
 # Usage: tools/record.sh [--keep-frames]
@@ -25,8 +25,9 @@ command -v python3 >/dev/null 2>&1 || { echo "record.sh: python3 not on PATH" >&
 export RECORD_DIR="${RECORD_DIR:-build/record}"
 export AUTOPILOT_DIR="$RECORD_DIR/autopilot"
 export AUTOPILOT_SCALE="${AUTOPILOT_SCALE:-1.5}"
-# AutopilotPlugin mutes GlobalVolume by default (like the playtest harness);
-# the recorder needs the game's actual mixed audio, so ask for sound.
+# Some games' autopilots (e.g. grand-theft-otto) mute GlobalVolume unless
+# AUTOPILOT_SOUND is set; the template's does not. The recorder needs the
+# game's actual mixed audio, so ask for sound.
 export AUTOPILOT_SOUND=1
 
 # Refuse to wipe anything outside the repo -- a stray or malicious

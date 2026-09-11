@@ -8,7 +8,7 @@ edition = "2024"
 # (src/game/autopilot.rs). Dev-only; never enabled in shipping builds.
 autopilot = []
 # Offline footage recorder layered on the autopilot tour: fixed 1/60 s clock,
-# one screenshot per frame, events.jsonl (src/game/record.rs, tools/record.sh).
+# one screenshot per frame, events.jsonl (src/game/record/, tools/record.sh).
 # Dev-only; never enabled in shipping builds.
 record = ["autopilot"]
 

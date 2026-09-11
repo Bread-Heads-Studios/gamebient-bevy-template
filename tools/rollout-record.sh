@@ -24,12 +24,17 @@ cp "$TEMPLATE/tools/record.sh" "$TEMPLATE/tools/cut_clips.py" "$TEMPLATE/tools/t
 chmod +x "$GAME/tools/record.sh"
 
 if [ "$FLAT_LAYOUT" = true ]; then
-  # Flat layout: record goes into src/record/
-  rm -rf "$GAME/src/record"
-  mkdir -p "$GAME/src/record"
-  cp "$TEMPLATE"/src/game/record/* "$GAME/src/record/"
-  rm -f "$GAME/src/record.rs"
-  echo "note: flat layout — recorder copied to src/record/; wire it from main.rs if not already (see irregular-games.md)"
+  # Flat layout: record goes into src/record/. Only replace a src/record/
+  # that is the recorder; anything else there is the game's own code.
+  if [ -e "$GAME/src/record" ] && ! grep -qs 'RecordPlugin' "$GAME/src/record/mod.rs"; then
+    echo "HAND EDIT: src/record/ exists but is not the recorder; move it aside"
+  else
+    rm -rf "$GAME/src/record"
+    mkdir -p "$GAME/src/record"
+    cp "$TEMPLATE"/src/game/record/* "$GAME/src/record/"
+    rm -f "$GAME/src/record.rs"
+    echo "note: flat layout — recorder copied to src/record/; wire it from main.rs if not already (see irregular-games.md)"
+  fi
 else
   # Standard layout: record goes into src/game/record/
   mkdir -p "$GAME/src/game/record"

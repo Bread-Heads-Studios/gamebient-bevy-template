@@ -14,12 +14,13 @@ clock, captures every frame, encodes `build/record/tour.mp4` (60 fps,
 autopilot beat, and writes `events.jsonl`, `manifest.json`, `chapters.md`.
 Recordings also carry a mixed audio track (`audio.wav`, muxed into
 `tour.mp4` at −16 LUFS) and 9:16 versions of everything (`clips/vertical/
-<beat>.mp4`, `tour-vertical.mp4`), cropped to the gameplay band and framed
-for a title plate above and a CTA plate below. The skill's job is to get a
+<beat>.mp4`, `tour-vertical.mp4`): the full 16:9 frame over a blurred fill
+with title/CTA banners. The skill's job is to get a
 game to that point, verify it, and turn the result plus a code read into
 `docs/video-notes.md` for whoever edits the video. The recorder lives in the
-template (`libs/gamebient-bevy-template/src/game/record/`, design spec
-`docs/superpowers/specs/2026-09-09-recording-harness-design.md`). The
+template (`libs/gamebient-bevy-template/src/game/record/`, design specs
+`docs/superpowers/specs/2026-09-09-recording-harness-design.md` and
+`docs/superpowers/specs/2026-09-10-recording-audio-vertical-reel-design.md`). The
 skill's canonical home is the template's `.claude/skills/`, symlinked from
 the workspace root.
 
@@ -54,7 +55,8 @@ against the code before reuse).
    - Read `shots/06-*.png` and `shots/05-mid-play.png` as images: gameplay
      is visible, HUD shows a score or progress, no letterbox band. Also
      extract and Read one frame from `clips/vertical/<beat>.mp4` to confirm
-     the crop keeps the gameplay band centered. If the bot idles or the
+     the full 16:9 frame sits centered over the blurred fill, between the
+     title/CTA banners. If the bot idles or the
      signature beat never fires, fix `src/game/autopilot.rs` first (the
      `designing-cartridge-covers` skill's autopilot.md covers this) and
      re-record.

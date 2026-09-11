@@ -121,6 +121,9 @@ pub struct AudioCapture {
     /// Every source seen, decoded once when it first appears in `Assets`.
     clips: HashMap<AssetId<AudioSource>, Clip>,
     last_tick: Option<Instant>,
+    /// Some playback has had an `AudioSink`/`SpatialAudioSink`. Without an
+    /// audio device Bevy never creates one, so fades and ends are unseen.
+    sink_seen: bool,
 }
 
 impl AudioCapture {
@@ -237,6 +240,7 @@ pub fn capture_audio(
             })
         };
         let has_sink = state.is_some();
+        cap.sink_seen |= has_sink;
         let (volume, speed, paused, muted, empty) = state.unwrap_or((
             (settings.volume * global).to_linear(),
             settings.speed,
@@ -299,7 +303,14 @@ fn decode(source: &AudioSource) -> Clip {
     let decoder = source.decoder();
     let channels = decoder.channels();
     let rate = decoder.sample_rate();
-    let samples = decoder.map(|s| f32::from(s) / 32768.0).collect();
+    let samples = decoder
+        .map(|s| {
+            // rodio 0.20's decoder yields i16; pin it so a rodio bump that
+            // changes the sample type fails here instead of mis-scaling.
+            let s: i16 = s;
+            f32::from(s) / 32768.0
+        })
+        .collect();
     Clip {
         channels,
         rate,
@@ -330,6 +341,12 @@ pub fn finish_audio(
         cap.retire(e, now, Close::Cut, 0.0);
     }
     let tracks = std::mem::take(&mut cap.done);
+    if !tracks.is_empty() && !cap.sink_seen {
+        warn!(
+            "record: {} voices captured but no AudioSink/SpatialAudioSink was ever seen (no audio device?); fades and ends were not observed, the mix uses PlaybackSettings volumes",
+            tracks.len()
+        );
+    }
     let mut cache = std::mem::take(&mut cap.clips);
     let to_video = |f: u64| f as f64 - first as f64;
     let mut index: HashMap<AssetId<AudioSource>, usize> = HashMap::new();
