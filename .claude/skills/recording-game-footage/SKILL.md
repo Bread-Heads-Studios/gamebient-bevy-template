@@ -37,7 +37,7 @@ against the code before reuse).
    run `libs/gamebient-bevy-template/tools/rollout-record.sh games/<g>`.
    Read every `HAND EDIT` line it prints and fix them (see
    irregular-games.md). Then in the game:
-   `cargo check --features record && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-features`.
+   `cargo fmt --all -- --check && cargo check --features record && cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-features` (CI runs the fmt check; the rollout script already formats).
    Commit: `feat(record): offline footage recorder from the template`.
 2. **Record.** `tools/record.sh` in the game dir. First release build takes
    minutes; the tour itself takes 3-6 minutes because every frame is read

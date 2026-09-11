@@ -86,5 +86,14 @@ fi
 GITIGNORE="$GAME/.gitignore"
 grep -qxF '__pycache__/' "$GITIGNORE" 2>/dev/null || echo '__pycache__/' >> "$GITIGNORE"
 
+# The perl edits above insert `pub mod record;` next to `autopilot` and write
+# multi-line closures; rustfmt (which CI checks) wants mods sorted and short
+# closures on one line. Format the game so CI stays green.
+if command -v cargo >/dev/null 2>&1; then
+  (cd "$GAME" && cargo fmt --all) || echo "HAND EDIT: cargo fmt failed in $GAME; run it before committing"
+else
+  echo "HAND EDIT: cargo not on PATH; run cargo fmt --all in $GAME before committing"
+fi
+
 echo "rollout-record: files in place for $GAME"
 echo "next: (cd $GAME && cargo check --features record && cargo clippy --all-targets --all-features -- -D warnings)"
