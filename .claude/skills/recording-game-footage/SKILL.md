@@ -99,3 +99,4 @@ reading one frame each from a title card, a clip, and the end card.
 | Running on the web build | The recorder is native-only; web builds never include it. |
 | Rolling out over an old `record.rs` | The script deletes it before copying the folder module in; don't hand-restore a stray `record.rs`. |
 | Hunted's flat layout | No `src/game/`; the recorder lands at `src/record/` (see irregular-games.md). |
+| Manifest `audio.peak` is 0 | The game muted itself under the autopilot (grand-theft-otto honours `AUTOPILOT_SOUND`, which `record.sh` sets); look for `GlobalVolume` inserts gated on harness/autopilot flags. |

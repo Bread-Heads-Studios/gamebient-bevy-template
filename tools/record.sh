@@ -25,6 +25,9 @@ command -v python3 >/dev/null 2>&1 || { echo "record.sh: python3 not on PATH" >&
 export RECORD_DIR="${RECORD_DIR:-build/record}"
 export AUTOPILOT_DIR="$RECORD_DIR/autopilot"
 export AUTOPILOT_SCALE="${AUTOPILOT_SCALE:-1.5}"
+# AutopilotPlugin mutes GlobalVolume by default (like the playtest harness);
+# the recorder needs the game's actual mixed audio, so ask for sound.
+export AUTOPILOT_SOUND=1
 
 # Refuse to wipe anything outside the repo -- a stray or malicious
 # RECORD_DIR (e.g. an absolute path, or one full of "..") must not turn

@@ -384,6 +384,11 @@ pub fn finish_audio(
     let used: HashSet<usize> = voices.iter().map(|v| v.clip).collect();
     let mut buf = mixer::render(&voices, &clips, rec.fps, OUT_RATE, rec.saved);
     let peak = mixer::limit(&mut buf);
+    if peak == 0.0 {
+        warn!(
+            "record: every captured voice was silent (peak 0) — is the game muting GlobalVolume or its sinks under the autopilot? tools/record.sh sets AUTOPILOT_SOUND=1"
+        );
+    }
     fs::write(rec.dir.join("audio.wav"), mixer::wav_bytes(&buf, OUT_RATE))
         .expect("record: write audio.wav");
     rec.audio = Some((voices.len(), peak));
