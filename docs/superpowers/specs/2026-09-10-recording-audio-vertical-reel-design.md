@@ -33,7 +33,8 @@ captions beyond the title/CTA banners, OS audio capture.
   sim-frame clock: `Recorder.sim_frame` increments on every `capture_frame`
   call, including warm-up; `Recorder.first_video_sim_frame` is the sim frame
   on which numbered frame 1 was requested. Manifest gains
-  `"audio":{"voices":N,"peak":P}` (or `"audio":null` when nothing played).
+  `"audio":{"voices":N,"peak":P}` (or `"audio":null` when nothing played);
+  `P` is the raw mix peak, before the headroom gain and limiter.
 - `record/audio.rs` — capture. A `Last`-schedule system (not gated on
   warm-up) walks every entity with `AudioPlayer` + `PlaybackSettings`:
   - first sighting (or a changed handle on the same entity) opens a voice:
@@ -81,8 +82,15 @@ captions beyond the title/CTA banners, OS audio capture.
     says `"audio":null`.
 - `record/mixer.rs` — pure, unit-tested:
   `render(voices, clips, fps, out_rate, total_frames) -> Vec<f32>` (interleaved
-  stereo), `limit(&mut [f32]) -> f32` (returns pre-limit peak; soft-knee
+  stereo), `headroom_gain(peak) -> f32` (`KNEE / peak` above the 0.9 knee,
+  else 1), `limit(&mut [f32]) -> f32` (returns pre-limit peak; soft-knee
   above 0.9, hard ceiling 0.99), `wav_bytes(&[f32], rate) -> Vec<u8>`.
+  Master pre-gain: `finish_audio` measures the rendered mix's peak, scales
+  every sample by `headroom_gain(peak)` so a hot mix lands on the knee
+  instead of being squashed by the limiter, then runs `limit` as a safety
+  net (it no longer engages on the scaled mix). The mix may come out
+  quieter than the game played it; `loudnorm` in `record.sh` restores the
+  level downstream.
   Per voice: linear-interpolated source playhead advancing
   `speed × src_rate / out_rate` per output sample (pitch and speed change
   together, as in rodio); gains linearly interpolated between keys; paused
@@ -155,8 +163,9 @@ captions beyond the title/CTA banners, OS audio capture.
 - Rust (mixer): gain interpolation between keys; speed 2.0 halves the rendered
   length of a non-looping voice; paused span holds the playhead; looping wraps
   until end frame; negative start trims; downmix + per-ear gains; spatial gain
-  function matches rodio's formula on fixed positions; limiter output ≤ 0.99
-  and returns the pre-limit peak; `wav_bytes` header fields.
+  function matches rodio's formula on fixed positions; headroom gain brings
+  a hot peak to the knee so the limiter does not engage; limiter output ≤
+  0.99 and returns the pre-limit peak; `wav_bytes` header fields.
 - Python: banner templating (escaping, size rule), vertical filter string,
   reel config defaults, `--init` parsing, segment plan, arg builders.
 - End to end (template and each game): `ffprobe` shows an AAC stream on

@@ -1,6 +1,7 @@
 //! Pure offline mixer for the recorder. `audio.rs` turns captured playbacks
 //! into `Voice`s and decoded `Clip`s; `render` mixes them to interleaved
-//! stereo at `out_rate`, `limit` soft-limits, `wav_bytes` encodes 16-bit PCM.
+//! stereo at `out_rate`, `headroom_gain` scales a hot mix down to `KNEE`,
+//! `limit` soft-limits as a safety net, `wav_bytes` encodes 16-bit PCM.
 //! Gains interpolate only between keys on consecutive frames (a fade); a key
 //! after a gap is a step. Speed changes pitch and tempo together, as rodio
 //! does. No Bevy types, so everything here is unit-tested.
@@ -174,6 +175,14 @@ pub fn natural_stop(v: &Voice, clip: &Clip, fps: u32) -> f64 {
 
 pub const KNEE: f32 = 0.9;
 pub const CEILING: f32 = 0.99;
+
+/// Master pre-gain for a mix whose raw peak is `peak`: scales it so the
+/// peak lands on `KNEE` (unity when it is already at or below). Applied
+/// before `limit`, so a loud mix is turned down as a whole instead of being
+/// squashed by the limiter; `loudnorm` restores the level downstream.
+pub fn headroom_gain(peak: f32) -> f32 {
+    if peak > KNEE { KNEE / peak } else { 1.0 }
+}
 
 /// Soft-knee limiter above `KNEE`, asymptotic to `CEILING`. Returns the
 /// pre-limit peak magnitude.
@@ -425,6 +434,27 @@ mod tests {
         assert_eq!(buf[0], 0.5);
         assert!(buf[1] > KNEE && buf[1] < CEILING);
         assert!(buf[2] < -KNEE && buf[2] > -CEILING);
+    }
+
+    #[test]
+    fn headroom_gain_brings_a_hot_peak_to_the_knee() {
+        assert_eq!(headroom_gain(0.5), 1.0);
+        assert!((headroom_gain(1.8) - 0.5).abs() < 1e-6);
+        assert_eq!(headroom_gain(KNEE), 1.0);
+    }
+
+    #[test]
+    fn headroom_gain_keeps_the_limiter_out_of_the_mix() {
+        let mut buf = [0.5f32, 2.0, -1.2, -2.0, 0.0];
+        let peak = buf.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        let g = headroom_gain(peak);
+        for x in &mut buf {
+            *x *= g;
+        }
+        let scaled = buf;
+        assert!(limit(&mut buf) <= KNEE);
+        assert_eq!(buf, scaled, "limiter engaged");
+        assert!(buf.iter().all(|x| x.abs() <= KNEE));
     }
 
     #[test]

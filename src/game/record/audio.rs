@@ -308,9 +308,12 @@ fn decode(source: &AudioSource) -> Clip {
 }
 
 /// On the `AppExit` frame: mix everything captured into `audio.wav` and
-/// record `(voices, peak)` on the `Recorder` for the manifest. Writes no
-/// file (and reports `None`) when no frame was saved or no voice is audible
-/// in video time.
+/// record `(voices, peak)` on the `Recorder` for the manifest. The mix is
+/// scaled by `mixer::headroom_gain` so its peak sits at the limiter's knee,
+/// then `mixer::limit` runs as a safety net; `peak` is the raw mix peak
+/// before that headroom gain (above 1.0 means the game's own sum would
+/// clip). Writes no file (and reports `None`) when no frame was saved or no
+/// voice is audible in video time.
 pub fn finish_audio(
     mut exits: MessageReader<AppExit>,
     mut cap: ResMut<AudioCapture>,
@@ -383,7 +386,14 @@ pub fn finish_audio(
     }
     let used: HashSet<usize> = voices.iter().map(|v| v.clip).collect();
     let mut buf = mixer::render(&voices, &clips, rec.fps, OUT_RATE, rec.saved);
-    let peak = mixer::limit(&mut buf);
+    let peak = buf.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    let gain = mixer::headroom_gain(peak);
+    if gain < 1.0 {
+        for x in &mut buf {
+            *x *= gain;
+        }
+    }
+    mixer::limit(&mut buf);
     if peak == 0.0 {
         warn!(
             "record: every captured voice was silent (peak 0) — is the game muting GlobalVolume or its sinks under the autopilot? tools/record.sh sets AUTOPILOT_SOUND=1"
@@ -393,7 +403,7 @@ pub fn finish_audio(
         .expect("record: write audio.wav");
     rec.audio = Some((voices.len(), peak));
     info!(
-        "record: mixed {} voices from {} sources, peak {peak:.3}",
+        "record: mixed {} voices from {} sources, raw peak {peak:.3}, headroom gain {gain:.3}",
         voices.len(),
         used.len()
     );

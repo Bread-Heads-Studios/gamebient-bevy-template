@@ -22,7 +22,8 @@
 //!
 //! Audio: `audio.rs` captures every `AudioPlayer` playback and mixes it into
 //! `audio.wav` at exit (`mixer.rs`); the manifest's `audio` field reports
-//! voices and pre-limit peak, or `null` when nothing played.
+//! voices and the raw mix peak (before the headroom gain and limiter), or
+//! `null` when nothing played.
 
 mod audio;
 mod mixer;
@@ -100,6 +101,8 @@ pub struct Manifest {
     pub height: u32,
     pub frames: u64,
     pub beats: Vec<(String, u64)>,
+    /// `(voices, peak)`: `peak` is the raw mix peak, before the headroom
+    /// gain and limiter (see `audio::finish_audio`).
     pub audio: Option<(usize, f32)>,
 }
 
@@ -185,7 +188,8 @@ pub struct Recorder {
     /// `sim_frame` on which numbered frame 1 was requested; converts audio
     /// times to video time (see `audio.rs`).
     first_video_sim_frame: Option<u64>,
-    /// `(voices, peak)` from `audio::finish_audio`; `None` when nothing played.
+    /// `(voices, raw mix peak)` from `audio::finish_audio`; `None` when
+    /// nothing played.
     audio: Option<(usize, f32)>,
 }
 
