@@ -9,6 +9,7 @@ pub mod player;
 #[cfg(feature = "record")]
 pub mod record;
 pub mod scoring;
+pub mod sim;
 pub mod states;
 
 use states::GameState;
@@ -17,48 +18,92 @@ use states::GameState;
 #[derive(Component)]
 pub struct GameEntity;
 
-/// Owns the game state machine, core resources, and gameplay systems.
-pub struct GamePlugin;
+/// `headless: true` builds the sim only (no scene, audio, overlay or fade)
+/// for the replay verifier. The windowed game uses `GamePlugin::default()`.
+#[derive(Default)]
+pub struct GamePlugin {
+    pub headless: bool,
+}
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
+        let input = if self.headless {
+            gamebient_input::GxInputPlugin::headless("Gamebient Game")
+        } else {
+            let mut p = gamebient_input::GxInputPlugin::named("Gamebient Game");
+            p.config.tick_input = true;
+            p
+        };
         app.init_state::<GameState>()
             // Canon input + web glue. StateEvents posts every GameState
             // transition to the embedding host (website analytics, cabinet).
-            .add_plugins(gamebient_input::GxInputPlugin::named("Gamebient Game"))
+            .add_plugins(input)
             .add_plugins(gamebient_input::StateEvents::<GameState>::default())
             // Host commands (pause / resume / mute) and the events hosts act
             // on (started, gameover, score, paused).
             .add_plugins(host::HostBridgePlugin)
+            .insert_resource(Time::<Fixed>::from_duration(sim::tick_duration()))
             .init_resource::<scoring::GameData>()
+            .init_resource::<states::Paused>()
+            .init_resource::<sim::SimTick>()
+            .init_resource::<sim::RunSeed>()
+            .init_resource::<sim::PendingSeed>()
+            .init_resource::<sim::GameRng>()
+            .init_resource::<sim::Checksum>()
             .add_message::<scoring::ScoreEvent>()
             .add_message::<audio::SfxEvent>()
-            .init_resource::<audio::CurrentTrack>()
-            .add_systems(Startup, (setup_scene, audio::setup_sfx))
+            .configure_sets(
+                FixedUpdate,
+                sim::SimSet.run_if(in_state(GameState::Playing).and(states::not_paused)),
+            )
             .add_systems(
-                Update,
+                OnEnter(GameState::Playing),
                 (
-                    audio::play_sfx,
-                    audio::music_director,
-                    audio::update_music_fades,
-                ),
+                    reset_paused,
+                    reset_game_data,
+                    sim::begin_run,
+                    player::spawn_player,
+                )
+                    .chain(),
             )
-            .add_systems(OnEnter(GameState::Playing), player::spawn_player)
             .add_systems(
-                Update,
-                (player::move_player, scoring::handle_score_events)
-                    .run_if(in_state(GameState::Playing).and(states::not_paused)),
+                FixedUpdate,
+                toggle_pause
+                    .run_if(in_state(GameState::Playing))
+                    .before(sim::SimSet),
             )
-            .add_systems(OnExit(GameState::Playing), cleanup_game_entities)
-            .init_resource::<states::Paused>()
-            .add_systems(OnEnter(GameState::Playing), (reset_paused, reset_game_data))
             .add_systems(
-                Update,
-                (toggle_pause, pause_quit, sync_pause_overlay)
+                FixedUpdate,
+                (
+                    sim::advance_tick,
+                    player::move_player,
+                    scoring::handle_score_events,
+                    sim::checksum_tick,
+                )
                     .chain()
-                    .run_if(in_state(GameState::Playing)),
+                    .in_set(sim::SimSet),
             )
-            .add_systems(OnExit(GameState::Playing), cleanup_pause_overlay);
+            .add_systems(OnExit(GameState::Playing), cleanup_game_entities);
+
+        if !self.headless {
+            app.init_resource::<audio::CurrentTrack>()
+                .add_systems(Startup, (setup_scene, audio::setup_sfx))
+                .add_systems(
+                    Update,
+                    (
+                        audio::play_sfx,
+                        audio::music_director,
+                        audio::update_music_fades,
+                    ),
+                )
+                .add_systems(
+                    Update,
+                    (pause_quit, sync_pause_overlay)
+                        .chain()
+                        .run_if(in_state(GameState::Playing)),
+                )
+                .add_systems(OnExit(GameState::Playing), cleanup_pause_overlay);
+        }
         #[cfg(feature = "autopilot")]
         app.add_plugins(autopilot::AutopilotPlugin);
         #[cfg(feature = "record")]
@@ -116,14 +161,16 @@ fn cleanup_pause_overlay(mut commands: Commands, query: Query<Entity, With<Pause
 
 /// Toggles pause on the canon Pause action (Escape, gamepad Start, pad
 /// Pause). The overlay is driven by `sync_pause_overlay`, so a host pause
-/// (gx:set) looks exactly the same.
+/// (gx:set) looks exactly the same. Runs in `FixedUpdate` before `SimSet` so
+/// a pause takes effect before that tick's gameplay systems run; headless
+/// builds have no `ScreenFade` (no UI), so it's read as optional.
 fn toggle_pause(
-    input: Res<input::GameInput>,
+    input: Res<gamebient_input::TickInput>,
     mut paused: ResMut<states::Paused>,
-    fade: Res<crate::ui::transition::ScreenFade>,
+    fade: Option<Res<crate::ui::transition::ScreenFade>>,
     mut sfx: MessageWriter<audio::SfxEvent>,
 ) {
-    if !fade.is_idle() || !input.pause_just_pressed {
+    if fade.as_ref().is_some_and(|f| !f.is_idle()) || !input.pause_just_pressed {
         return;
     }
     paused.0 = !paused.0;

@@ -23,6 +23,7 @@ use bevy::prelude::*;
 use gamebient_input::{HostCommand, HostEvent};
 
 use crate::game::scoring::GameData;
+use crate::game::sim;
 use crate::game::states::{GameState, Paused};
 
 /// Set by a host `mute`. New sounds honour it through `GlobalVolume`; sinks
@@ -60,6 +61,7 @@ fn apply_host_commands(
     mut muted: ResMut<Muted>,
     mut global_volume: ResMut<GlobalVolume>,
     mut sinks: Query<&mut AudioSink>,
+    mut pending: ResMut<sim::PendingSeed>,
 ) {
     for command in commands.read() {
         match command {
@@ -84,6 +86,7 @@ fn apply_host_commands(
                 }
             }
             HostCommand::Hello { .. } => {}
+            HostCommand::Seed(bytes) => pending.0 = Some(*bytes),
         }
     }
 }

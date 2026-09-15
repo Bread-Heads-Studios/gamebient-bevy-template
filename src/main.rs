@@ -1,13 +1,6 @@
-// Bevy systems idiomatically take many parameters and nested query filters;
-// these two lints fire on correct ECS code, so we allow them crate-wide.
-#![allow(clippy::too_many_arguments, clippy::type_complexity)]
-
-mod assets;
-mod game;
-mod ui;
-
 use bevy::prelude::*;
 use bevy::window::{PresentMode, WindowResolution};
+use gamebient_game::{assets, game, ui};
 
 /// Reference height that all UI pixel values are authored against.
 const REFERENCE_HEIGHT: f32 = 720.0;
@@ -48,7 +41,11 @@ fn main() {
         // Near-black clear color: visible wherever no geometry/UI covers the
         // viewport (notably the how-to-play showcase background).
         .insert_resource(ClearColor(Color::srgb(0.008, 0.012, 0.03)))
-        .add_plugins((game::GamePlugin, assets::AssetsPlugin, ui::UiPlugin))
+        .add_plugins((
+            game::GamePlugin::default(),
+            assets::AssetsPlugin,
+            ui::UiPlugin,
+        ))
         .add_systems(Update, update_ui_scale)
         .run();
 }
