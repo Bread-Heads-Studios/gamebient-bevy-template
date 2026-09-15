@@ -51,6 +51,7 @@ impl Plugin for GamePlugin {
             .init_resource::<sim::PendingSeed>()
             .init_resource::<sim::GameRng>()
             .init_resource::<sim::Checksum>()
+            .init_resource::<replay::recorder::ReplayRecorder>()
             .add_message::<scoring::ScoreEvent>()
             .add_message::<audio::SfxEvent>()
             .configure_sets(
@@ -63,6 +64,7 @@ impl Plugin for GamePlugin {
                     reset_paused,
                     reset_game_data,
                     sim::begin_run,
+                    replay::recorder::begin_recording,
                     player::spawn_player,
                 )
                     .chain(),
@@ -80,11 +82,15 @@ impl Plugin for GamePlugin {
                     player::move_player,
                     scoring::handle_score_events,
                     sim::checksum_tick,
+                    replay::recorder::record_tick,
                 )
                     .chain()
                     .in_set(sim::SimSet),
             )
-            .add_systems(OnExit(GameState::Playing), cleanup_game_entities);
+            .add_systems(
+                OnExit(GameState::Playing),
+                (replay::recorder::seal_run, cleanup_game_entities).chain(),
+            );
 
         if !self.headless {
             app.init_resource::<audio::CurrentTrack>()

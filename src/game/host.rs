@@ -12,11 +12,14 @@
 //! | game → host | `gameover` + `score`   | entering `GameOver`                    |
 //! | game → host | `score`                | `GameData.score` changes               |
 //! | game → host | `paused`               | `Paused` changes (player or host)      |
+//! | game → host | run + replay           | leaving Playing (sealed GXR1, base64)  |
 //! | host → game | pause / resume         | only while `Playing`; overlay follows  |
 //! | host → game | mute / unmute          | `GlobalVolume` + live sinks            |
 //!
 //! Hosts treat everything here as untrusted (a score is not a leaderboard
-//! entry); it exists for analytics, kiosk UX and the play-bonus timer.
+//! entry); it exists for analytics, kiosk UX and the play-bonus timer. The
+//! `run` event is the one a verifier actually consumes, replaying its ticks
+//! and checking the result against the claimed score and checksum.
 
 use bevy::audio::{AudioSinkPlayback, Volume};
 use bevy::prelude::*;
