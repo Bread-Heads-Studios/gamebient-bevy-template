@@ -149,12 +149,6 @@ pub fn checksum_tick(
     }
 }
 
-// NOTE for `no_forbidden_randomness_or_hashmaps_in_game_code` below: this
-// file is necessarily the one place the forbidden-strings list itself
-// contains those strings as data (and the doc comments above name them).
-// The walker stops scanning a file at its `#[cfg(test)]` marker (test
-// modules are always the last item in a `src/game/` file, by convention),
-// so the list literal and these very words never reach the grep.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,12 +184,17 @@ mod tests {
 
     #[test]
     fn no_forbidden_randomness_or_hashmaps_in_game_code() {
+        // Each literal below is itself an instance of what it forbids, so it
+        // carries the same `allow-forbidden-rng` marker `RunSeed::local`
+        // uses above — the per-line skip below already honours it, which
+        // exempts exactly this list (and nothing else) without needing to
+        // special-case this file or truncate the scan.
         let forbidden = [
-            "rand::rng()",
-            "from_os_rng",
-            "thread_rng",
-            "SmallRng",
-            "std::collections::HashMap",
+            "rand::rng()",               // allow-forbidden-rng
+            "from_os_rng",               // allow-forbidden-rng
+            "thread_rng",                // allow-forbidden-rng
+            "SmallRng",                  // allow-forbidden-rng
+            "std::collections::HashMap", // allow-forbidden-rng
         ];
         let mut hits = Vec::new();
         for entry in walk(std::path::Path::new(concat!(
@@ -203,15 +202,7 @@ mod tests {
             "/src/game"
         ))) {
             let text = std::fs::read_to_string(&entry).unwrap();
-            // The test module itself (this file, from `#[cfg(test)]` down)
-            // necessarily contains the forbidden strings as data (this list)
-            // and is exempt; test modules are always the last item in a
-            // `src/game/` file, so stop scanning once we reach one.
-            let scannable = match text.find("#[cfg(test)]") {
-                Some(idx) => &text[..idx],
-                None => &text[..],
-            };
-            for (n, line) in scannable.lines().enumerate() {
+            for (n, line) in text.lines().enumerate() {
                 if line.contains("allow-forbidden-rng") {
                     continue;
                 }

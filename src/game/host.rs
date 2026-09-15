@@ -59,7 +59,10 @@ fn apply_host_commands(
     state: Res<State<GameState>>,
     mut paused: ResMut<Paused>,
     mut muted: ResMut<Muted>,
-    mut global_volume: ResMut<GlobalVolume>,
+    // `GlobalVolume` is only inserted by `AudioPlugin`, which the headless
+    // build (no window, no audio) never adds — read as optional so a host
+    // `mute` doesn't panic there.
+    mut global_volume: Option<ResMut<GlobalVolume>>,
     mut sinks: Query<&mut AudioSink>,
     mut pending: ResMut<sim::PendingSeed>,
 ) {
@@ -76,7 +79,9 @@ fn apply_host_commands(
             }
             HostCommand::Mute(mute) => {
                 muted.0 = *mute;
-                global_volume.volume = Volume::Linear(if *mute { 0.0 } else { 1.0 });
+                if let Some(volume) = global_volume.as_deref_mut() {
+                    volume.volume = Volume::Linear(if *mute { 0.0 } else { 1.0 });
+                }
                 for mut sink in &mut sinks {
                     if *mute {
                         sink.mute();
