@@ -145,6 +145,8 @@ impl Replay {
     }
 }
 
+use std::time::Duration;
+
 use bevy::app::App;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
@@ -211,23 +213,42 @@ pub fn verify(replay: &Replay) -> Verdict {
     app.world_mut()
         .resource_mut::<NextState<GameState>>()
         .set(GameState::Playing);
+    // Apply the transition with zero elapsed time: `StateTransition` (which
+    // runs `OnEnter(Playing)` / `begin_run`, resetting `SimTick`) happens
+    // before `RunFixedMainLoop` within the same `app.update()`. If this
+    // update also carried a full tick's worth of accumulated time, that
+    // first fixed tick would run right here — before the loop below gets a
+    // chance to check `done`/cap for a 0- or 1-tick replay, over-running it
+    // by one tick. Feeding zero delta this update means no fixed tick can
+    // fire yet, so every tick the loop below observes came from its own
+    // update.
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
     app.update(); // applies the transition; OnEnter(Playing) runs begin_run
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(tick_duration()));
     if replay.origin != super::sim::SeedOrigin::Host {
         app.world_mut().resource_mut::<RunSeed>().origin = replay.origin;
     }
     let cap = replay.ticks.saturating_add(60);
-    let ended = loop {
-        app.update();
-        let tick = app.world().resource::<SimTick>().0;
+    // Checked right after every update that can run a fixed tick, including
+    // the transition update above, so a 0- or 1-tick replay is never made
+    // to run one tick further than it claims.
+    let check_ended = |app: &App| -> Option<Ended> {
         if *app.world().resource::<State<GameState>>().get() != GameState::Playing {
-            break Ended::GameOver;
+            return Some(Ended::GameOver);
         }
         if app.world().resource::<ReplayFeeder>().done {
-            break Ended::InputExhausted;
+            return Some(Ended::InputExhausted);
         }
-        if tick >= cap {
-            break Ended::Cap;
+        if app.world().resource::<SimTick>().0 >= cap {
+            return Some(Ended::Cap);
         }
+        None
+    };
+    let ended = loop {
+        if let Some(ended) = check_ended(&app) {
+            break ended;
+        }
+        app.update();
     };
     let score = u64::from(app.world().resource::<GameData>().score);
     let checksum = app.world().resource::<Checksum>().0;
@@ -371,6 +392,56 @@ mod tests {
         assert_eq!(second.checksum, first.checksum);
         r.score = 999;
         assert!(!verify(&r).matches);
+    }
+
+    #[test]
+    fn verify_zero_tick_replay_reports_zero_ticks() {
+        // A 0-tick replay (transitioned into Playing and immediately out,
+        // or simply never advanced) must not have a phantom tick folded in
+        // by the transition update that applies `OnEnter(Playing)`.
+        let mut r = sample();
+        r.runs.clear();
+        r.ticks = 0;
+        r.score = 0;
+        let v = verify(&r);
+        assert_eq!(v.ticks, 0, "{v:?}");
+        assert_eq!(v.ended, Ended::InputExhausted);
+    }
+
+    #[test]
+    fn verify_one_tick_replay_reports_one_tick_and_matches_its_own_checksum() {
+        let mut r = sample();
+        r.runs.clear();
+        r.ticks = 0;
+        r.push_tick(8, 0, 0, 0);
+        r.score = 0;
+        let first = verify(&r);
+        assert_eq!(first.ticks, 1, "{first:?}");
+        assert_eq!(first.ended, Ended::InputExhausted);
+        r.checksum = first.checksum;
+        let second = verify(&r);
+        assert!(second.matches, "{second:?}");
+    }
+
+    #[test]
+    fn verify_masks_a_replayed_pause_bit_so_the_sim_never_freezes() {
+        // A replay whose runs still carry `Buttons::PAUSE` (256) in `held`
+        // -- e.g. an older file recorded before `ReplayRecorder::push`
+        // started stripping it -- must not re-press pause on replay: that
+        // would freeze `SimSet` and strand the verifier well short of
+        // `replay.ticks`.
+        const PAUSE: u16 = 1 << 8;
+        let mut r = sample();
+        r.runs.clear();
+        r.ticks = 0;
+        r.push_tick(PAUSE, PAUSE, 0, 0); // looks like a "pause just pressed" tick
+        for _ in 0..9 {
+            r.push_tick(PAUSE, 0, 0, 0); // and stays "held" every tick after
+        }
+        r.score = 0;
+        let v = verify(&r);
+        assert_eq!(v.ticks, 10, "{v:?}");
+        assert_eq!(v.ended, Ended::InputExhausted);
     }
 
     #[test]

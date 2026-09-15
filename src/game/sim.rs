@@ -104,13 +104,19 @@ impl Checksum {
 }
 
 /// `OnEnter(Playing)`: take the pending host seed (or draw a local one),
-/// reseed the RNG, zero the tick and checksum.
+/// reseed the RNG, zero the tick and checksum, and reset the tick-input
+/// press-edge tracker. Without that last reset, `collect_tick_input` would
+/// derive tick 1's `just_pressed` against whatever was held in the menu
+/// (live play) or nothing at all (`verify()`'s fresh `App`) — two different
+/// starting points that would make the same first tick reproduce different
+/// press edges.
 pub fn begin_run(
     mut pending: ResMut<PendingSeed>,
     mut seed: ResMut<RunSeed>,
     mut rng: ResMut<GameRng>,
     mut tick: ResMut<SimTick>,
     mut sum: ResMut<Checksum>,
+    mut frame: ResMut<gamebient_input::input::TickFrame>,
 ) {
     *seed = match pending.0.take() {
         Some(bytes) => RunSeed {
@@ -122,6 +128,7 @@ pub fn begin_run(
     *rng = GameRng::from_seed(&seed.bytes);
     *tick = SimTick(0);
     *sum = Checksum::default();
+    *frame = gamebient_input::input::TickFrame::default();
 }
 
 /// First in `SimSet`.
@@ -168,6 +175,55 @@ mod tests {
         assert_eq!(xs, ys);
         let mut c = GameRng::from_seed(&[8u8; 32]);
         assert_ne!(xs[0], c.0.next_u32());
+    }
+
+    #[test]
+    fn begin_run_resets_tick_frame_so_a_fresh_run_reproduces_press_edges() {
+        use bevy::prelude::*;
+        use gamebient_input::input::{TickFrame, collect_tick_input};
+        use gamebient_input::{Buttons, InputAccumulator, TickInput, TickInputSet};
+
+        let mut app = App::new();
+        app.init_resource::<InputAccumulator>()
+            .init_resource::<TickFrame>()
+            .init_resource::<TickInput>()
+            .init_resource::<PendingSeed>()
+            .init_resource::<RunSeed>()
+            .init_resource::<GameRng>()
+            .init_resource::<SimTick>()
+            .init_resource::<Checksum>()
+            .add_systems(
+                FixedPreUpdate,
+                collect_tick_input.in_set(TickInputSet::Collect),
+            )
+            .add_systems(Update, begin_run);
+
+        // Menu-time input: A is already held (e.g. a stray keypress) before
+        // the run starts, so `TickFrame.prev` carries it by the time
+        // `Playing` begins.
+        app.world_mut().resource_mut::<InputAccumulator>().held = Buttons::A;
+        app.world_mut().run_schedule(FixedPreUpdate);
+        assert!(app.world().resource::<TickInput>().primary_just_pressed);
+        // Held continuously into a second tick: no new edge, as expected.
+        app.world_mut().resource_mut::<InputAccumulator>().held = Buttons::A;
+        app.world_mut().run_schedule(FixedPreUpdate);
+        assert!(
+            !app.world().resource::<TickInput>().primary_just_pressed,
+            "sanity: A held across two ticks should not re-edge"
+        );
+
+        // `begin_run` (`OnEnter(Playing)`) must reset `TickFrame` so tick 1
+        // of the run - live or replayed - reproduces the same press edge
+        // regardless of what was held a moment earlier in the menu.
+        app.world_mut().run_schedule(Update); // runs begin_run
+
+        app.world_mut().resource_mut::<InputAccumulator>().held = Buttons::A;
+        app.world_mut().run_schedule(FixedPreUpdate);
+        assert!(
+            app.world().resource::<TickInput>().primary_just_pressed,
+            "begin_run should have reset TickFrame so a still-held A \
+             reproduces a press edge on the run's first tick"
+        );
     }
 
     #[test]

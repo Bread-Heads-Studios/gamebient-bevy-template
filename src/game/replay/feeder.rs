@@ -57,12 +57,15 @@ impl ReplayFeeder {
 
 /// `FixedPreUpdate`, `TickInputSet::Feed`: overwrite the accumulator with
 /// this tick's record. Past the end, feed nothing (the accumulator is
-/// cleared so a stale hold cannot leak).
+/// cleared so a stale hold cannot leak). `Buttons::PAUSE` is masked out
+/// defensively: current replays never carry it (`ReplayRecorder::push`
+/// strips it before it's ever written), but an older file that does must
+/// not be able to re-press pause and freeze `SimSet` mid-verify.
 pub fn feed_tick(mut feeder: ResMut<ReplayFeeder>, mut acc: ResMut<InputAccumulator>) {
     match feeder.next() {
         Some(r) => {
-            acc.held = Buttons(u32::from(r.held));
-            acc.latched = Buttons(u32::from(r.latched));
+            acc.held = Buttons(u32::from(r.held)).difference(Buttons::PAUSE);
+            acc.latched = Buttons(u32::from(r.latched)).difference(Buttons::PAUSE);
             acc.axis = dequantize_axis(r.ax, r.ay);
         }
         None => *acc = InputAccumulator::default(),

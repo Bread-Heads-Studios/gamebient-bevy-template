@@ -3,7 +3,7 @@
 //! this is how the shipped game submits a run.
 
 use bevy::prelude::*;
-use gamebient_input::{HostEvent, TickInput};
+use gamebient_input::{Buttons, HostEvent, TickInput};
 
 use super::Replay;
 use crate::game::scoring::GameData;
@@ -45,10 +45,20 @@ impl ReplayRecorder {
 
     /// Raw tick record: the held set, the sub-tick taps (pressed but not
     /// held) as a latch, and the quantized stick — exactly what the feeder
-    /// writes back into `InputAccumulator`.
+    /// writes back into `InputAccumulator`. Pause never rides along: it is
+    /// consumed by `toggle_pause` before `SimSet` runs (so the pause tick
+    /// itself is never recorded), but the RESUME tick would otherwise still
+    /// carry `Buttons::PAUSE` in `held`/`just_pressed` and re-press pause on
+    /// replay, freezing the sim it's supposed to reproduce.
     pub fn push(&mut self, t: &TickInput) {
-        let held = t.edges.held.sanitized().0 as u16;
-        let latched = t.edges.just_pressed.difference(t.edges.held).sanitized().0 as u16;
+        let held = t.edges.held.difference(Buttons::PAUSE).sanitized().0 as u16;
+        let latched = t
+            .edges
+            .just_pressed
+            .difference(t.edges.held)
+            .difference(Buttons::PAUSE)
+            .sanitized()
+            .0 as u16;
         let (ax, ay) = t.axis;
         self.replay.push_tick(held, latched, ax, ay);
     }
@@ -143,6 +153,22 @@ mod tests {
         assert_eq!(r.origin, SeedOrigin::Host);
         assert_eq!(r.build, env!("GX_BUILD_ID"));
         assert!(rec.sealed);
+    }
+
+    #[test]
+    fn push_masks_pause_out_of_held_and_latched() {
+        // The resume tick after a pause is held/latched with Buttons::PAUSE
+        // set (toggle_pause consumed the pause *press* tick before SimSet
+        // ran, so it's never recorded, but a later tick can still carry the
+        // bit if pause happens to still read as held/just-pressed). A
+        // replay must never carry pause: replaying it would re-press pause
+        // and freeze the sim it's supposed to reproduce.
+        let mut rec = ReplayRecorder::default();
+        rec.begin(RunSeed::default());
+        rec.push(&tick(Buttons::A | Buttons::PAUSE));
+        let r = rec.seal(0, 0);
+        assert_eq!(r.runs[0].held, Buttons::A.0 as u16);
+        assert!(r.runs[0].held & (Buttons::PAUSE.0 as u16) == 0);
     }
 
     #[test]
