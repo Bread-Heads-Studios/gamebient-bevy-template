@@ -145,6 +145,102 @@ impl Replay {
     }
 }
 
+use bevy::app::App;
+use bevy::prelude::*;
+use bevy::state::app::StatesPlugin;
+use bevy::time::TimeUpdateStrategy;
+use gamebient_input::TickInputSet;
+
+use super::GamePlugin;
+use super::scoring::GameData;
+use super::sim::{Checksum, PendingSeed, RunSeed, SimTick, tick_duration};
+use super::states::GameState;
+use feeder::{ReplayFeeder, feed_tick};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ended {
+    GameOver,
+    InputExhausted,
+    Cap,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Verdict {
+    pub score: u64,
+    pub checksum: u64,
+    pub ticks: u32,
+    pub ended: Ended,
+    pub matches: bool,
+}
+
+impl Verdict {
+    pub fn to_json(&self) -> String {
+        let ended = match self.ended {
+            Ended::GameOver => "gameover",
+            Ended::InputExhausted => "input_exhausted",
+            Ended::Cap => "cap",
+        };
+        format!(
+            "{{\"score\":{},\"checksum\":{},\"ticks\":{},\"ended\":\"{ended}\",\"matches\":{}}}",
+            self.score, self.checksum, self.ticks, self.matches
+        )
+    }
+}
+
+/// The sim with no window, render, audio or UI, stepping one tick per
+/// `app.update()`.
+pub fn build_headless_app() -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(StatesPlugin)
+        .add_plugins(bevy::input::InputPlugin)
+        .insert_resource(TimeUpdateStrategy::ManualDuration(tick_duration()))
+        .add_plugins(GamePlugin { headless: true });
+    app
+}
+
+/// Re-simulates `replay` and reports what the sim produced.
+pub fn verify(replay: &Replay) -> Verdict {
+    let mut app = build_headless_app();
+    app.insert_resource(ReplayFeeder::new(replay))
+        .add_systems(FixedPreUpdate, feed_tick.in_set(TickInputSet::Feed));
+    // Seed the run exactly as the recording game did.
+    app.world_mut().resource_mut::<PendingSeed>().0 = Some(replay.seed);
+    // First update: Time's first frame has zero delta and runs no fixed tick.
+    app.update();
+    app.world_mut()
+        .resource_mut::<NextState<GameState>>()
+        .set(GameState::Playing);
+    app.update(); // applies the transition; OnEnter(Playing) runs begin_run
+    if replay.origin != super::sim::SeedOrigin::Host {
+        app.world_mut().resource_mut::<RunSeed>().origin = replay.origin;
+    }
+    let cap = replay.ticks.saturating_add(60);
+    let ended = loop {
+        app.update();
+        let tick = app.world().resource::<SimTick>().0;
+        if *app.world().resource::<State<GameState>>().get() != GameState::Playing {
+            break Ended::GameOver;
+        }
+        if app.world().resource::<ReplayFeeder>().done {
+            break Ended::InputExhausted;
+        }
+        if tick >= cap {
+            break Ended::Cap;
+        }
+    };
+    let score = u64::from(app.world().resource::<GameData>().score);
+    let checksum = app.world().resource::<Checksum>().0;
+    let ticks = app.world().resource::<SimTick>().0;
+    Verdict {
+        score,
+        checksum,
+        ticks,
+        ended,
+        matches: score == replay.score && checksum == replay.checksum,
+    }
+}
+
 struct Cursor<'a> {
     b: &'a [u8],
     i: usize,
@@ -252,5 +348,43 @@ mod tests {
         assert_eq!(r.ticks, 70_000);
         assert_eq!(r.runs.len(), 2);
         assert_eq!(r.runs[0].count, u16::MAX);
+    }
+
+    #[test]
+    fn headless_app_runs_a_replay_to_a_verdict() {
+        // A 120-tick run holding RIGHT: the template scores nothing, so the
+        // verdict is score 0 with the checksum the sim produced; encode the
+        // sim's own answer as the claim and it must match.
+        let mut r = sample();
+        r.runs.clear();
+        r.ticks = 0;
+        for _ in 0..120 {
+            r.push_tick(8, 0, 0, 0);
+        }
+        r.score = 0;
+        let first = verify(&r);
+        assert_eq!(first.ticks, 120);
+        assert_eq!(first.ended, Ended::InputExhausted);
+        r.checksum = first.checksum;
+        let second = verify(&r);
+        assert!(second.matches, "{second:?}");
+        assert_eq!(second.checksum, first.checksum);
+        r.score = 999;
+        assert!(!verify(&r).matches);
+    }
+
+    #[test]
+    fn verdict_json_is_flat() {
+        let v = Verdict {
+            score: 1,
+            checksum: 2,
+            ticks: 3,
+            ended: Ended::Cap,
+            matches: false,
+        };
+        assert_eq!(
+            v.to_json(),
+            r#"{"score":1,"checksum":2,"ticks":3,"ended":"cap","matches":false}"#
+        );
     }
 }
