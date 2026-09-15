@@ -15,6 +15,7 @@
 
 pub mod feeder;
 pub mod recorder;
+pub mod selftest;
 
 use super::sim::SeedOrigin;
 

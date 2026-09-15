@@ -2456,6 +2456,7 @@ dependencies = [
  "getrandom",
  "rand",
  "rand_xoshiro",
+ "wasm-bindgen",
 ]
 
 [[package]]
