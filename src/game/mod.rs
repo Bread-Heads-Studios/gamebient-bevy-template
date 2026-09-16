@@ -51,6 +51,7 @@ impl Plugin for GamePlugin {
             .init_resource::<sim::PendingSeed>()
             .init_resource::<sim::GameRng>()
             .init_resource::<sim::Checksum>()
+            .init_resource::<sim::SimPrev>()
             .init_resource::<replay::recorder::ReplayRecorder>()
             .add_message::<scoring::ScoreEvent>()
             .add_message::<audio::SfxEvent>()
@@ -83,9 +84,20 @@ impl Plugin for GamePlugin {
                     scoring::handle_score_events,
                     sim::checksum_tick,
                     replay::recorder::record_tick,
+                    sim::remember_sim_prev,
                 )
                     .chain()
                     .in_set(sim::SimSet),
+            )
+            // Keeps a paused stretch from moving the press edges the replay
+            // reproduces: see `sim::restore_tick_frame_while_paused`. Runs in
+            // both modes — the headless verifier never pauses (the recorder
+            // masks PAUSE), but the two apps must be built the same way.
+            .add_systems(
+                FixedUpdate,
+                sim::restore_tick_frame_while_paused
+                    .after(sim::SimSet)
+                    .run_if(in_state(GameState::Playing).and(|p: Res<states::Paused>| p.0)),
             )
             .add_systems(
                 OnExit(GameState::Playing),

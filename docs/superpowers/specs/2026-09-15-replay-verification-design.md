@@ -168,7 +168,8 @@ Needs `src/lib.rs` exposing `pub mod game; pub mod assets; pub mod ui;`;
   --features verify --profile wasm-release --target wasm32-unknown-unknown`,
   `wasm-bindgen --target nodejs --out-name verify`, `wasm-opt` with the
   existing flags, into `dist-verify/`. `release.yml` uploads
-  `verify-<version>.zip` as a release asset beside the cartridge tarball.
+  `gamebient-game-verify.zip` as a release asset beside the cartridge
+  tarball.
 
 Feature `verify = []` on the template gates the bin and adds
 `wasm-bindgen = "0.2"` under the wasm32 target (already in `Cargo.lock`
@@ -204,8 +205,8 @@ drift.
    is for structural failures only (bad seed, bad build, decode error);
    a score mismatch is `unverified`.
 4. **Versioning.** The module for a `build` is immutable. A game release
-   publishes `verify-<version>.zip`; replays from a build the site has no
-   module for are `unverified`.
+   publishes `gamebient-game-verify.zip`; replays from a build the site has
+   no module for are `unverified`.
 
 ## Migration rule for games (recorded here, executed later)
 

@@ -21,6 +21,13 @@ use super::sim::SeedOrigin;
 
 pub const MAGIC: &[u8; 4] = b"GXR1";
 
+/// Hard ceiling on a replay's claimed tick count: one hour at 60 Hz.
+///
+/// `ticks` drives how long `verify()` re-simulates, so an attacker who can
+/// post a handful of bytes could otherwise ask a verifier to run for days.
+/// `decode` rejects anything above this before it reads a single run.
+pub const MAX_TICKS: u32 = 216_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TickRun {
     pub held: u16,
@@ -48,7 +55,15 @@ pub enum DecodeError {
     Truncated,
     BadOrigin(u8),
     BadBuild,
-    RunCountMismatch { header: u32, sum: u32 },
+    /// The header claims a tick rate this build does not simulate at, so its
+    /// sim steps would not line up with the recorded ones.
+    BadTickRate(u16),
+    /// The header claims more than [`MAX_TICKS`] ticks.
+    TooManyTicks(u32),
+    RunCountMismatch {
+        header: u32,
+        sum: u32,
+    },
 }
 
 impl Replay {
@@ -109,11 +124,17 @@ impl Replay {
             .map_err(|_| DecodeError::BadBuild)?
             .to_string();
         let tick_hz = c.u16()?;
+        if tick_hz != super::sim::TICK_HZ as u16 {
+            return Err(DecodeError::BadTickRate(tick_hz));
+        }
         let mut seed = [0u8; 32];
         seed.copy_from_slice(c.take(32)?);
         let o = c.u8()?;
         let origin = SeedOrigin::from_u8(o).ok_or(DecodeError::BadOrigin(o))?;
         let ticks = c.u32()?;
+        if ticks > MAX_TICKS {
+            return Err(DecodeError::TooManyTicks(ticks));
+        }
         let score = c.u64()?;
         let checksum = c.u64()?;
         let n_runs = c.u32()? as usize;
@@ -183,8 +204,13 @@ impl Verdict {
             Ended::InputExhausted => "input_exhausted",
             Ended::Cap => "cap",
         };
+        // `checksum` is a u64 and JSON numbers are IEEE doubles in every
+        // JavaScript runtime that reads this, so a value above 2^53 would be
+        // silently rounded on JSON.parse. Emit it as a decimal string; the
+        // caller compares it verbatim or parses it as a BigInt. `score` and
+        // `ticks` stay numeric — both are well inside the safe range.
         format!(
-            "{{\"score\":{},\"checksum\":{},\"ticks\":{},\"ended\":\"{ended}\",\"matches\":{}}}",
+            "{{\"score\":{},\"checksum\":\"{}\",\"ticks\":{},\"ended\":\"{ended}\",\"matches\":{}}}",
             self.score, self.checksum, self.ticks, self.matches
         )
     }
@@ -202,13 +228,27 @@ pub fn build_headless_app() -> App {
     app
 }
 
-/// Re-simulates `replay` and reports what the sim produced.
-pub fn verify(replay: &Replay) -> Verdict {
+/// The headless sim wired to replay `replay`: the feeder in
+/// `TickInputSet::Feed` and the run's seed staged in `PendingSeed`. Split
+/// out of [`verify`] so a test can add its own observer systems to the very
+/// app the verifier runs; drive it with [`run_verify_app`].
+pub fn build_verify_app(replay: &Replay) -> App {
     let mut app = build_headless_app();
     app.insert_resource(ReplayFeeder::new(replay))
         .add_systems(FixedPreUpdate, feed_tick.in_set(TickInputSet::Feed));
     // Seed the run exactly as the recording game did.
     app.world_mut().resource_mut::<PendingSeed>().0 = Some(replay.seed);
+    app
+}
+
+/// Re-simulates `replay` and reports what the sim produced.
+pub fn verify(replay: &Replay) -> Verdict {
+    let mut app = build_verify_app(replay);
+    run_verify_app(&mut app, replay)
+}
+
+/// Steps `app` (from [`build_verify_app`]) through the whole replay.
+pub fn run_verify_app(app: &mut App, replay: &Replay) -> Verdict {
     // First update: Time's first frame has zero delta and runs no fixed tick.
     app.update();
     app.world_mut()
@@ -246,7 +286,7 @@ pub fn verify(replay: &Replay) -> Verdict {
         None
     };
     let ended = loop {
-        if let Some(ended) = check_ended(&app) {
+        if let Some(ended) = check_ended(app) {
             break ended;
         }
         app.update();
@@ -445,6 +485,166 @@ mod tests {
         assert_eq!(v.ended, Ended::InputExhausted);
     }
 
+    /// A tick's edges as a replay is able to carry them: `Buttons::PAUSE` is
+    /// masked, because `ReplayRecorder::push` strips it (a replayed pause
+    /// would freeze the sim it is meant to reproduce), so it is the only bit
+    /// a live run and its replay are allowed to disagree about — which is
+    /// why sim systems must never read `pause_just_pressed`.
+    #[derive(Resource, Default, Debug, Clone, PartialEq, Eq)]
+    struct EdgeLog(Vec<(u32, u32, u32, u32)>);
+
+    fn log_edges(
+        tick: Res<SimTick>,
+        input: Res<gamebient_input::TickInput>,
+        mut log: ResMut<EdgeLog>,
+    ) {
+        let m = |b: gamebient_input::Buttons| b.difference(gamebient_input::Buttons::PAUSE).0;
+        log.0.push((
+            tick.0,
+            m(input.edges.just_pressed),
+            m(input.edges.just_released),
+            m(input.edges.held),
+        ));
+    }
+
+    fn log_edges_in_sim_set(app: &mut App) {
+        app.init_resource::<EdgeLog>().add_systems(
+            FixedUpdate,
+            log_edges
+                .in_set(crate::game::sim::SimSet)
+                .after(recorder::record_tick),
+        );
+    }
+
+    /// One scripted frame of a live run: the held set, and whether PAUSE is
+    /// tapped (latched, never held — exactly what a keyboard Escape tap or a
+    /// touch-overlay pause button produces).
+    #[derive(Resource, Default)]
+    struct Script {
+        frames: Vec<(gamebient_input::Buttons, bool)>,
+        at: usize,
+    }
+
+    fn run_script(mut script: ResMut<Script>, mut virt: ResMut<gamebient_input::VirtualInput>) {
+        let i = script.at;
+        script.at += 1;
+        let Some(&(held, pause)) = script.frames.get(i) else {
+            return;
+        };
+        virt.set_held(held);
+        if pause {
+            virt.latched |= gamebient_input::Buttons::PAUSE;
+        }
+    }
+
+    /// Plays `frames` through the live headless app, seals the replay, then
+    /// re-simulates it. Returns (live log, replay log, verdict, replay).
+    fn live_then_replay(
+        frames: Vec<(gamebient_input::Buttons, bool)>,
+    ) -> (EdgeLog, EdgeLog, Verdict, Replay) {
+        let n = frames.len();
+        let mut live = build_headless_app();
+        live.insert_resource(Script { frames, at: 0 });
+        log_edges_in_sim_set(&mut live);
+        live.world_mut().resource_mut::<PendingSeed>().0 = Some([0x11u8; 32]);
+        // Warm-up update: zero delta, no fixed tick. The script is added
+        // afterwards so script frame N drives fixed tick N exactly.
+        live.update();
+        live.add_systems(
+            PreUpdate,
+            run_script.before(gamebient_input::input::accumulate_input),
+        );
+        live.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        for _ in 0..n {
+            live.update();
+        }
+        live.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::GameOver);
+        live.update(); // OnExit(Playing) seals the run
+        let replay = live
+            .world()
+            .resource::<recorder::ReplayRecorder>()
+            .last_run()
+            .cloned()
+            .expect("run sealed on OnExit(Playing)");
+        let live_log = live.world().resource::<EdgeLog>().clone();
+
+        let mut replayed = build_verify_app(&replay);
+        log_edges_in_sim_set(&mut replayed);
+        let verdict = run_verify_app(&mut replayed, &replay);
+        let replay_log = replayed.world().resource::<EdgeLog>().clone();
+        (live_log, replay_log, verdict, replay)
+    }
+
+    #[test]
+    fn a_pause_does_not_move_press_edges_between_a_live_run_and_its_replay() {
+        use gamebient_input::Buttons;
+        // Hold RIGHT for 9 ticks, tap PAUSE on tick 10 while still holding
+        // RIGHT, swap to a held A for the 9 paused ticks, then resume on
+        // frame 20 with A still down, and keep holding it. Only the 20
+        // unpaused frames reach `SimSet`, so the replay never sees the
+        // stretch where A was first pressed: the resume tick has to produce
+        // `just_pressed(A)` / `just_released(RIGHT)` on both sides.
+        let mut frames = vec![(Buttons::RIGHT, false); 9];
+        frames.push((Buttons::RIGHT, true)); // 10: pause
+        frames.extend(std::iter::repeat_n((Buttons::A, false), 9)); // 11..=19
+        frames.push((Buttons::A, true)); // 20: resume, A still held
+        frames.extend(std::iter::repeat_n((Buttons::A, false), 10)); // 21..=30
+
+        let (live_log, replay_log, verdict, replay) = live_then_replay(frames);
+
+        assert_eq!(replay.ticks, 20, "{live_log:?}");
+        assert_eq!(live_log.0.len(), 20);
+        // The scenario is the one the finding describes: A is pressed while
+        // paused and still held on resume, so the resume tick (sim tick 10)
+        // is the only tick that sees a press edge for A.
+        let a_presses: Vec<u32> = live_log
+            .0
+            .iter()
+            .filter(|(_, jp, _, _)| jp & Buttons::A.0 != 0)
+            .map(|(t, _, _, _)| *t)
+            .collect();
+        assert_eq!(a_presses, vec![10], "live log: {live_log:?}");
+        assert_eq!(
+            live_log, replay_log,
+            "a paused stretch moved the press edges the replay reproduces"
+        );
+        assert!(verdict.matches, "{verdict:?}");
+    }
+
+    #[test]
+    fn resuming_on_the_tick_after_the_pause_keeps_the_edges_replayable() {
+        use gamebient_input::Buttons;
+        // The pause tick itself is skipped by `SimSet` too, so its held set
+        // must be rewound as well — otherwise a resume on the very next tick
+        // derives its edges against a tick the replay never recorded. Here
+        // RIGHT is released on the same frame PAUSE is tapped, so tick 10's
+        // held set differs from tick 9's.
+        let mut frames = vec![(Buttons::RIGHT, false); 9];
+        frames.push((Buttons::NONE, true)); // 10: release RIGHT and pause
+        frames.push((Buttons::A, true)); // 11: press A and resume at once
+        frames.extend(std::iter::repeat_n((Buttons::A, false), 9)); // 12..=20
+
+        let (live_log, replay_log, verdict, replay) = live_then_replay(frames);
+
+        assert_eq!(replay.ticks, 19, "{live_log:?}");
+        assert_eq!(
+            live_log, replay_log,
+            "the pause tick's held set leaked into the resume tick's edges"
+        );
+        // The resume tick is sim tick 10: A pressed, RIGHT released relative
+        // to sim tick 9 — not relative to the skipped pause tick.
+        assert_eq!(
+            live_log.0[9],
+            (10, Buttons::A.0, Buttons::RIGHT.0, Buttons::A.0),
+            "{live_log:?}"
+        );
+        assert!(verdict.matches, "{verdict:?}");
+    }
+
     #[test]
     fn verdict_json_is_flat() {
         let v = Verdict {
@@ -456,7 +656,58 @@ mod tests {
         };
         assert_eq!(
             v.to_json(),
-            r#"{"score":1,"checksum":2,"ticks":3,"ended":"cap","matches":false}"#
+            r#"{"score":1,"checksum":"2","ticks":3,"ended":"cap","matches":false}"#
         );
+    }
+
+    #[test]
+    fn checksum_is_a_string_so_javascript_cannot_round_it() {
+        // 15390901594743611022 > 2^53: as a JSON number it would come back
+        // from JSON.parse as 15390901594743612000.
+        let v = Verdict {
+            score: 0,
+            checksum: 15_390_901_594_743_611_022,
+            ticks: 0,
+            ended: Ended::GameOver,
+            matches: true,
+        };
+        assert!(
+            v.to_json().contains(r#""checksum":"15390901594743611022""#),
+            "{}",
+            v.to_json()
+        );
+    }
+
+    #[test]
+    fn rejects_an_absurd_tick_count_before_reading_runs() {
+        // Six header-sized bytes could otherwise ask a verifier to
+        // re-simulate for days: the cap is checked before any run is read.
+        let mut r = sample();
+        r.runs.clear();
+        r.ticks = MAX_TICKS + 1;
+        assert_eq!(
+            Replay::decode(&r.encode()),
+            Err(DecodeError::TooManyTicks(MAX_TICKS + 1))
+        );
+        // The boundary itself decodes far enough to reach the run check.
+        r.ticks = MAX_TICKS;
+        assert_eq!(
+            Replay::decode(&r.encode()),
+            Err(DecodeError::RunCountMismatch {
+                header: MAX_TICKS,
+                sum: 0
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_a_foreign_tick_rate() {
+        let mut r = sample();
+        r.tick_hz = 30;
+        assert_eq!(
+            Replay::decode(&r.encode()),
+            Err(DecodeError::BadTickRate(30))
+        );
+        assert_eq!(crate::game::sim::TICK_HZ as u16, sample().tick_hz);
     }
 }

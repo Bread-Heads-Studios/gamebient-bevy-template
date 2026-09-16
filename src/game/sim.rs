@@ -4,6 +4,8 @@
 use std::time::Duration;
 
 use bevy::prelude::*;
+use gamebient_input::Buttons;
+use gamebient_input::input::TickFrame;
 use rand::{RngCore, SeedableRng};
 use rand_xoshiro::Xoshiro256PlusPlus;
 
@@ -24,6 +26,19 @@ pub struct SimTick(pub u32);
 /// here, in order; nothing in `Update` writes run state.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SimSet;
+
+/// The held set of the last tick that actually reached [`SimSet`] — the last
+/// tick the replay recorded.
+///
+/// `collect_tick_input` runs every fixed tick, paused ones included, so
+/// without this the tick that resumes a paused run would derive its press
+/// and release edges against a tick nobody recorded. A replay, which only
+/// ever sees recorded ticks, would derive them against the last *simulated*
+/// tick instead, and the two would disagree: press A during a pause, hold it
+/// through the resume, and the live run sees no press edge while its replay
+/// sees one. See [`remember_sim_prev`] and [`restore_tick_frame_while_paused`].
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SimPrev(pub Buttons);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
@@ -116,7 +131,8 @@ pub fn begin_run(
     mut rng: ResMut<GameRng>,
     mut tick: ResMut<SimTick>,
     mut sum: ResMut<Checksum>,
-    mut frame: ResMut<gamebient_input::input::TickFrame>,
+    mut frame: ResMut<TickFrame>,
+    mut sim_prev: ResMut<SimPrev>,
 ) {
     *seed = match pending.0.take() {
         Some(bytes) => RunSeed {
@@ -128,12 +144,40 @@ pub fn begin_run(
     *rng = GameRng::from_seed(&seed.bytes);
     *tick = SimTick(0);
     *sum = Checksum::default();
-    *frame = gamebient_input::input::TickFrame::default();
+    *frame = TickFrame::default();
+    *sim_prev = SimPrev::default();
 }
 
 /// First in `SimSet`.
 pub fn advance_tick(mut tick: ResMut<SimTick>) {
     tick.0 += 1;
+}
+
+/// Last in `SimSet`: remembers the held set this tick was simulated with, so
+/// a later paused stretch can restore it (see [`SimPrev`]). Read straight off
+/// `TickFrame`, which `collect_tick_input` has already set to this tick's
+/// held set.
+pub fn remember_sim_prev(frame: Res<TickFrame>, mut sim_prev: ResMut<SimPrev>) {
+    sim_prev.0 = frame.prev();
+}
+
+/// `FixedUpdate`, after `SimSet`, only while `Playing` and paused: rewinds
+/// `TickFrame` to the last simulated tick's held set, so the tick that
+/// resumes derives its edges against exactly what the replay's feeder will.
+///
+/// Placed after `SimSet` rather than in `FixedPreUpdate` on purpose. On the
+/// tick that *starts* the pause, `toggle_pause` (which runs before `SimSet`)
+/// has already flipped `Paused`, so that tick is rewound too — which matters
+/// when the player resumes on the very next tick, whose edges would
+/// otherwise be derived against a pause tick the replay never recorded. On
+/// the tick that *ends* the pause, `toggle_pause` has already cleared
+/// `Paused`, so this system correctly does nothing and `TickFrame` keeps the
+/// held set `remember_sim_prev` just stored.
+///
+/// A host pause (`gx:set`, applied from `Update`) is covered by the same run
+/// condition.
+pub fn restore_tick_frame_while_paused(sim_prev: Res<SimPrev>, mut frame: ResMut<TickFrame>) {
+    frame.set_prev(sim_prev.0);
 }
 
 /// Last in `SimSet` before the recorder: folds the state a replay must
@@ -192,6 +236,7 @@ mod tests {
             .init_resource::<GameRng>()
             .init_resource::<SimTick>()
             .init_resource::<Checksum>()
+            .init_resource::<SimPrev>()
             .add_systems(
                 FixedPreUpdate,
                 collect_tick_input.in_set(TickInputSet::Collect),

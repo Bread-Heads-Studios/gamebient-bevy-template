@@ -86,6 +86,13 @@ jobs:
       - name: Build web bundle
         run: bash build_web.sh
 
+      # The wasm-bindgen nodejs module require()s an ESM snippet, which needs
+      # Node >= 20.19 / >= 22.12. ubuntu-latest's preinstalled node is older
+      # than that on some runner images, so pin it explicitly.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Build replay verifier (wasm, nodejs)
         run: bash tools/build_verify.sh
 

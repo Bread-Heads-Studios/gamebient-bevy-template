@@ -13,10 +13,8 @@ if (!file) {
 }
 const { verify } = require(resolve("dist-verify/verify.js"));
 const t0 = performance.now();
-// NOTE: the checksum is a u64 computed and compared in Rust; JSON.parse turns
-// it into a JS double, so a printed value like 15390901594743612000 is a
-// display artifact of JSON.parse/JSON.stringify precision loss, not a
-// mismatch. `matches` below reflects the real Rust-side comparison.
+// `checksum` arrives as a decimal string, so the u64 survives JSON.parse
+// intact and prints verbatim. `matches` is still the Rust-side comparison.
 const out = JSON.parse(verify(new Uint8Array(readFileSync(file))));
 out.ms = Math.round(performance.now() - t0);
 console.log(JSON.stringify(out));

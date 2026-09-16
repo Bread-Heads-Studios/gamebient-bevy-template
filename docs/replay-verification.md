@@ -4,8 +4,10 @@
 
 Every run records the seed it started from and the exact input of every sim
 tick into a compact `GXR1` replay, and posts it to the host as
-`{"event":"run","replay":"<base64>"}` (`HostEvent::Run`) when the run ends —
-game over or quit to title. The ColecoVision GX site re-simulates that replay
+`{"type":"gx:event","v":1,"event":"run","replay":"<base64>"}`
+(`HostEvent::Run`) when the run ends — game over or quit to title. It is
+posted on leaving `Playing`, before that transition's `gameover` event. The
+ColecoVision GX site re-simulates that replay
 headlessly, in a build of **this same crate** compiled for
 `wasm32-unknown-unknown` with `MinimalPlugins` (the `verify` module), run
 under Node. Only a run whose final score and checksum the re-simulation
@@ -62,6 +64,21 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
 6. **No `Instant`/`SystemTime`/frame count in sim logic.** Wall-clock and
    frame-count reads aren't reproducible by a headless re-simulation driven
    by `TimeUpdateStrategy::ManualDuration`.
+7. **Never read `pause_just_pressed` in a sim system.** The recorder masks
+   `Buttons::PAUSE` out of every recorded tick (a replayed pause would
+   freeze the sim it is meant to reproduce), so it is the one bit a replay
+   cannot carry. Pause belongs in `toggle_pause`, which runs before
+   `SimSet`.
+
+Paused ticks are skipped by `SimSet` and so are never recorded, but
+`collect_tick_input` still runs on them and would leave `TickFrame.prev`
+holding input the replay never saw — the tick that resumes would then
+derive different press and release edges live than on replay. `SimPrev`
+(`src/game/sim.rs`) closes that: `remember_sim_prev` stores the held set of
+every tick that reaches `SimSet`, and `restore_tick_frame_while_paused`
+rewinds `TickFrame` to it on every skipped tick, so the resuming tick
+derives its edges against the last *recorded* tick, exactly as the replay's
+feeder does. Host pauses (`gx:set`) are covered by the same rule.
 
 The greppable ones (`rand::rng()`, `from_os_rng`, `thread_rng`, `SmallRng`,
 `std::collections::HashMap`) are enforced by the forbidden-names test in
@@ -98,8 +115,17 @@ drift.
    is for structural failures only (bad seed, bad build, decode error);
    a score mismatch is `unverified`.
 4. **Versioning.** The module for a `build` is immutable. A game release
-   publishes `verify-<version>.zip`; replays from a build the site has no
-   module for are `unverified`.
+   publishes `gamebient-game-verify.zip` as a release asset. The replay's
+   `build` field is `<version>+<short sha>`, so the site maps that sha to
+   the release whose asset it must load; replays from a build the site has
+   no module for are `unverified`.
+5. **Limits.** `decode` rejects a header claiming a tick rate other than
+   60 Hz (`BadTickRate`) or more than `MAX_TICKS` = 216 000 ticks — one hour
+   of play (`TooManyTicks`) — before it reads a single run, so a few crafted
+   header bytes cannot buy unbounded verifier CPU. Both are `rejected`, not
+   `unverified`.
+6. **Runtime.** The verifier module is wasm-bindgen's `nodejs` target and
+   `require()`s an ESM snippet: Node 20.19+ or 22.12+ (CI pins Node 22).
 
 Module API, called once per verification:
 
@@ -108,11 +134,16 @@ const { verify } = require("verify.js");
 const json = verify(new Uint8Array(bytes));
 ```
 
-`json` parses to `{score, checksum, ticks, ended: "gameover"|"input_exhausted"|"cap", matches}`
-or `{"error": "..."}` if the bytes don't decode as `GXR1`. Cache the required
-module at module scope — loading it is the expensive part, `verify()` itself
-is sub-second. The replay header's `build` field is what selects which
-release's `gamebient-game-verify.zip` to load.
+`json` parses to
+`{score, checksum, ticks, ended: "gameover"|"input_exhausted"|"cap", matches}`
+or `{"error": "..."}` if the bytes don't decode as `GXR1`. `score` and
+`ticks` are numbers; **`checksum` is a decimal string**
+(`"checksum":"15390901594743611022"`) because it is a u64 and JSON numbers
+are doubles in JavaScript — parsing it as a number would round it. Compare
+it verbatim, or as a `BigInt`. Cache the required module at module scope —
+loading it is the expensive part, `verify()` itself is sub-second. The
+replay header's `build` field is what selects which release's
+`gamebient-game-verify.zip` to load.
 
 ## Caveat
 
