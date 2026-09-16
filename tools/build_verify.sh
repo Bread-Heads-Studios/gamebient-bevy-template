@@ -16,3 +16,10 @@ wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sig
     dist-verify/verify_bg.wasm -o dist-verify/verify_bg.wasm
 echo "GX_BUILD_ID=$(strings dist-verify/verify_bg.wasm | grep -m1 -E '^[0-9]+\.[0-9]+\.[0-9]+\+' || true)" > dist-verify/BUILD
 ls -la dist-verify
+
+# Zip dist-verify/ so build_web.sh can publish it as dist/verify.zip (what the
+# site fetches at properties.verify_url) and release.yml can attach it as
+# gamebient-game-verify.zip without re-zipping the directory itself.
+rm -f dist-verify.zip
+(cd dist-verify && zip -qr ../dist-verify.zip .)
+ls -la dist-verify.zip

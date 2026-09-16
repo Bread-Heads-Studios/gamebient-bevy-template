@@ -34,6 +34,7 @@ genre, hosts) and verifying every URL.
         "category": "game",
         "game_url": "https://grand-theft-otto-five.vercel.app",
         "demo_url": "https://grand-theft-otto-five.vercel.app",
+        "verify_url": "https://grand-theft-otto-five.vercel.app/verify.zip",
         "binary_url": "https://grand-theft-otto-five.vercel.app/assets/grand-theft-otto.tar.gz",
         "binary_type": "bevy-tar"
     }
@@ -48,6 +49,7 @@ genre, hosts) and verifying every URL.
 | extra attributes | Only a gameplay fact a player cares about (`Missions: 5`, `Holes: 9`). Nothing else. |
 | `image`, `files[0].uri` | Identical; both `https://<host>/assets/cartridge.png`; the file must be a real 768x1024 PNG, not the 1x1 placeholder. |
 | `game_url`, `demo_url` | `https://<host>` — the host that actually serves the game. |
+| `verify_url` | `<host>/verify.zip` — `build_web.sh` publishes it alongside the game bundle; same host as `game_url`/`demo_url`. |
 | `binary_url` | `https://<host>/assets/<tarball>` where `<tarball>` is the flat cartridge name in `release.yml`'s Pi job and `fetch-cartridge.sh`'s `ASSET=`. All three must agree. |
 
 ## Process

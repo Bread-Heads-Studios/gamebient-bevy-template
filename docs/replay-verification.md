@@ -118,7 +118,9 @@ drift.
    publishes `gamebient-game-verify.zip` as a release asset. The replay's
    `build` field is `<version>+<short sha>`, so the site maps that sha to
    the release whose asset it must load; replays from a build the site has
-   no module for are `unverified`.
+   no module for are `unverified`. Games publish their verifier at
+   `properties.verify_url` (the web deploy's `/verify.zip`); the site
+   fetches it on first sight of a build and caches it per build.
 5. **Limits.** `decode` rejects a header claiming a tick rate other than
    60 Hz (`BadTickRate`) or more than `MAX_TICKS` = 216 000 ticks — one hour
    of play (`TooManyTicks`) — before it reads a single run, so a few crafted

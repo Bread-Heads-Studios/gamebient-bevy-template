@@ -82,7 +82,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends binaryen
 
       # build_web.sh: cargo build (wasm-release) → wasm-bindgen → wasm-opt -Oz
-      # → brotli. node is preinstalled on ubuntu-latest for the brotli step.
+      # → replay verifier (tools/build_verify.sh, -> dist/verify.zip) → brotli.
+      # node is preinstalled on ubuntu-latest for the brotli step.
       - name: Build web bundle
         run: bash build_web.sh
 
@@ -92,9 +93,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-
-      - name: Build replay verifier (wasm, nodejs)
-        run: bash tools/build_verify.sh
 
       - name: Verify the committed fixture under Node
         run: node tools/verify_fixture.mjs tests/fixtures/selftest.gxr

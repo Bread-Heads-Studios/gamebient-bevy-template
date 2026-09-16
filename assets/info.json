@@ -15,6 +15,7 @@
         "category": "game",
         "game_url": "https://gamebient-game.vercel.app",
         "demo_url": "https://gamebient-game.vercel.app",
+        "verify_url": "https://gamebient-game.vercel.app/verify.zip",
         "binary_url": "https://gamebient-game.vercel.app/assets/gamebient-game.tar.gz",
         "binary_type": "bevy-tar"
     }
