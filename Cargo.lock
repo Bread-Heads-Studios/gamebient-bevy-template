@@ -2455,15 +2455,18 @@ dependencies = [
  "gamebient-input",
  "getrandom",
  "rand",
+ "rand_xoshiro",
+ "wasm-bindgen",
 ]
 
 [[package]]
 name = "gamebient-input"
-version = "0.2.0"
-source = "git+https://github.com/Bread-Heads-Studios/gamebient-input?tag=v0.2.0#abeac1d2b6af583d62b55c2661b2556dbd67589f"
+version = "0.3.0"
+source = "git+https://github.com/Bread-Heads-Studios/gamebient-input?tag=v0.3.0#852a695e63d9f1e16dd46dd7a4c33da8afb008a1"
 dependencies = [
  "bevy",
  "js-sys",
+ "log",
  "wasm-bindgen",
 ]
 
@@ -3892,6 +3895,15 @@ checksum = "6a8615d50dcf34fa31f7ab52692afec947c4dd0ab803cc87cb3b0b4570ff7463"
 dependencies = [
  "num-traits",
  "rand",
+]
+
+[[package]]
+name = "rand_xoshiro"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f703f4665700daf5512dcca5f43afa6af89f09db47fb56be587f80636bda2d41"
+dependencies = [
+ "rand_core",
 ]
 
 [[package]]

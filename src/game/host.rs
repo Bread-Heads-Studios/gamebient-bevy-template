@@ -12,17 +12,21 @@
 //! | game → host | `gameover` + `score`   | entering `GameOver`                    |
 //! | game → host | `score`                | `GameData.score` changes               |
 //! | game → host | `paused`               | `Paused` changes (player or host)      |
+//! | game → host | run + replay           | leaving Playing (sealed GXR1, base64)  |
 //! | host → game | pause / resume         | only while `Playing`; overlay follows  |
 //! | host → game | mute / unmute          | `GlobalVolume` + live sinks            |
 //!
 //! Hosts treat everything here as untrusted (a score is not a leaderboard
-//! entry); it exists for analytics, kiosk UX and the play-bonus timer.
+//! entry); it exists for analytics, kiosk UX and the play-bonus timer. The
+//! `run` event is the one a verifier actually consumes, replaying its ticks
+//! and checking the result against the claimed score and checksum.
 
 use bevy::audio::{AudioSinkPlayback, Volume};
 use bevy::prelude::*;
 use gamebient_input::{HostCommand, HostEvent};
 
 use crate::game::scoring::GameData;
+use crate::game::sim;
 use crate::game::states::{GameState, Paused};
 
 /// Set by a host `mute`. New sounds honour it through `GlobalVolume`; sinks
@@ -58,8 +62,12 @@ fn apply_host_commands(
     state: Res<State<GameState>>,
     mut paused: ResMut<Paused>,
     mut muted: ResMut<Muted>,
-    mut global_volume: ResMut<GlobalVolume>,
+    // `GlobalVolume` is only inserted by `AudioPlugin`, which the headless
+    // build (no window, no audio) never adds — read as optional so a host
+    // `mute` doesn't panic there.
+    mut global_volume: Option<ResMut<GlobalVolume>>,
     mut sinks: Query<&mut AudioSink>,
+    mut pending: ResMut<sim::PendingSeed>,
 ) {
     for command in commands.read() {
         match command {
@@ -74,7 +82,9 @@ fn apply_host_commands(
             }
             HostCommand::Mute(mute) => {
                 muted.0 = *mute;
-                global_volume.volume = Volume::Linear(if *mute { 0.0 } else { 1.0 });
+                if let Some(volume) = global_volume.as_deref_mut() {
+                    volume.volume = Volume::Linear(if *mute { 0.0 } else { 1.0 });
+                }
                 for mut sink in &mut sinks {
                     if *mute {
                         sink.mute();
@@ -84,6 +94,7 @@ fn apply_host_commands(
                 }
             }
             HostCommand::Hello { .. } => {}
+            HostCommand::Seed(bytes) => pending.0 = Some(*bytes),
         }
     }
 }

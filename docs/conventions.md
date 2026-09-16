@@ -71,6 +71,28 @@ external model files. Prefer procedural geometry; when you do add binary assets
 (audio, textures), load them through `AssetsPlugin` and remember they ship inside
 the cartridge tarball and the web bundle.
 
+## Sim determinism
+
+Run state must be reproducible from a replay (seed + per-tick input) so the
+site can re-simulate a run headlessly and confirm its score. See
+[docs/replay-verification.md](replay-verification.md) for the full contract;
+the rules for game code:
+
+1. **`SimSet` only.** Anything that mutates run state runs inside
+   `sim::SimSet` (`FixedUpdate`, 60 Hz, chained) — never in `Update`.
+2. **`TickInput`, not `GameInput`, in sim systems.** `GameInput` stays a
+   per-frame resource for menus/UI.
+3. **`GameRng` only.** All randomness in sim code draws from `GameRng`
+   (`Xoshiro256PlusPlus`) — nothing else.
+4. **No `std::collections::HashMap` in sim state.** Use
+   `bevy::platform::collections::HashMap` or `BTreeMap` instead.
+5. **Fold extra state into `Checksum`** via `Checksum::fold(&mut self, u64)`
+   whenever a score could be reached through different in-game states.
+6. **No `Instant`/`SystemTime`/frame count in sim logic.**
+
+The greppable ones are enforced by the forbidden-names test in
+`src/game/sim.rs` (`cargo test`); the rest need review.
+
 ## Curated Bevy features
 
 `Cargo.toml` uses `default-features = false` with an explicit feature list, and gates

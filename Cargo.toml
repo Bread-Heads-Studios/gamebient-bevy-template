@@ -3,6 +3,19 @@ name = "gamebient-game"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "gamebient_game"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gamebient-game"
+path = "src/main.rs"
+
+[[bin]]
+name = "verify"
+path = "src/bin/verify.rs"
+required-features = ["verify"]
+
 [features]
 # Self-playtest harness: scripted input + periodic screenshots
 # (src/game/autopilot.rs). Dev-only; never enabled in shipping builds.
@@ -11,6 +24,9 @@ autopilot = []
 # one screenshot per frame, events.jsonl (src/game/record/, tools/record.sh).
 # Dev-only; never enabled in shipping builds.
 record = ["autopilot"]
+# Replay verifier entry point (src/bin/verify.rs): native CLI and the
+# wasm-bindgen module the site runs under Node. See docs/replay-verification.md.
+verify = ["dep:wasm-bindgen"]
 
 [dependencies]
 # Curated Bevy feature set — drops bevy_gltf, bevy_animation, bevy_gizmos,
@@ -62,9 +78,12 @@ bevy = { version = "0.18", default-features = false, features = [
     "zstd_rust",
 ] }
 rand = "0.9"
+# Sim RNG: Xoshiro256++ explicitly, never SmallRng (which picks a different
+# algorithm on wasm32 and would break native-vs-wasm replay determinism).
+rand_xoshiro = "0.7"
 # The Gamebient control canon + web glue (host protocol, touch overlay,
 # Gamepad API, legacy keyEvent bridge). Pin a tag; bump deliberately.
-gamebient-input = { git = "https://github.com/Bread-Heads-Studios/gamebient-input", tag = "v0.2.0" }
+gamebient-input = { git = "https://github.com/Bread-Heads-Studios/gamebient-input", tag = "v0.3.0" }
 
 # Native-only Bevy features: linux window backends and gilrs gamepad support.
 # Excluded from the wasm build so they don't add dead code paths.
@@ -75,6 +94,7 @@ bevy = { version = "0.18", features = ["bevy_gilrs", "wayland", "x11"] }
 # (.cargo/config.toml sets --cfg getrandom_backend="wasm_js")
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
+wasm-bindgen = { version = "0.2.108", optional = true }
 
 [profile.dev]
 opt-level = 1

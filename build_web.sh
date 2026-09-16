@@ -18,10 +18,20 @@ fi
 # Generate JS bindings. Find the compiled .wasm by glob (cargo names it after the
 # bin target, which varies with the package name) and force deterministic output
 # names with --out-name so index.html / wasm-opt / brotli paths are stable.
+# verify.wasm is excluded by name: tools/build_verify.sh builds the replay
+# verifier into the same directory, and shipping it as the game would deploy a
+# module with no window, renderer or assets. Anything else unexpected in there
+# is a hard error rather than a coin flip about which .wasm gets deployed.
 mkdir -p dist
-WASM=$(find target/wasm32-unknown-unknown/wasm-release -maxdepth 1 -name '*.wasm' | head -1)
+WASM=$(find target/wasm32-unknown-unknown/wasm-release -maxdepth 1 -name '*.wasm' ! -name 'verify.wasm')
 if [ -z "$WASM" ]; then
-    echo "ERROR: no .wasm found in target/wasm32-unknown-unknown/wasm-release/" >&2
+    echo "ERROR: no game .wasm found in target/wasm32-unknown-unknown/wasm-release/" >&2
+    exit 1
+fi
+if [ "$(printf '%s\n' "$WASM" | wc -l | tr -d ' ')" -ne 1 ]; then
+    echo "ERROR: more than one candidate .wasm in target/wasm32-unknown-unknown/wasm-release/:" >&2
+    printf '%s\n' "$WASM" >&2
+    echo "Remove the stale ones (or 'cargo clean') so the deployed bundle is unambiguous." >&2
     exit 1
 fi
 wasm-bindgen \

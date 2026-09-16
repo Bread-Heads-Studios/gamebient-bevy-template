@@ -111,11 +111,19 @@ jobs:
           mkdir -p build
           (cd dist && zip -r ../build/gamebient-game-web.zip .)
 
+      - name: Build and zip replay verifier
+        if: matrix.target == 'web'
+        run: |
+          bash tools/build_verify.sh
+          (cd dist-verify && zip -r ../build/gamebient-game-verify.zip .)
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: gamebient-game-${{ matrix.target }}
-          path: build/gamebient-game-${{ matrix.target }}.*
+          path: |
+            build/gamebient-game-${{ matrix.target }}.*
+            build/gamebient-game-verify.zip
           if-no-files-found: error
 
   release:

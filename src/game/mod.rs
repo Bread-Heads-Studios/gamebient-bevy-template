@@ -8,7 +8,9 @@ pub mod input;
 pub mod player;
 #[cfg(feature = "record")]
 pub mod record;
+pub mod replay;
 pub mod scoring;
+pub mod sim;
 pub mod states;
 
 use states::GameState;
@@ -17,57 +19,126 @@ use states::GameState;
 #[derive(Component)]
 pub struct GameEntity;
 
-/// Owns the game state machine, core resources, and gameplay systems.
-pub struct GamePlugin;
+/// `headless: true` builds the sim only (no scene, audio, overlay or fade)
+/// for the replay verifier. The windowed game uses `GamePlugin::default()`.
+#[derive(Default)]
+pub struct GamePlugin {
+    pub headless: bool,
+}
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
+        let input = if self.headless {
+            gamebient_input::GxInputPlugin::headless("Gamebient Game")
+        } else {
+            let mut p = gamebient_input::GxInputPlugin::named("Gamebient Game");
+            p.config.tick_input = true;
+            p
+        };
         app.init_state::<GameState>()
             // Canon input + web glue. StateEvents posts every GameState
             // transition to the embedding host (website analytics, cabinet).
-            .add_plugins(gamebient_input::GxInputPlugin::named("Gamebient Game"))
+            .add_plugins(input)
             .add_plugins(gamebient_input::StateEvents::<GameState>::default())
             // Host commands (pause / resume / mute) and the events hosts act
             // on (started, gameover, score, paused).
             .add_plugins(host::HostBridgePlugin)
+            .insert_resource(Time::<Fixed>::from_duration(sim::tick_duration()))
             .init_resource::<scoring::GameData>()
+            .init_resource::<states::Paused>()
+            .init_resource::<sim::SimTick>()
+            .init_resource::<sim::RunSeed>()
+            .init_resource::<sim::PendingSeed>()
+            .init_resource::<sim::GameRng>()
+            .init_resource::<sim::Checksum>()
+            .init_resource::<sim::SimPrev>()
+            .init_resource::<replay::recorder::ReplayRecorder>()
             .add_message::<scoring::ScoreEvent>()
             .add_message::<audio::SfxEvent>()
-            .init_resource::<audio::CurrentTrack>()
-            .add_systems(Startup, (setup_scene, audio::setup_sfx))
+            .configure_sets(
+                FixedUpdate,
+                sim::SimSet.run_if(in_state(GameState::Playing).and(states::not_paused)),
+            )
             .add_systems(
-                Update,
+                OnEnter(GameState::Playing),
                 (
-                    audio::play_sfx,
-                    audio::music_director,
-                    audio::update_music_fades,
-                ),
+                    reset_paused,
+                    reset_game_data,
+                    sim::begin_run,
+                    replay::recorder::begin_recording,
+                    player::spawn_player,
+                )
+                    .chain(),
             )
-            .add_systems(OnEnter(GameState::Playing), player::spawn_player)
             .add_systems(
-                Update,
-                (player::move_player, scoring::handle_score_events)
-                    .run_if(in_state(GameState::Playing).and(states::not_paused)),
+                FixedUpdate,
+                toggle_pause
+                    .run_if(in_state(GameState::Playing))
+                    .before(sim::SimSet),
             )
-            .add_systems(OnExit(GameState::Playing), cleanup_game_entities)
-            .init_resource::<states::Paused>()
-            .add_systems(OnEnter(GameState::Playing), (reset_paused, reset_game_data))
             .add_systems(
-                Update,
-                (toggle_pause, pause_quit, sync_pause_overlay)
+                FixedUpdate,
+                (
+                    sim::advance_tick,
+                    player::move_player,
+                    scoring::handle_score_events,
+                    sim::checksum_tick,
+                    replay::recorder::record_tick,
+                    sim::remember_sim_prev,
+                )
                     .chain()
-                    .run_if(in_state(GameState::Playing)),
+                    .in_set(sim::SimSet),
             )
-            .add_systems(OnExit(GameState::Playing), cleanup_pause_overlay);
-        #[cfg(feature = "autopilot")]
-        app.add_plugins(autopilot::AutopilotPlugin);
-        #[cfg(feature = "record")]
-        {
-            app.add_plugins(record::RecordPlugin);
-            record::log_state::<GameState>(app);
-            record::log_messages::<audio::SfxEvent>(app);
-            record::log_value::<scoring::GameData>(app, "score", |d| i64::from(d.score));
-            record::log_value::<states::Paused>(app, "pause", |p| i64::from(p.0));
+            // Keeps a paused stretch from moving the press edges the replay
+            // reproduces: see `sim::restore_tick_frame_while_paused`. Runs in
+            // both modes — the headless verifier never pauses (the recorder
+            // masks PAUSE), but the two apps must be built the same way.
+            .add_systems(
+                FixedUpdate,
+                sim::restore_tick_frame_while_paused
+                    .after(sim::SimSet)
+                    .run_if(in_state(GameState::Playing).and(|p: Res<states::Paused>| p.0)),
+            )
+            .add_systems(
+                OnExit(GameState::Playing),
+                (replay::recorder::seal_run, cleanup_game_entities).chain(),
+            );
+
+        if !self.headless {
+            app.init_resource::<audio::CurrentTrack>()
+                .add_systems(Startup, (setup_scene, audio::setup_sfx))
+                .add_systems(
+                    Update,
+                    (
+                        audio::play_sfx,
+                        audio::music_director,
+                        audio::update_music_fades,
+                    ),
+                )
+                .add_systems(
+                    Update,
+                    (pause_quit, sync_pause_overlay)
+                        .chain()
+                        .run_if(in_state(GameState::Playing)),
+                )
+                .add_systems(OnExit(GameState::Playing), cleanup_pause_overlay);
+
+            // The autopilot/record dev harnesses drive a real window
+            // (screenshots, `ScreenFade`, a manual render clock) and have no
+            // meaning for the headless sim; keep them out of headless apps
+            // even when the feature is enabled (CI runs `cargo test
+            // --all-features`, which would otherwise build a headless app
+            // with these systems wired in).
+            #[cfg(feature = "autopilot")]
+            app.add_plugins(autopilot::AutopilotPlugin);
+            #[cfg(feature = "record")]
+            {
+                app.add_plugins(record::RecordPlugin);
+                record::log_state::<GameState>(app);
+                record::log_messages::<audio::SfxEvent>(app);
+                record::log_value::<scoring::GameData>(app, "score", |d| i64::from(d.score));
+                record::log_value::<states::Paused>(app, "pause", |p| i64::from(p.0));
+            }
         }
     }
 }
@@ -116,14 +187,16 @@ fn cleanup_pause_overlay(mut commands: Commands, query: Query<Entity, With<Pause
 
 /// Toggles pause on the canon Pause action (Escape, gamepad Start, pad
 /// Pause). The overlay is driven by `sync_pause_overlay`, so a host pause
-/// (gx:set) looks exactly the same.
+/// (gx:set) looks exactly the same. Runs in `FixedUpdate` before `SimSet` so
+/// a pause takes effect before that tick's gameplay systems run; headless
+/// builds have no `ScreenFade` (no UI), so it's read as optional.
 fn toggle_pause(
-    input: Res<input::GameInput>,
+    input: Res<gamebient_input::TickInput>,
     mut paused: ResMut<states::Paused>,
-    fade: Res<crate::ui::transition::ScreenFade>,
+    fade: Option<Res<crate::ui::transition::ScreenFade>>,
     mut sfx: MessageWriter<audio::SfxEvent>,
 ) {
-    if !fade.is_idle() || !input.pause_just_pressed {
+    if fade.as_ref().is_some_and(|f| !f.is_idle()) || !input.pause_just_pressed {
         return;
     }
     paused.0 = !paused.0;
@@ -206,5 +279,53 @@ fn pause_quit(
     }
     if input.start_just_pressed || input.secondary_just_pressed {
         let _ = fade.request(GameState::Menu);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::input::InputPlugin;
+    use bevy::state::app::StatesPlugin;
+    use bevy::time::TimeUpdateStrategy;
+
+    use super::*;
+
+    /// Boots `GamePlugin { headless: true }` under `MinimalPlugins` (no
+    /// window, no audio, no renderer) exactly as the future replay verifier
+    /// will, and proves the fixed-tick chain actually runs: `SimTick`
+    /// advances and `Checksum` moves off its default once a run starts.
+    ///
+    /// `InputPlugin` is added alongside `MinimalPlugins`: it owns
+    /// `ButtonInput<KeyCode>` / `ButtonInput<GamepadButton>`, which
+    /// `gamebient_input`'s `accumulate_input`/`collect_input` read
+    /// unconditionally (headless or not, so a replay feeder can sit
+    /// alongside live input) and which `MinimalPlugins` alone does not
+    /// provide. It's a plain resource/event registration with no window or
+    /// OS dependency, so it's headless-safe.
+    #[test]
+    fn headless_game_plugin_boots_and_ticks_on_minimal_plugins() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(StatesPlugin)
+            .add_plugins(InputPlugin)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(sim::tick_duration()))
+            .add_plugins(GamePlugin { headless: true });
+        app.update(); // first frame: zero delta, no fixed tick
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update(); // transition applies; OnEnter(Playing) runs begin_run + spawn_player
+        for _ in 0..10 {
+            app.update();
+        }
+        let tick = app.world().resource::<sim::SimTick>().0;
+        assert!(
+            tick >= 10,
+            "sim ticks should advance under the manual clock, got {tick}"
+        );
+        assert_ne!(
+            app.world().resource::<sim::Checksum>().0,
+            sim::Checksum::default().0
+        );
     }
 }
