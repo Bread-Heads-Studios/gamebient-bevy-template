@@ -537,15 +537,32 @@ mod tests {
         }
     }
 
-    /// Plays `frames` through the live headless app, seals the replay, then
-    /// re-simulates it. Returns (live log, replay log, verdict, replay).
-    fn live_then_replay(
-        frames: Vec<(gamebient_input::Buttons, bool)>,
-    ) -> (EdgeLog, EdgeLog, Verdict, Replay) {
+    /// `(sim tick, paused)` after every fixed tick of a live run, so a test
+    /// can see a pause that silently let go.
+    #[derive(Resource, Default, Debug, Clone, PartialEq, Eq)]
+    struct PauseTrace(Vec<(u32, bool)>);
+
+    fn log_paused(
+        tick: Res<SimTick>,
+        paused: Res<crate::game::states::Paused>,
+        mut trace: ResMut<PauseTrace>,
+    ) {
+        trace.0.push((tick.0, paused.0));
+    }
+
+    /// Plays `frames` through the live headless app and leaves it in
+    /// `Playing`, with an `EdgeLog` and a `PauseTrace` filled in.
+    fn build_live_app(frames: Vec<(gamebient_input::Buttons, bool)>) -> App {
         let n = frames.len();
         let mut live = build_headless_app();
         live.insert_resource(Script { frames, at: 0 });
         log_edges_in_sim_set(&mut live);
+        live.init_resource::<PauseTrace>().add_systems(
+            FixedUpdate,
+            log_paused
+                .after(crate::game::sim::SimSet)
+                .run_if(in_state(GameState::Playing)),
+        );
         live.world_mut().resource_mut::<PendingSeed>().0 = Some([0x11u8; 32]);
         // Warm-up update: zero delta, no fixed tick. The script is added
         // afterwards so script frame N drives fixed tick N exactly.
@@ -560,6 +577,15 @@ mod tests {
         for _ in 0..n {
             live.update();
         }
+        live
+    }
+
+    /// Plays `frames` through the live headless app, seals the replay, then
+    /// re-simulates it. Returns (live log, replay log, verdict, replay).
+    fn live_then_replay(
+        frames: Vec<(gamebient_input::Buttons, bool)>,
+    ) -> (EdgeLog, EdgeLog, Verdict, Replay) {
+        let mut live = build_live_app(frames);
         live.world_mut()
             .resource_mut::<NextState<GameState>>()
             .set(GameState::GameOver);
@@ -640,6 +666,77 @@ mod tests {
         assert_eq!(
             live_log.0[9],
             (10, Buttons::A.0, Buttons::RIGHT.0, Buttons::A.0),
+            "{live_log:?}"
+        );
+        assert!(verdict.matches, "{verdict:?}");
+    }
+
+    #[test]
+    fn a_held_pause_stays_paused() {
+        use gamebient_input::Buttons;
+        // Every real pause path holds the button rather than only latching
+        // it: keyboard `pressed(Escape)`, gamepad button 9, and the touch
+        // overlay all put PAUSE in the held set for as long as it is down.
+        // `toggle_pause` derives `pause_just_pressed` from
+        // `(held | latched) \ prev`, so rewinding PAUSE out of `prev` while
+        // paused would re-fire the press on the very next tick and let the
+        // game run on under the pause overlay.
+        let mut frames = vec![(Buttons::RIGHT, false); 5];
+        frames.extend(std::iter::repeat_n(
+            (Buttons::RIGHT.union(Buttons::PAUSE), false),
+            6,
+        ));
+
+        let live = build_live_app(frames);
+        let trace = live.world().resource::<PauseTrace>().clone();
+        let tick = live.world().resource::<SimTick>().0;
+        let paused = live.world().resource::<crate::game::states::Paused>().0;
+
+        assert!(
+            paused,
+            "pause let go while the button was still held: {trace:?}"
+        );
+        assert_eq!(tick, 5, "the sim advanced while paused: {trace:?}");
+        // Frames 1..=5 simulate ticks 1..=5; frame 6 pauses and frames
+        // 6..=11 are all skipped, so the tick stays at 5 and paused stays
+        // true for the whole held span.
+        let mut expect: Vec<(u32, bool)> = (1..=5).map(|t| (t, false)).collect();
+        expect.extend(std::iter::repeat_n((5, true), 6));
+        assert_eq!(trace.0, expect);
+    }
+
+    #[test]
+    fn a_held_pause_cycle_stays_replayable() {
+        use gamebient_input::Buttons;
+        // A whole held-pause cycle, the way a keyboard actually produces it:
+        //   frames  1..=5   hold RIGHT              -> sim ticks 1..=5
+        //   frames  6..=8   hold RIGHT|PAUSE        -> frame 6 pauses; skipped
+        //   frames  9..=11  release everything      -> still paused; skipped
+        //   frames 12..=14  hold A|PAUSE            -> frame 12 resumes
+        //                                              -> sim ticks 6..=8
+        //   frames 15..=19  hold A                  -> sim ticks 9..=13
+        // Six frames are skipped, so 13 of the 19 frames reach `SimSet`.
+        const SIM_TICKS: u32 = 13;
+        let pause = Buttons::PAUSE;
+        let mut frames = vec![(Buttons::RIGHT, false); 5];
+        frames.extend(std::iter::repeat_n((Buttons::RIGHT.union(pause), false), 3));
+        frames.extend(std::iter::repeat_n((Buttons::NONE, false), 3));
+        frames.extend(std::iter::repeat_n((Buttons::A.union(pause), false), 3));
+        frames.extend(std::iter::repeat_n((Buttons::A, false), 5));
+
+        let (live_log, replay_log, verdict, replay) = live_then_replay(frames);
+
+        assert_eq!(replay.ticks, SIM_TICKS, "{live_log:?}");
+        assert_eq!(live_log.0.len(), SIM_TICKS as usize);
+        assert_eq!(
+            live_log, replay_log,
+            "a held pause moved the press edges the replay reproduces"
+        );
+        // Sim tick 6 is the resume tick: A pressed and RIGHT released
+        // relative to sim tick 5, which is the last tick the replay carries.
+        assert_eq!(
+            live_log.0[5],
+            (6, Buttons::A.0, Buttons::RIGHT.0, Buttons::A.0),
             "{live_log:?}"
         );
         assert!(verdict.matches, "{verdict:?}");

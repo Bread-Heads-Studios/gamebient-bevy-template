@@ -176,8 +176,21 @@ pub fn remember_sim_prev(frame: Res<TickFrame>, mut sim_prev: ResMut<SimPrev>) {
 ///
 /// A host pause (`gx:set`, applied from `Update`) is covered by the same run
 /// condition.
+///
+/// `Buttons::PAUSE` is exempt from the rewind and keeps its live value.
+/// Every recorded tick has PAUSE masked out (`ReplayRecorder::push`), so the
+/// bit can never affect anything a replay reproduces — there is nothing to
+/// keep in sync. It *is* what un-pauses the game: `toggle_pause` reads
+/// `pause_just_pressed`, which `collect_tick_input` derives as
+/// `(held | latched) \ prev`, and every real pause path (keyboard
+/// `pressed(Escape)`, gamepad button 9, the touch overlay) holds PAUSE for
+/// as long as the button is down rather than only latching it. Rewinding
+/// PAUSE out of `prev` would therefore re-fire the press on the very next
+/// tick and drop the pause after one tick, leaving the game running under
+/// its own pause overlay.
 pub fn restore_tick_frame_while_paused(sim_prev: Res<SimPrev>, mut frame: ResMut<TickFrame>) {
-    frame.set_prev(sim_prev.0);
+    let live_pause = Buttons(frame.prev().0 & Buttons::PAUSE.0);
+    frame.set_prev(sim_prev.0.difference(Buttons::PAUSE).union(live_pause));
 }
 
 /// Last in `SimSet` before the recorder: folds the state a replay must
