@@ -101,6 +101,21 @@ Players), and `properties` with `game_url`/`demo_url` (the live Vercel host),
 `binary_type: "bevy-tar"`. Fill in the placeholder description and check every
 URL resolves before publishing.
 
+## Replay verification
+
+Every run records its seed and per-tick input into a `GXR1` replay and posts
+it to the host when the run ends; the ColecoVision GX site re-simulates it
+headlessly to confirm the score before it becomes a leaderboard entry.
+
+```bash
+cargo test --all-features                                   # codec, selftest, fixture
+cargo run --features verify --bin verify -- --selftest --write tests/fixtures/selftest.gxr   # regenerate after a sim change
+tools/build_verify.sh && node tools/verify_fixture.mjs tests/fixtures/selftest.gxr
+```
+
+See [docs/replay-verification.md](docs/replay-verification.md) for the format,
+the determinism rules gameplay code must follow, and the server contract.
+
 ## Deploying (web)
 
 **Vercel** runs `build_web.sh` to build `dist/` and serves it as a static site.

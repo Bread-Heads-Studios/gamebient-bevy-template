@@ -27,12 +27,19 @@ one-responsibility files.
 - **Curated Bevy features.** `Cargo.toml` sets `default-features = false` and lists
   features explicitly; native-only features are gated to `cfg(not(target_arch = "wasm32"))`.
   Add features deliberately — they affect the wasm bundle size.
+- **Deterministic sim.** Run state changes only inside `sim::SimSet`
+  (`FixedUpdate`, 60 Hz, chained). Sim systems read `TickInput`, draw
+  randomness from `GameRng`, and never touch wall-clock or
+  `std::collections::HashMap`. Each run records a replay the site
+  re-simulates with `src/bin/verify.rs`; see `docs/replay-verification.md`.
 
 ## How to add things
 
 - **A gameplay system:** write a `fn` taking the `Res`/`Query` it needs, register it
   in the owning plugin under `Update` with `.run_if(in_state(GameState::Playing))`
-  (or `Startup`/`OnEnter`/`OnExit` as appropriate). `player::move_player` is the model.
+  (or `Startup`/`OnEnter`/`OnExit` as appropriate) — or in `GamePlugin` inside the
+  `SimSet` chain (not `Update`) if it mutates run state; `player::move_player` is
+  the model.
 - **An asset:** load/create it in `AssetsPlugin` (a `Startup` system inserting a
   resource of handles), then reference that resource where you spawn.
 - **A test:** pull the rule into a pure method/function, add a `#[cfg(test)] mod tests`.
@@ -65,6 +72,12 @@ one-responsibility files.
   `tools/cartridge-cover.svg`, which must be redesigned in the game's own voice,
   and `info.json`'s description/genre/hosts must be filled in. Use the
   `designing-cartridge-covers` and `generating-cartridge-metadata` skills.
+- **Replay verification:** `cargo test --all-features` runs the codec tests and
+  the native `--selftest`; regenerate `tests/fixtures/selftest.gxr` whenever the
+  sim changes — `cargo run --features verify --bin verify -- --selftest --write
+  tests/fixtures/selftest.gxr` — `cargo test` tells you when. Check it under
+  wasm too: `tools/build_verify.sh && node tools/verify_fixture.mjs
+  tests/fixtures/selftest.gxr`. See `docs/replay-verification.md`.
 
 ## Build / CI / release model
 
@@ -112,3 +125,12 @@ These cost real debugging time on the project this template was extracted from:
   cartridge tarball). They're gitignored; keep `.git` lean.
 - **`init-game.sh` is one-shot** and self-deletes. It uses BSD/macOS `sed -i ''`;
   on Linux change to `sed -i`.
+- **`SmallRng` differs on wasm32** (xoshiro128 vs 256): the sim uses
+  `rand_xoshiro::Xoshiro256PlusPlus` explicitly.
+- **The wasm verifier must not call `App::run`**: Bevy's wasm runner wants
+  `window.setTimeout`, which Node lacks; `verify()` steps `app.update()` itself.
+- **`gamebient-input` is a path dependency for now** (`{ path =
+  "../gamebient-input" }` in `Cargo.toml`) with a `TODO(owner)` to pin
+  `tag = "v0.3.0"` once the crate tags it. Games generated from the template
+  before that tag lands inherit the path dep; re-check `Cargo.toml` once it's
+  tagged.
