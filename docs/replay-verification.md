@@ -124,7 +124,12 @@ drift.
    `BUILD` file carries `GX_BUILD_ID=<version>+<sha>`, matching the replay
    header's `build` field exactly (`tools/build_verify.sh` computes it the
    same way `build.rs` bakes it into the binary); the bundle resolver reads
-   this to confirm it loaded the right module before trusting a verdict.
+   this to confirm it loaded the right module before trusting a verdict. The
+   sha comes from `git rev-parse --short=7 HEAD`, falling back to
+   `VERCEL_GIT_COMMIT_SHA` when there's no `.git` checkout (a Vercel build);
+   a build with neither fails on purpose rather than shipping a non-unique
+   id, since the site caches a verifier per build id and a reused id makes
+   every honest run after the next redeploy mismatch.
 5. **Limits.** `decode` rejects a header claiming a tick rate other than
    60 Hz (`BadTickRate`) or more than `MAX_TICKS` = 216 000 ticks — one hour
    of play (`TooManyTicks`) — before it reads a single run, so a few crafted

@@ -23,9 +23,21 @@ wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sig
 # `.git/HEAD`/refs changes, so don't build the verifier from a dirty tree or
 # a different commit than the one that produced the game binary being served.
 VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
-SHA=$(git rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
+SHA=$(git rev-parse --short=7 HEAD 2>/dev/null || true)
+if [ -z "$SHA" ]; then
+    # ${VERCEL_GIT_COMMIT_SHA:-} guards the substring expansion below against
+    # `set -u` when the var is unset entirely (e.g. no git checkout AND no
+    # Vercel env — a hard failure either way, but nounset must not pre-empt
+    # the clear error message with an "unbound variable" trace instead).
+    SHA="${VERCEL_GIT_COMMIT_SHA:-}"
+    SHA="${SHA:0:7}"
+fi
+if [ -z "$SHA" ]; then
+    echo "ERROR: cannot determine a unique build id; a git checkout or VERCEL_GIT_COMMIT_SHA is required" >&2
+    exit 1
+fi
 echo "GX_BUILD_ID=${VERSION}+${SHA}" > dist-verify/BUILD
-grep -qE '^GX_BUILD_ID=[0-9]+\.[0-9]+\.[0-9]+\+[0-9a-f]{7}$|^GX_BUILD_ID=.+\+unknown$' dist-verify/BUILD \
+grep -qE '^GX_BUILD_ID=[0-9A-Za-z.+_-]+\+[0-9a-f]{7}$' dist-verify/BUILD \
     || { echo "BUILD id malformed" >&2; exit 1; }
 echo "dist-verify/BUILD: $(cat dist-verify/BUILD)"
 ls -la dist-verify
