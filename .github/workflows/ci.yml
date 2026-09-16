@@ -86,6 +86,12 @@ jobs:
       - name: Build web bundle
         run: bash build_web.sh
 
+      - name: Build replay verifier (wasm, nodejs)
+        run: bash tools/build_verify.sh
+
+      - name: Verify the committed fixture under Node
+        run: node tools/verify_fixture.mjs tests/fixtures/selftest.gxr
+
       - name: Upload web bundle
         uses: actions/upload-artifact@v4
         with:
