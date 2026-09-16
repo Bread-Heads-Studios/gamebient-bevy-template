@@ -2462,6 +2462,7 @@ dependencies = [
 [[package]]
 name = "gamebient-input"
 version = "0.3.0"
+source = "git+https://github.com/Bread-Heads-Studios/gamebient-input?branch=feat%2Ftick-input-and-seed#e987d84b9ee4dab8e95ad29b764354689bb357c2"
 dependencies = [
  "bevy",
  "js-sys",

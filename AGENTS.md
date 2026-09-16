@@ -129,8 +129,8 @@ These cost real debugging time on the project this template was extracted from:
   `rand_xoshiro::Xoshiro256PlusPlus` explicitly.
 - **The wasm verifier must not call `App::run`**: Bevy's wasm runner wants
   `window.setTimeout`, which Node lacks; `verify()` steps `app.update()` itself.
-- **`gamebient-input` is a path dependency for now** (`{ path =
-  "../gamebient-input" }` in `Cargo.toml`) with a `TODO(owner)` to pin
-  `tag = "v0.3.0"` once the crate tags it. Games generated from the template
-  before that tag lands inherit the path dep; re-check `Cargo.toml` once it's
+- **`gamebient-input` is pinned to a branch for now** (`branch =
+  "feat/tick-input-and-seed"` in `Cargo.toml`) with a `TODO(owner)` to switch
+  to `tag = "v0.3.0"` once the crate tags it. Games generated from the template
+  before that tag lands inherit the branch pin; re-check `Cargo.toml` once it's
   tagged.
