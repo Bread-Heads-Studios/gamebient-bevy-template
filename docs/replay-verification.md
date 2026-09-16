@@ -120,7 +120,11 @@ drift.
    the release whose asset it must load; replays from a build the site has
    no module for are `unverified`. Games publish their verifier at
    `properties.verify_url` (the web deploy's `/verify.zip`); the site
-   fetches it on first sight of a build and caches it per build.
+   fetches it on first sight of a build and caches it per build. The zip's
+   `BUILD` file carries `GX_BUILD_ID=<version>+<sha>`, matching the replay
+   header's `build` field exactly (`tools/build_verify.sh` computes it the
+   same way `build.rs` bakes it into the binary); the bundle resolver reads
+   this to confirm it loaded the right module before trusting a verdict.
 5. **Limits.** `decode` rejects a header claiming a tick rate other than
    60 Hz (`BadTickRate`) or more than `MAX_TICKS` = 216 000 ticks — one hour
    of play (`TooManyTicks`) — before it reads a single run, so a few crafted
