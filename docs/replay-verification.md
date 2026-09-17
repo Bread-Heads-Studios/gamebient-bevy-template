@@ -61,14 +61,40 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
 5. **Fold extra state into `Checksum`** via `Checksum::fold(&mut self, u64)`
    whenever a score could be reached through different in-game states — the
    checksum is what catches a replay that reproduces the score by accident.
-6. **No `Instant`/`SystemTime`/frame count in sim logic.** Wall-clock and
+6. **`sim::checksum_tick` folds only the score and the tick.** It is one of
+   the files `tools/rollout-replay.sh` copies verbatim into every game, so
+   it must stay game-agnostic. Each game folds its own key run state
+   (player/ball position, hole index, lives, ...) in a system of its own,
+   registered in `SimSet` right after `sim::checksum_tick` — this
+   template's `player::checksum_player` is the example (folds `lives`, then
+   the player transform bit-exactly).
+7. **No `Instant`/`SystemTime`/frame count in sim logic.** Wall-clock and
    frame-count reads aren't reproducible by a headless re-simulation driven
    by `TimeUpdateStrategy::ManualDuration`.
-7. **Never read `pause_just_pressed` in a sim system.** The recorder masks
+8. **Never read `pause_just_pressed` in a sim system.** The recorder masks
    `Buttons::PAUSE` out of every recorded tick (a replayed pause would
    freeze the sim it is meant to reproduce), so it is the one bit a replay
    cannot carry. Pause belongs in `toggle_pause`, which runs before
    `SimSet`.
+9. **`LeaderboardScore`, not `GameData.score`, for the replay/host score.**
+   games without `score` implement `LeaderboardScore`; the HUD, host `score`
+   event and replay must agree.
+10. **Freeze the sim on the tick the run ends.** The sim system that ends
+   the run sets `RunOver(true)` on the same tick it requests the fade — or,
+   headless, sets `NextState(GameOver)` — and `sim::run_not_over` is the
+   third clause of `SimSet`'s run condition:
+   `in_state(Playing).and(not_paused).and(sim::run_not_over)`.
+   `sim::end_run(&mut over, fade, &mut next)` does both halves in one place;
+   call it with the fade as `Option<ResMut<ScreenFade>>`, the one signature
+   that compiles in the windowed game and in the headless verifier alike.
+   Without the latch the two paths leave `Playing` at different ticks: the
+   windowed game keeps ticking for the length of the fade, which
+   `ScreenFade::tick` drives from `Update` on the *frame* delta
+   (`DEFAULT_FADE_SECS` = 0.4 s ≈ 24 ticks, but however many the frame rate
+   produces), while the verifier leaves on the ending tick itself. Those
+   extra ticks are recorded and folded into `Checksum`, so a real run that
+   reaches the game-over screen seals a checksum its own replay can never
+   reproduce — and a selftest that ends by input exhaustion never notices.
 
 Paused ticks are skipped by `SimSet` and so are never recorded, but
 `collect_tick_input` still runs on them and would leave `TickFrame.prev`
@@ -83,17 +109,20 @@ feeder does. Host pauses (`gx:set`) are covered by the same rule.
 The greppable ones (`rand::rng()`, `from_os_rng`, `thread_rng`, `SmallRng`,
 `std::collections::HashMap`) are enforced by the forbidden-names test in
 `src/game/sim.rs` (`cargo test`); the rest — `SimSet` placement, `TickInput`
-usage, checksum folding, wall-clock reads — aren't mechanically checkable and
-need review.
+usage, checksum folding, wall-clock reads, run-end latching — aren't
+mechanically checkable and need review.
 
 ## Commands
 
 ```bash
-cargo test --all-features                                   # codec, selftest, fixture
+cargo test --all-features                                   # codec, selftest, fixtures
 cargo run --features verify --bin verify -- --selftest --write tests/fixtures/selftest.gxr   # regenerate after a sim change
+bash tools/build_verify.sh                                   # -> dist-verify/ (the wasm module)
+node tools/verify_fixture.mjs --record tests/fixtures/selftest-wasm.gxr   # regenerate the CI gate's fixture
+node tools/verify_fixture.mjs tests/fixtures/selftest-wasm.gxr
 GX_REPLAY_DIR=build/replays cargo run                        # play; each run writes build/replays/<ms>.gxr
 cargo run --features verify --bin verify -- build/replays/<ms>.gxr
-tools/build_verify.sh && node tools/verify_fixture.mjs tests/fixtures/selftest.gxr
+node tools/verify_fixture.mjs build/replays/<ms>.gxr
 ```
 
 ## Server contract
@@ -156,15 +185,56 @@ loading it is the expensive part, `verify()` itself is sub-second. The
 replay header's `build` field is what selects which release's
 `gamebient-game-verify.zip` to load.
 
-## Caveat
+`ended` says why the re-simulation stopped, and is diagnostic — `matches` is
+the verdict. A run the sim ended itself (rule 10: `sim::end_run` latches
+`RunOver` and queues `NextState(GameOver)`) reports **`gameover`**, which is
+what every real run that reaches the game-over screen produces. That takes a
+deliberate ordering in `run_verify_app`: such a run's replay carries exactly
+the ticks it simulated, so the feeder runs dry on the very tick the
+transition is queued, and a queued `NextState` is therefore checked *before*
+`ReplayFeeder::done`. `input_exhausted` means the input ran out with the run
+still live — a quit-to-title, or a selftest replay whose script simply
+stopped. `cap` means the sim outran `ticks + 60` without ending, which is a
+determinism failure dressed as a timeout.
 
-Native and wasm agree for the template because its sim uses only basic IEEE
-ops (add/sub/mul, no transcendental functions). A game whose sim code calls
-`sin`/`cos`/`powf` may see the native `--selftest` and the Node fixture check
-disagree by an ulp that snowballs over enough ticks — different platforms'
-libm implementations aren't required to round transcendental functions
-identically. This doesn't affect what's actually shipped: the real check is
-wasm-in-browser vs. wasm-in-Node, and wasm arithmetic is spec-deterministic
-for both. If a game hits this, mark the CI Node step
-(`node tools/verify_fixture.mjs …`) with `continue-on-error: true` and rely
-on `cargo test`'s native `--selftest` for regression coverage instead.
+## Two fixtures, and which one is the gate
+
+`tests/fixtures/` holds two recordings of the same scripted selftest run:
+
+| File | Recorded by | Verified by | Role |
+|---|---|---|---|
+| `selftest-wasm.gxr` | the wasm verifier module | wasm, under Node (CI) | **the gate** |
+| `selftest.gxr` | the native build | native (`cargo test`), and informationally by Node | native regression check |
+
+Both files' header `build` lags `HEAD` by construction: it is the
+`GX_BUILD_ID` of the commit that recorded them, and any commit after that
+leaves it behind. Nothing in verification reads it — `verify()` re-simulates
+from the seed and inputs alone, and `build` only matters to the *site*, which
+uses it to pick which release's verifier module to load. A fixture whose
+`build` disagrees with `HEAD` is normal, not stale.
+
+`selftest-wasm.gxr` is the one CI blocks on, because both sides of that
+comparison are wasm arithmetic — which is exactly what ships: the browser
+records a run in a wasm build of this crate and Node re-simulates it in
+another wasm build of the same crate, and wasm arithmetic is
+spec-deterministic. It is produced by the module's own `selftest_record()`
+export; native code cannot write it, which is the point.
+
+`selftest.gxr` is recorded and verified natively by `cargo test`, so it stays
+the fast local regression check on the sim. CI *also* runs it through Node,
+but with `continue-on-error: true`: that step compares native arithmetic
+against wasm, and native libm and wasm are not required to round
+transcendental functions (`sin`, `cos`, `powf`) identically. A game whose sim
+calls them may see the two disagree by an ulp that snowballs over enough
+ticks — identical `score` and `ticks`, a different `checksum`. That is drift,
+not nondeterminism, and it does not affect what is shipped. Before accepting
+it as drift, prove it: the port checklist's "Native vs Node mismatch" section
+has the bisection procedure.
+
+```bash
+# regenerate both after a sim change
+cargo run --features verify --bin verify -- --selftest --write tests/fixtures/selftest.gxr
+bash tools/build_verify.sh
+node tools/verify_fixture.mjs --record tests/fixtures/selftest-wasm.gxr
+node tools/verify_fixture.mjs tests/fixtures/selftest-wasm.gxr   # must be matches: true
+```

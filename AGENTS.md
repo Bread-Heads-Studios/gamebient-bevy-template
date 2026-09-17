@@ -78,6 +78,8 @@ one-responsibility files.
   tests/fixtures/selftest.gxr` — `cargo test` tells you when. Check it under
   wasm too: `tools/build_verify.sh && node tools/verify_fixture.mjs
   tests/fixtures/selftest.gxr`. See `docs/replay-verification.md`.
+- **Rolling replay verification into a game:** `tools/rollout-replay.sh <game>`
+  then the `rolling-out-replay-verification` skill.
 
 ## Build / CI / release model
 

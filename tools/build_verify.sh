@@ -9,6 +9,11 @@ cargo build --profile wasm-release --target wasm32-unknown-unknown \
     --bin verify --features verify
 command -v wasm-bindgen >/dev/null || { echo "wasm-bindgen-cli missing (see install.sh)" >&2; exit 1; }
 command -v wasm-opt >/dev/null || { echo "wasm-opt missing (binaryen)" >&2; exit 1; }
+# Needed at the very end, for dist-verify.zip (what build_web.sh publishes as
+# dist/verify.zip and release.yml attaches). Checked here, with the other two
+# tool guards, so a missing zip fails with a name rather than with bash's
+# "zip: command not found" after the wasm-bindgen/wasm-opt work is done.
+command -v zip >/dev/null || { echo "zip missing (needed for dist-verify.zip)" >&2; exit 1; }
 rm -rf dist-verify && mkdir -p dist-verify
 wasm-bindgen --out-dir dist-verify --out-name verify --target nodejs \
     target/wasm32-unknown-unknown/wasm-release/verify.wasm

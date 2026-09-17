@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use gamebient_input::{Buttons, HostEvent, TickInput};
 
 use super::Replay;
-use crate::game::scoring::GameData;
+use crate::game::scoring::{GameData, LeaderboardScore};
 use crate::game::sim::{Checksum, RunSeed, TICK_HZ};
 
 #[derive(Resource)]
@@ -96,7 +96,7 @@ pub fn seal_run(
     if rec.sealed {
         return;
     }
-    let replay = rec.seal(u64::from(data.score), sum.0);
+    let replay = rec.seal(u64::from(data.leaderboard_score()), sum.0);
     let bytes = replay.encode();
     host.write(HostEvent::Run(bytes.clone()));
     #[cfg(not(target_arch = "wasm32"))]

@@ -37,6 +37,18 @@ impl GameData {
     }
 }
 
+/// The single higher-is-better integer the leaderboard ranks. The template's
+/// `GameData` has `score`; games without one (golf, racing) compute it here.
+pub trait LeaderboardScore {
+    fn leaderboard_score(&self) -> u32;
+}
+
+impl LeaderboardScore for GameData {
+    fn leaderboard_score(&self) -> u32 {
+        self.score
+    }
+}
+
 /// Reads `ScoreEvent`s and updates `GameData`.
 pub fn handle_score_events(mut reader: MessageReader<ScoreEvent>, mut game_data: ResMut<GameData>) {
     for event in reader.read() {
@@ -65,6 +77,15 @@ mod tests {
         d.add_score(10);
         assert_eq!(d.score, 210);
         assert_eq!(d.high_score, 500);
+    }
+
+    #[test]
+    fn leaderboard_score_is_score_for_the_template() {
+        let d = GameData {
+            score: 42,
+            ..GameData::default()
+        };
+        assert_eq!(d.leaderboard_score(), 42);
     }
 
     #[test]

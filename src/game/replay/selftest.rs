@@ -7,7 +7,7 @@ use gamebient_input::{Buttons, VirtualInput};
 
 use super::recorder::ReplayRecorder;
 use super::{Replay, build_headless_app};
-use crate::game::sim::{PendingSeed, SimTick};
+use crate::game::sim::{PendingSeed, RunOver, SimTick};
 use crate::game::states::GameState;
 
 pub const SELFTEST_SEED: [u8; 32] = [0x5e; 32];
@@ -42,9 +42,26 @@ pub fn record_scripted_run() -> Replay {
         .resource_mut::<NextState<GameState>>()
         .set(GameState::Playing);
     app.update();
+    // Bounded on purpose. A game whose script ends its own run -- the ball
+    // drains, the timer expires -- freezes `SimSet` on that tick
+    // (`sim::RunOver`) and leaves `Playing`, and `SimTick` then never
+    // reaches `SELFTEST_TICKS`: without these two exits this loop would spin
+    // forever, and the native `--selftest` and the CI job that calls it
+    // would hang rather than fail.
     while app.world().resource::<SimTick>().0 < SELFTEST_TICKS {
+        if app.world().resource::<RunOver>().0
+            || *app.world().resource::<State<GameState>>().get() != GameState::Playing
+        {
+            break;
+        }
         app.update();
     }
+    let ticks = app.world().resource::<SimTick>().0;
+    assert_eq!(
+        ticks, SELFTEST_TICKS,
+        "scripted run ended early at tick {ticks}; lengthen the script or \
+         lower SELFTEST_TICKS (currently {SELFTEST_TICKS})"
+    );
     app.world_mut()
         .resource_mut::<NextState<GameState>>()
         .set(GameState::GameOver);

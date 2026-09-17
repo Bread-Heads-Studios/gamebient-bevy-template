@@ -176,7 +176,7 @@ use bevy::time::TimeUpdateStrategy;
 use gamebient_input::TickInputSet;
 
 use super::GamePlugin;
-use super::scoring::GameData;
+use super::scoring::{GameData, LeaderboardScore};
 use super::sim::{Checksum, PendingSeed, RunSeed, SimTick, tick_duration};
 use super::states::GameState;
 use feeder::{ReplayFeeder, feed_tick};
@@ -277,6 +277,19 @@ pub fn run_verify_app(app: &mut App, replay: &Replay) -> Verdict {
         if *app.world().resource::<State<GameState>>().get() != GameState::Playing {
             return Some(Ended::GameOver);
         }
+        // A queued transition counts as game over, and has to be checked
+        // before `done`. A sim that ends its own run (`sim::end_run`) sets
+        // `NextState` from `FixedUpdate`, which Bevy does not apply until
+        // the next `app.update()` — while the feeder runs dry on that same
+        // tick, because the recorder stopped recording there too
+        // (`sim::RunOver`). Checking `done` first would report every real
+        // game-over run as `input_exhausted`.
+        if !matches!(
+            *app.world().resource::<NextState<GameState>>(),
+            NextState::Unchanged
+        ) {
+            return Some(Ended::GameOver);
+        }
         if app.world().resource::<ReplayFeeder>().done {
             return Some(Ended::InputExhausted);
         }
@@ -291,7 +304,7 @@ pub fn run_verify_app(app: &mut App, replay: &Replay) -> Verdict {
         }
         app.update();
     };
-    let score = u64::from(app.world().resource::<GameData>().score);
+    let score = u64::from(app.world().resource::<GameData>().leaderboard_score());
     let checksum = app.world().resource::<Checksum>().0;
     let ticks = app.world().resource::<SimTick>().0;
     Verdict {
@@ -740,6 +753,128 @@ mod tests {
             "{live_log:?}"
         );
         assert!(verdict.matches, "{verdict:?}");
+    }
+
+    /// The sim tick a test-only system ends the run on.
+    #[derive(Resource)]
+    struct EndAt(u32);
+
+    /// Stands in for a game's own "you lost / the round is over" system:
+    /// registered in `SimSet` after `record_tick`, so the ending tick is
+    /// itself simulated and recorded, and then `sim::end_run` latches
+    /// `sim::RunOver` so nothing after it is.
+    fn end_the_run_at(
+        at: Res<EndAt>,
+        tick: Res<SimTick>,
+        mut over: ResMut<crate::game::sim::RunOver>,
+        fade: Option<ResMut<crate::ui::transition::ScreenFade>>,
+        mut next: ResMut<NextState<GameState>>,
+    ) {
+        if tick.0 == at.0 {
+            crate::game::sim::end_run(&mut over, fade, &mut next);
+        }
+    }
+
+    fn end_the_run_at_in_sim_set(app: &mut App, at: u32) {
+        app.insert_resource(EndAt(at)).add_systems(
+            FixedUpdate,
+            end_the_run_at
+                .in_set(crate::game::sim::SimSet)
+                .after(recorder::record_tick),
+        );
+    }
+
+    #[test]
+    fn a_run_ended_from_the_sim_seals_on_that_tick_despite_the_windowed_fade() {
+        // The windowed path: `end_run` asks `ScreenFade` for the transition,
+        // and the fade is driven from `Update` on the frame delta, so the
+        // app keeps running for ~24 more frames before `Playing` is actually
+        // left. Without `sim::RunOver` every one of those frames' fixed
+        // ticks would be simulated, folded into `Checksum` and recorded --
+        // a frame-rate-dependent tail the headless verifier (which has no
+        // fade at all) can never reproduce.
+        const END_AT: u32 = 30;
+        const FRAMES: u32 = 120; // well past the 0.4 s fade
+
+        let mut live = build_headless_app();
+        // A windowed game in every respect that matters here: it has a fade,
+        // and `update_fade` drives the state change when the fade completes.
+        live.insert_resource(crate::ui::transition::ScreenFade::default())
+            .add_systems(Update, crate::ui::transition::update_fade);
+        end_the_run_at_in_sim_set(&mut live, END_AT);
+        live.world_mut().resource_mut::<PendingSeed>().0 = Some([0x21u8; 32]);
+        live.update(); // warm-up frame: zero delta, no fixed tick
+        live.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        for _ in 0..FRAMES {
+            live.update();
+        }
+
+        assert_eq!(
+            live.world().resource::<SimTick>().0,
+            END_AT,
+            "the sim kept ticking through the fade"
+        );
+        assert_ne!(
+            *live.world().resource::<State<GameState>>().get(),
+            GameState::Playing,
+            "the fade should have completed and left Playing"
+        );
+
+        let replay = live
+            .world()
+            .resource::<recorder::ReplayRecorder>()
+            .last_run()
+            .cloned()
+            .expect("run sealed on OnExit(Playing)");
+        assert_eq!(replay.ticks, END_AT);
+
+        // Re-simulate it the way the site does -- headless, no fade -- but
+        // with the same ending system in the chain, which is what a real
+        // game's own game-over system is. `verify()` alone would replay 30
+        // ticks of input through a sim that never ends, which reproduces the
+        // checksum but tests nothing about how the run ended.
+        let mut replayed = build_verify_app(&replay);
+        end_the_run_at_in_sim_set(&mut replayed, END_AT);
+        let v = run_verify_app(&mut replayed, &replay);
+        assert!(v.matches, "{v:?}");
+        assert_eq!(v.ticks, END_AT, "{v:?}");
+        // The run ended because the sim ended it, on its last recorded tick
+        // -- the feeder runs dry on that same tick, so this only reports
+        // `gameover` because `check_ended` looks at the queued `NextState`
+        // before it looks at `ReplayFeeder::done`.
+        assert_eq!(v.ended, Ended::GameOver, "{v:?}");
+
+        // The contrast: the same replay through a sim with no ending system
+        // reproduces exactly the same numbers and reports `input_exhausted`,
+        // because nothing queued a transition -- the input simply ran out.
+        let plain = verify(&replay);
+        assert_eq!(plain.ended, Ended::InputExhausted, "{plain:?}");
+        assert_eq!(plain.ticks, v.ticks);
+        assert_eq!(plain.checksum, v.checksum);
+    }
+
+    #[test]
+    fn a_sim_that_ends_before_its_input_reports_gameover() {
+        // A replay with more input than the sim needs: the run ends at tick
+        // 30 of 120, so the verifier leaves `Playing` with records to spare
+        // and reports `Ended::GameOver` on exactly the ending tick.
+        const END_AT: u32 = 30;
+        let mut r = sample();
+        r.runs.clear();
+        r.ticks = 0;
+        for _ in 0..120 {
+            r.push_tick(0, 0, 0, 0);
+        }
+        r.score = 0;
+
+        let mut app = build_verify_app(&r);
+        end_the_run_at_in_sim_set(&mut app, END_AT);
+        let v = run_verify_app(&mut app, &r);
+
+        assert_eq!(v.ended, Ended::GameOver, "{v:?}");
+        assert_eq!(v.ticks, END_AT, "{v:?}");
     }
 
     #[test]

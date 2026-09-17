@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 
 use super::GameEntity;
+use super::scoring::GameData;
+use super::sim::Checksum;
 
 /// The player-controlled entity.
 #[derive(Component)]
@@ -46,4 +48,22 @@ pub fn move_player(
     let delta = dir.normalize_or_zero() * PLAYER_SPEED * time.delta_secs();
     tf.translation.x += delta.x;
     tf.translation.y += delta.y;
+}
+
+/// This template's example of the per-game system `sim::checksum_tick`'s
+/// module doc calls for: registered right after `sim::checksum_tick` in the
+/// `SimSet` chain, folding the key run state `checksum_tick` itself doesn't
+/// know about (see docs/replay-verification.md, determinism rule 6). Folds
+/// `lives` then the player transform bit-exactly, in that order, so the
+/// checksum is sensitive to both game-over state and movement.
+pub fn checksum_player(
+    data: Res<GameData>,
+    player: Query<&Transform, With<Player>>,
+    mut sum: ResMut<Checksum>,
+) {
+    sum.fold(u64::from(data.lives));
+    if let Ok(tf) = player.single() {
+        sum.fold(u64::from(tf.translation.x.to_bits()));
+        sum.fold(u64::from(tf.translation.y.to_bits()));
+    }
 }

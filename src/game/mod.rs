@@ -52,12 +52,23 @@ impl Plugin for GamePlugin {
             .init_resource::<sim::GameRng>()
             .init_resource::<sim::Checksum>()
             .init_resource::<sim::SimPrev>()
+            .init_resource::<sim::RunOver>()
             .init_resource::<replay::recorder::ReplayRecorder>()
             .add_message::<scoring::ScoreEvent>()
             .add_message::<audio::SfxEvent>()
+            // Three clauses, and every game needs all three: the run is
+            // live, it is not paused, and it is not already over.
+            // `sim::run_not_over` freezes the sim on the tick the run ends
+            // so the windowed game's game-over fade (`Update`, frame delta)
+            // cannot add a frame-rate-dependent tail of ticks the headless
+            // verifier can't reproduce. See `sim::RunOver` / `sim::end_run`.
             .configure_sets(
                 FixedUpdate,
-                sim::SimSet.run_if(in_state(GameState::Playing).and(states::not_paused)),
+                sim::SimSet.run_if(
+                    in_state(GameState::Playing)
+                        .and(states::not_paused)
+                        .and(sim::run_not_over),
+                ),
             )
             .add_systems(
                 OnEnter(GameState::Playing),
@@ -83,6 +94,7 @@ impl Plugin for GamePlugin {
                     player::move_player,
                     scoring::handle_score_events,
                     sim::checksum_tick,
+                    player::checksum_player,
                     replay::recorder::record_tick,
                     sim::remember_sim_prev,
                 )

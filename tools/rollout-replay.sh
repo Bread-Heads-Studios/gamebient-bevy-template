@@ -1,0 +1,613 @@
+#!/usr/bin/env bash
+# Copies replay verification (deterministic sim, GXR1 replays, the wasm
+# verifier: src/game/sim.rs, src/game/replay/, src/bin/verify.rs, build.rs,
+# tools/build_verify.sh, tools/verify_fixture.mjs, docs/replay-verification.md)
+# from this template into a game checkout and wires it: Cargo.toml lib/bin
+# split + features + deps, src/lib.rs + src/main.rs, the `pub mod
+# replay`/`sim` + `GamePlugin { headless }` shape in src/game/mod.rs,
+# build_web.sh's verify.zip step, the CI/release workflow steps, .gitignore,
+# assets/info.json's verify_url, and src/game/host.rs's HostCommand::Seed arm
+# + optional GlobalVolume. Idempotent. The script never edits a
+# copied file's contents (the two exceptions — src/bin/verify.rs and
+# tests/selftest.rs — get only a mechanical `gamebient_game::` ->
+# `<snake>::` crate-path substitution; see the comment at that copy step).
+# game-specific behaviour (porting GamePlugin::build onto sim::SimSet,
+# adding this game's own checksum_<game> system after sim::checksum_tick,
+# writing the selftest script) is a HAND EDIT for the skill's
+# port-checklist, not this script.
+#
+# Usage: tools/rollout-replay.sh <game-dir>
+set -euo pipefail
+TEMPLATE="$(cd "$(dirname "$0")/.." && pwd)"
+GAME="$(cd "${1:?usage: $0 <game-dir>}" && pwd)"
+PKG=$(grep -m1 '^name' "$GAME/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/' || true)
+SNAKE=${PKG//-/_}
+if [ -z "$PKG" ]; then
+  echo "HAND EDIT: $GAME/Cargo.toml: no 'name' under [package] (a workspace root?); skipping the Cargo.toml/lib.rs/main.rs wiring — point this script at the member crate's directory instead"
+fi
+
+# ---------------------------------------------------------------------------
+# Pre-flight HAND EDITs. Informational only — never stop the script.
+# ---------------------------------------------------------------------------
+if [ ! -f "$GAME/src/game/mod.rs" ]; then
+  echo "HAND EDIT: src/game/mod.rs: flat layout (no src/game/); wire sim/replay and GamePlugin by hand, see irregular-games.md"
+fi
+if [ ! -d "$GAME/src/game/record" ]; then
+  echo "HAND EDIT: src/game/record/ missing; run tools/rollout-record.sh first"
+fi
+# An existing sim.rs that isn't the template's current one is two very
+# different situations with two opposite fixes, so tell them apart: a game
+# whose own sim.rs happens to share the name (rename it), versus a copy of an
+# older template sim.rs left behind by an earlier rollout (re-copy it). The
+# latter is what a second rollout onto an already-ported game looks like, and
+# telling it to rename its sim.rs would be actively wrong.
+if [ -e "$GAME/src/game/sim.rs" ] && ! cmp -s "$TEMPLATE/src/game/sim.rs" "$GAME/src/game/sim.rs"; then
+  STALE_AT=""
+  if git -C "$TEMPLATE" rev-parse --git-dir >/dev/null 2>&1; then
+    while read -r h; do
+      [ -n "$h" ] || continue
+      if git -C "$TEMPLATE" show "$h:src/game/sim.rs" 2>/dev/null | cmp -s - "$GAME/src/game/sim.rs"; then
+        STALE_AT="$h"
+        break
+      fi
+    done < <(git -C "$TEMPLATE" log --format=%H -- src/game/sim.rs 2>/dev/null)
+  fi
+  if [ -n "$STALE_AT" ]; then
+    echo "HAND EDIT: src/game/sim.rs: stale template copy (byte-identical to template commit ${STALE_AT:0:7}); re-copy from the template and re-apply your game's checksum/end_run wiring"
+  else
+    echo "HAND EDIT: src/game/sim.rs: already exists and isn't the template's sim.rs; rename your sim.rs (e.g. shot_sim.rs) and re-run"
+  fi
+fi
+if [ ! -f "$GAME/src/game/scoring.rs" ]; then
+  echo "HAND EDIT: src/game/scoring.rs: missing; replay/mod.rs needs an impl of LeaderboardScore for your GameData"
+elif ! grep -q 'pub score' "$GAME/src/game/scoring.rs"; then
+  echo "HAND EDIT: src/game/scoring.rs: no 'score' field on GameData; implement LeaderboardScore for it"
+fi
+if grep -rn "ButtonInput<KeyCode>" "$GAME/src/game" --include="*.rs" 2>/dev/null | grep -v autopilot | grep -q .; then
+  echo "HAND EDIT: src/game: gameplay reads raw ButtonInput<KeyCode>; route through TickInput instead"
+fi
+if [ -f "$GAME/src/game/autopilot.rs" ] && grep -n 'data\.\w* = ' "$GAME/src/game/autopilot.rs" | grep -q .; then
+  echo "HAND EDIT: src/game/autopilot.rs: writes GameData fields directly (dev-only; keep that path out of the selftest script)"
+fi
+
+# ---------------------------------------------------------------------------
+# Copy the feature files verbatim. A file that already exists and isn't
+# byte-identical to the template's is left alone (HAND EDIT), never
+# overwritten.
+# ---------------------------------------------------------------------------
+mkdir -p "$GAME/src/game/replay" "$GAME/src/bin" "$GAME/tests/fixtures" "$GAME/tools"
+
+copy_or_hand_edit() {
+  local rel="$1" src dst
+  src="$TEMPLATE/$rel"
+  dst="$GAME/$rel"
+  if [ -e "$dst" ]; then
+    if ! cmp -s "$src" "$dst"; then
+      echo "HAND EDIT: $rel: exists and differs from the template's version; move it aside and re-run to pick up the template copy"
+    fi
+  else
+    mkdir -p "$(dirname "$dst")"
+    cp "$src" "$dst"
+  fi
+}
+
+# sim.rs already has its own pre-flight message (rename-and-re-run) above;
+# only perform the copy here, and only when nothing is in the way.
+[ -e "$GAME/src/game/sim.rs" ] || cp "$TEMPLATE/src/game/sim.rs" "$GAME/src/game/sim.rs"
+
+for rel in \
+  src/game/replay/mod.rs \
+  src/game/replay/recorder.rs \
+  src/game/replay/feeder.rs \
+  src/game/replay/selftest.rs \
+  build.rs \
+  tools/build_verify.sh \
+  tools/verify_fixture.mjs \
+  docs/replay-verification.md \
+  ; do
+  copy_or_hand_edit "$rel"
+done
+chmod +x "$GAME/tools/build_verify.sh" 2>/dev/null || true
+
+# src/bin/verify.rs and tests/selftest.rs hardcode `use gamebient_game::...`
+# (the template's own crate name). Cargo has no self-dependency aliasing
+# that would let `gamebient_game::` resolve to this game's lib crate
+# (verified empirically: a `path = "."` self-dependency is a cyclic-package
+# error under [dependencies], and dev-dependencies aren't linked into plain
+# `cargo build`/`cargo check` bin targets either) — so a byte-identical copy
+# cannot compile once [lib].name is this game's own <snake>. Copy these two
+# files with that one mechanical substitution; nothing else about their
+# content changes. On the template itself SNAKE == "gamebient_game", so the
+# substitution is a no-op and the file stays byte-identical (still a no-op
+# rerun on the template's own checkout).
+copy_with_crate_rename() {
+  local rel="$1" src dst expected
+  src="$TEMPLATE/$rel"
+  dst="$GAME/$rel"
+  expected="$(sed "s/gamebient_game::/${SNAKE}::/g" "$src")"
+  if [ -e "$dst" ]; then
+    if [ "$(cat "$dst")" != "$expected" ]; then
+      echo "HAND EDIT: $rel: exists and differs from the template's version (with gamebient_game:: -> ${SNAKE}::); move it aside and re-run"
+    fi
+  else
+    mkdir -p "$(dirname "$dst")"
+    printf '%s\n' "$expected" >"$dst"
+  fi
+}
+# SNAKE is empty when PKG is (see the HAND EDIT above); an empty-prefix
+# substitution would produce invalid Rust ("use ::game::replay::..."), so
+# skip these too rather than write garbage.
+if [ -n "$PKG" ]; then
+  copy_with_crate_rename src/bin/verify.rs
+  copy_with_crate_rename tests/selftest.rs
+fi
+
+# ---------------------------------------------------------------------------
+# Wiring edits: Cargo.toml, src/lib.rs + src/main.rs, src/game/mod.rs,
+# build_web.sh, CI/release workflows, .gitignore, assets/info.json. One perl
+# pass so every anchor/guard lives in one place; each edit is guarded so a
+# second run is a no-op, and every miss prints a HAND EDIT instead of
+# guessing. Skipped entirely when PKG is empty (HAND EDIT already printed
+# above) — every one of these edits keys off the package name in some way.
+# ---------------------------------------------------------------------------
+if [ -n "$PKG" ]; then
+perl - "$GAME" "$PKG" "$SNAKE" <<'PERL_EOF'
+use strict;
+use warnings;
+
+my ($game, $pkg, $snake) = @ARGV;
+my @hand_edits;
+sub hand_edit { push @hand_edits, "HAND EDIT: $_[0]"; }
+
+sub slurp {
+    my $p = shift;
+    return undef unless -e $p;
+    open my $fh, '<', $p or die "read $p: $!";
+    local $/;
+    my $c = <$fh>;
+    close $fh;
+    return $c;
+}
+sub spit {
+    my ($p, $c) = @_;
+    open my $fh, '>', $p or die "write $p: $!";
+    print $fh $c;
+    close $fh;
+}
+
+# ---------- Cargo.toml ----------
+{
+    my $path = "$game/Cargo.toml";
+    my $c = slurp($path);
+    if (defined $c) {
+        my $orig = $c;
+
+        if ($c !~ /^\[lib\]/m) {
+            my $block = "\n[lib]\nname = \"$snake\"\npath = \"src/lib.rs\"\n\n[[bin]]\nname = \"$pkg\"\npath = \"src/main.rs\"\n\n[[bin]]\nname = \"verify\"\npath = \"src/bin/verify.rs\"\nrequired-features = [\"verify\"]\n";
+            unless ($c =~ s/(edition = "2024"\n)/$1$block/) {
+                hand_edit("Cargo.toml: no 'edition = \"2024\"' line to anchor the [lib]/[[bin]] blocks on; add them by hand");
+            }
+        }
+
+        # After the [lib] insertion above, so it lands between `edition` and
+        # the blank line that starts the [lib] block -- i.e. still inside
+        # [package], which is the only place cargo accepts it. Without it
+        # `cargo run` is ambiguous the moment the verify bin exists.
+        if ($c !~ /^default-run = /m) {
+            my $line = "# `cargo run` / `cargo run --features verify` is ambiguous with two [[bin]]\n# targets; name the game explicitly.\ndefault-run = \"$pkg\"\n";
+            unless ($c =~ s/(^edition = "2024"\n)/$1$line/m) {
+                hand_edit("Cargo.toml: no 'edition = \"2024\"' line to anchor 'default-run = \"$pkg\"' on; add it under [package] by hand or `cargo run` stays ambiguous");
+            }
+        }
+
+        if ($c !~ /^verify = /m) {
+            my $block = "# Replay verifier entry point (src/bin/verify.rs): native CLI and the\n# wasm-bindgen module the site runs under Node. See docs/replay-verification.md.\nverify = [\"dep:wasm-bindgen\"]\n";
+            unless ($c =~ s/(^record = \[.*\]\n)/$1$block/m) {
+                hand_edit('Cargo.toml: add \'verify = ["dep:wasm-bindgen"]\' under [features], after record');
+            }
+        }
+
+        if ($c !~ /^rand_xoshiro = /m) {
+            my $block = "# Sim RNG: Xoshiro256++ explicitly, never SmallRng (which picks a different\n# algorithm on wasm32 and would break native-vs-wasm replay determinism).\nrand_xoshiro = \"0.7\"\n";
+            unless ($c =~ s/(^rand = "0\.9"\n)/$1$block/m) {
+                hand_edit('Cargo.toml: add rand_xoshiro = "0.7" after rand = "0.9"');
+            }
+        }
+
+        if ($c !~ /^wasm-bindgen = /m) {
+            my $line = "wasm-bindgen = { version = \"0.2.108\", optional = true }\n";
+            unless ($c =~ s/(^getrandom = \{ version = "0\.3", features = \["wasm_js"\] \}\n)/$1$line/m) {
+                hand_edit('Cargo.toml: add wasm-bindgen = { version = "0.2.108", optional = true } after the wasm32 getrandom line');
+            }
+        }
+
+        if ($c =~ /gamebient-input = .*tag = "v0\.2\.\d+"/) {
+            $c =~ s/(gamebient-input = .*tag = ")v0\.2\.\d+(")/$1v0.3.0$2/;
+        }
+        if ($c !~ /gamebient-input = .*tag = "v0\.3\.0"/) {
+            hand_edit('Cargo.toml: pin gamebient-input tag = "v0.3.0"');
+        }
+
+        spit($path, $c) if $c ne $orig;
+    } else {
+        hand_edit("Cargo.toml not found");
+    }
+}
+
+# ---------- src/lib.rs + src/main.rs ----------
+{
+    my $lib_path = "$game/src/lib.rs";
+    my $main_path = "$game/src/main.rs";
+    my $main_c = slurp($main_path);
+    if (defined $main_c) {
+        my $orig_main = $main_c;
+        my $has_gameplugin = ($main_c =~ /game::GamePlugin\b/) ? 1 : 0;
+
+        # Keep line endings on each element so re-joining is exact.
+        my @lines = split /(?<=\n)/, $main_c;
+        my @out;
+        my @plain;
+        my @cfg; # [ "#[cfg(...)]\n", "modname" ]
+
+        for my $line (@lines) {
+            if ($line =~ /^(?:pub )?mod (\w+);\s*\n?$/) {
+                my $name = $1;
+                if (@out && $out[-1] =~ /^#\[cfg\([^)]*\)\]\s*\n?$/) {
+                    my $attr = pop @out;
+                    push @cfg, [$attr, $name];
+                } else {
+                    push @plain, $name;
+                }
+                next;
+            }
+            push @out, $line;
+        }
+
+        if (@plain || @cfg) {
+            if (-e $lib_path) {
+                # lib.rs already exists but main.rs still has 'mod'
+                # declarations to remove: not the idempotent case (a prior
+                # successful run would have stripped them together with
+                # writing lib.rs), so this lib.rs's pub mod set can't be
+                # trusted to cover what main.rs is about to import. Leave
+                # both files' mod wiring alone rather than write a `use
+                # <snake>::{...}` that might not resolve.
+                hand_edit("src/lib.rs: already exists while src/main.rs still has mod declarations to remove; wire 'pub mod' in lib.rs and 'use ${snake}::{...}' in main.rs by hand instead of risking a mismatch");
+                @out = @lines;
+            } else {
+                my $lib_c = "#![allow(clippy::too_many_arguments, clippy::type_complexity)]\n\n";
+                $lib_c .= "pub mod $_;\n" for @plain;
+                $lib_c .= "$_->[0]pub mod $_->[1];\n" for @cfg;
+                spit($lib_path, $lib_c);
+
+                my $use_line = "use $snake" . "::{" . join(", ", @plain) . "};\n";
+                my @cfg_use = map { "$_->[0]" . "use $snake" . "::$_->[1];\n" } @cfg;
+
+                my $insert_at = 0;
+                for my $i (0 .. $#out) {
+                    if ($out[$i] =~ /^use /) { $insert_at = $i; last; }
+                }
+                splice(@out, $insert_at, 0, $use_line, @cfg_use);
+            }
+        }
+
+        $main_c = join('', @out);
+        if ($has_gameplugin) {
+            $main_c =~ s/\bgame::GamePlugin\b(?!::default\(\))/game::GamePlugin::default()/g;
+        } else {
+            hand_edit("src/main.rs: no literal 'game::GamePlugin' found; wire game::GamePlugin::default() by hand");
+        }
+
+        spit($main_path, $main_c) if $main_c ne $orig_main;
+    } else {
+        hand_edit("no src/main.rs found");
+    }
+}
+
+# ---------- src/game/mod.rs ----------
+{
+    my $path = "$game/src/game/mod.rs";
+    my $c = slurp($path);
+    if (defined $c) {
+        my $orig = $c;
+
+        if ($c !~ /^pub mod replay;/m) {
+            unless ($c =~ s/^pub mod scoring;\n/pub mod replay;\npub mod scoring;\n/m) {
+                hand_edit("src/game/mod.rs: declare 'pub mod replay;' (alphabetically, next to the other pub mod lines)");
+            }
+        }
+        if ($c !~ /^pub mod sim;/m) {
+            unless ($c =~ s/^pub mod scoring;\n/pub mod scoring;\npub mod sim;\n/m) {
+                hand_edit("src/game/mod.rs: declare 'pub mod sim;' (alphabetically, next to the other pub mod lines)");
+            }
+        }
+
+        if ($c !~ /pub headless: bool/) {
+            my $repl = "#[derive(Default)]\npub struct GamePlugin {\n    pub headless: bool,\n}\n";
+            unless ($c =~ s/^pub struct GamePlugin;\s*?\n/$repl/m) {
+                hand_edit('src/game/mod.rs: replace \'pub struct GamePlugin;\' with \'#[derive(Default)] pub struct GamePlugin { pub headless: bool }\'');
+            }
+        }
+
+        # Always surfaced: the build() body is game-specific free-form code
+        # this script cannot safely touch (system ordering, what stays in
+        # Update vs moves into sim::SimSet, what this game's own checksum
+        # system folds).
+        hand_edit('src/game/mod.rs: port GamePlugin::build to run gameplay through sim::SimSet, gate scene/audio/dev-harness setup on !self.headless, and add a checksum_<game> system after sim::checksum_tick folding your key run state (see docs/replay-verification.md rule 6). Three specifics that cost the pilot hours: (a) the set\'s run condition is THREE clauses -- sim::SimSet.run_if(in_state(GameState::Playing).and(states::not_paused).and(sim::run_not_over)) -- plus .init_resource::<sim::RunOver>(), or the game-over fade adds a frame-rate-dependent tail of ticks the verifier cannot reproduce (rule 10); (b) every system the headless app runs must take resources the headless app actually has -- assets in particular: GameAssets/Assets<Mesh>/Assets<StandardMaterial> are only inserted by the windowed build, so a spawn system needs Option<Res<GameAssets>> and an asset-free branch, or Bevy fails it with \"Parameter ... failed validation\" and no system name; (c) CI\'s Node fixture steps fail until tests/fixtures/selftest.gxr AND tests/fixtures/selftest-wasm.gxr are generated (skill step 4)');
+
+        spit($path, $c) if $c ne $orig;
+    } else {
+        hand_edit("no src/game/mod.rs found (flat layout?); declare 'pub mod replay'/'pub mod sim' and port GamePlugin by hand");
+    }
+}
+
+# ---------- src/game/host.rs ----------
+#
+# Two edits every game written against the template's pre-v0.3.0 host.rs
+# needs, and both are hard failures rather than warnings:
+#
+#   * `mut global_volume: ResMut<GlobalVolume>` — `GlobalVolume` is inserted
+#     by Bevy's `AudioPlugin`, which the headless verifier never adds, so the
+#     system fails Bevy's parameter validation with a message that names no
+#     system. This was the real cause of the pilot's "8 red tests".
+#   * `HostCommand::Seed` — added by gamebient-input v0.3.0 (which this
+#     script pins). A `match command` with no wildcard arm stops compiling
+#     the moment the tag bumps, and without the arm a host-issued seed never
+#     reaches `sim::PendingSeed`, so every run would be `origin = Local`.
+{
+    my $path = "$game/src/game/host.rs";
+    my $c = slurp($path);
+    if (defined $c) {
+        my $orig = $c;
+
+        if ($c !~ /global_volume:\s*Option<ResMut<GlobalVolume>>/) {
+            my $comment = "    // `GlobalVolume` is only inserted by `AudioPlugin`, which the headless\n"
+                        . "    // build (no window, no audio) never adds — read as optional so a host\n"
+                        . "    // `mute` doesn't panic there.\n";
+            unless ($c =~ s/^[ \t]*mut global_volume: ResMut<GlobalVolume>,\n/$comment    mut global_volume: Option<ResMut<GlobalVolume>>,\n/m) {
+                hand_edit("src/game/host.rs: 'mut global_volume: ResMut<GlobalVolume>,' not found in apply_host_commands; make it Option<ResMut<GlobalVolume>> by hand — the headless verifier has no AudioPlugin and Bevy rejects the system with a nameless \"Parameter ... failed validation\"");
+            }
+        }
+        # The `Mute` arm then has to cope with the Option.
+        if ($c !~ /global_volume\.as_deref_mut\(\)/) {
+            unless ($c =~ s/^([ \t]*)global_volume\.volume = ([^\n]*);\n/${1}if let Some(volume) = global_volume.as_deref_mut() {\n${1}    volume.volume = ${2};\n${1}}\n/m) {
+                hand_edit("src/game/host.rs: the Mute arm's 'global_volume.volume = ...;' line not found; guard it with 'if let Some(volume) = global_volume.as_deref_mut()' by hand");
+            }
+        }
+
+        if ($c !~ /HostCommand::Seed/) {
+            if ($c =~ /^\s*_\s*=>/m) {
+                hand_edit("src/game/host.rs: apply_host_commands has a '_ =>' wildcard arm, so it compiles against gamebient-input v0.3.0 — but a host-issued seed is silently swallowed and every run stays origin = Local. Add 'HostCommand::Seed(bytes) => pending.0 = Some(*bytes),' (plus a 'mut pending: ResMut<crate::game::sim::PendingSeed>' param) explicitly");
+            } else {
+                my $before_seed = $c;
+                my $ok = 1;
+                # Param: before the closing paren of apply_host_commands's
+                # signature, found by scanning forward from the fn to the
+                # first line that is exactly ") {".
+                my $fn = index($c, "fn apply_host_commands(");
+                my $close = $fn >= 0 ? index($c, "\n) {", $fn) : -1;
+                if ($close >= 0) {
+                    substr($c, $close + 1, 0) = "    mut pending: ResMut<crate::game::sim::PendingSeed>,\n";
+                } else {
+                    hand_edit("src/game/host.rs: apply_host_commands's signature doesn't end in a line of its own ') {'; add 'mut pending: ResMut<crate::game::sim::PendingSeed>' by hand");
+                    $ok = 0;
+                }
+                # Arm: after the Hello arm, which every template-derived
+                # host.rs has as the last arm of the match.
+                unless ($c =~ s/^([ \t]*)(HostCommand::Hello \{ \.\. \} => \{\}\n)/${1}${2}${1}HostCommand::Seed(bytes) => pending.0 = Some(*bytes),\n/m) {
+                    hand_edit("src/game/host.rs: no 'HostCommand::Hello { .. } => {}' arm to anchor on; add 'HostCommand::Seed(bytes) => pending.0 = Some(*bytes),' to apply_host_commands by hand, or the match won't compile against gamebient-input v0.3.0");
+                    $ok = 0;
+                }
+                # Half an edit is worse than none: it would not compile and
+                # the HAND EDIT above would be about the other half. Rewind
+                # only the Seed edits -- the GlobalVolume ones above stand.
+                $c = $before_seed unless $ok;
+            }
+        }
+
+        spit($path, $c) if $c ne $orig;
+    } else {
+        hand_edit("no src/game/host.rs found; wire HostCommand::Seed -> sim::PendingSeed and an optional GlobalVolume by hand");
+    }
+}
+
+# ---------- build_web.sh ----------
+{
+    my $path = "$game/build_web.sh";
+    my $c = slurp($path);
+    if (defined $c) {
+        my $orig = $c;
+
+        if ($c !~ /! -name 'verify\.wasm'/) {
+            my $old = "WASM=\$(find target/wasm32-unknown-unknown/wasm-release -maxdepth 1 -name '*.wasm' | head -1)\n"
+                    . "if [ -z \"\$WASM\" ]; then\n"
+                    . "    echo \"ERROR: no .wasm found in target/wasm32-unknown-unknown/wasm-release/\" >&2\n"
+                    . "    exit 1\n"
+                    . "fi\n";
+            my $new = "# verify.wasm is excluded by name: tools/build_verify.sh builds the replay\n"
+                    . "# verifier into the same directory, and shipping it as the game would deploy a\n"
+                    . "# module with no window, renderer or assets. Anything else unexpected in there\n"
+                    . "# is a hard error rather than a coin flip about which .wasm gets deployed.\n"
+                    . "WASM=\$(find target/wasm32-unknown-unknown/wasm-release -maxdepth 1 -name '*.wasm' ! -name 'verify.wasm')\n"
+                    . "if [ -z \"\$WASM\" ]; then\n"
+                    . "    echo \"ERROR: no game .wasm found in target/wasm32-unknown-unknown/wasm-release/\" >&2\n"
+                    . "    exit 1\n"
+                    . "fi\n"
+                    . "if [ \"\$(printf '%s\\n' \"\$WASM\" | wc -l | tr -d ' ')\" -ne 1 ]; then\n"
+                    . "    echo \"ERROR: more than one candidate .wasm in target/wasm32-unknown-unknown/wasm-release/:\" >&2\n"
+                    . "    printf '%s\\n' \"\$WASM\" >&2\n"
+                    . "    echo \"Remove the stale ones (or 'cargo clean') so the deployed bundle is unambiguous.\" >&2\n"
+                    . "    exit 1\n"
+                    . "fi\n";
+            my $idx = index($c, $old);
+            if ($idx >= 0) {
+                substr($c, $idx, length($old)) = $new;
+            } else {
+                hand_edit("build_web.sh: the 'find ... *.wasm | head -1' block doesn't match the template's; add the verify.wasm exclusion by hand");
+            }
+        }
+
+        if ($c !~ /tools\/build_verify\.sh/) {
+            my $anchor = "    dist/${pkg}_bg.wasm -o dist/${pkg}_bg.wasm\n";
+            my $addition = "\n# Build the headless replay verifier and publish it alongside the game bundle\n"
+                          . "# as dist/verify.zip — the site fetches it from properties.verify_url. Run\n"
+                          . "# after this script's own wasm-bindgen/wasm-opt steps (and after the `find`\n"
+                          . "# above, which already excludes verify.wasm by name) so there's no ambiguity\n"
+                          . "# about which .wasm is the game bundle.\n"
+                          . "bash tools/build_verify.sh\n"
+                          . "cp dist-verify.zip dist/verify.zip\n";
+            my $idx = index($c, $anchor);
+            if ($idx >= 0) {
+                substr($c, $idx + length($anchor), 0) = $addition;
+            } else {
+                hand_edit("build_web.sh: wasm-opt output line ('dist/${pkg}_bg.wasm -o dist/${pkg}_bg.wasm') not found; add the tools/build_verify.sh step by hand after wasm-opt");
+            }
+        }
+
+        spit($path, $c) if $c ne $orig;
+    } else {
+        hand_edit("no build_web.sh found");
+    }
+}
+
+# ---------- .github/workflows/ci.yml ----------
+{
+    my $path = "$game/.github/workflows/ci.yml";
+    my $c = slurp($path);
+    if (defined $c) {
+        my $orig = $c;
+        if ($c !~ /verify_fixture\.mjs/) {
+            my $anchor = "      - name: Build web bundle\n        run: bash build_web.sh\n";
+            my $addition = "\n      - uses: actions/setup-node\@v4\n"
+                          . "        with:\n"
+                          . "          node-version: 22\n"
+                          . "\n"
+                          . "      # The gate: selftest-wasm.gxr was recorded by this same wasm\n"
+                          . "      # module, so both sides are wasm arithmetic - what actually\n"
+                          . "      # ships, and spec-deterministic. A failure here is real.\n"
+                          . "      - name: Verify the wasm-recorded fixture under Node\n"
+                          . "        run: node tools/verify_fixture.mjs tests/fixtures/selftest-wasm.gxr\n"
+                          . "\n"
+                          . "      # Informational: selftest.gxr was recorded natively, so this\n"
+                          . "      # compares native libm against wasm and can drift by an ulp on\n"
+                          . "      # a sim that calls sin/cos/powf. See docs/replay-verification.md.\n"
+                          . "      - name: Cross-check the native fixture under Node (informational)\n"
+                          . "        continue-on-error: true\n"
+                          . "        run: node tools/verify_fixture.mjs tests/fixtures/selftest.gxr\n";
+            my $idx = index($c, $anchor);
+            if ($idx >= 0) {
+                substr($c, $idx + length($anchor), 0) = $addition;
+            } else {
+                hand_edit(".github/workflows/ci.yml: 'Build web bundle' step not found in the template's shape; add the setup-node + verify_fixture.mjs steps by hand");
+            }
+        }
+        spit($path, $c) if $c ne $orig;
+    } else {
+        hand_edit("no .github/workflows/ci.yml found");
+    }
+}
+
+# ---------- .github/workflows/release.yml ----------
+{
+    my $path = "$game/.github/workflows/release.yml";
+    my $c = slurp($path);
+    if (defined $c) {
+        my $orig = $c;
+        my $verify_zip = "$pkg-verify.zip";
+        # Captured before the package-step insertion below, which itself
+        # contains the literal text "build/$verify_zip" (its own `cp`
+        # line) — checking this after insertion would make the upload
+        # path's HAND EDIT unreachable whenever the 'Zip web bundle'
+        # anchor matched but the path: line had drifted.
+        my $had_zip = index($c, "build/$verify_zip") >= 0;
+
+        if (index($c, "Package replay verifier") < 0) {
+            my $anchor = "          (cd dist && zip -r ../build/$pkg-web.zip .)\n";
+            my $addition = "\n      # build.sh web -> build_web.sh already ran tools/build_verify.sh and\n"
+                          . "      # produced dist-verify.zip at the repo root; just place it under its\n"
+                          . "      # release asset name.\n"
+                          . "      - name: Package replay verifier\n"
+                          . "        if: matrix.target == 'web'\n"
+                          . "        run: |\n"
+                          . "          mkdir -p build\n"
+                          . "          cp dist-verify.zip build/$verify_zip\n";
+            my $idx = index($c, $anchor);
+            if ($idx >= 0) {
+                substr($c, $idx + length($anchor), 0) = $addition;
+            } else {
+                hand_edit(".github/workflows/release.yml: 'Zip web bundle' step not found in the template's shape; add the verify.zip packaging step by hand");
+            }
+        }
+
+        if (!$had_zip || index($c, "path: |") < 0) {
+            my $old_path = "          path: build/$pkg-" . '${{ matrix.target }}.*' . "\n";
+            my $new_path = "          path: |\n"
+                          . "            build/$pkg-" . '${{ matrix.target }}.*' . "\n"
+                          . "            build/$verify_zip\n";
+            my $idx = index($c, $old_path);
+            if ($idx >= 0) {
+                substr($c, $idx, length($old_path)) = $new_path;
+            } elsif (!$had_zip) {
+                hand_edit(".github/workflows/release.yml: upload artifact 'path:' line not found in the template's shape; add build/$verify_zip to it by hand");
+            }
+        }
+
+        spit($path, $c) if $c ne $orig;
+    } else {
+        hand_edit("no .github/workflows/release.yml found");
+    }
+}
+
+# ---------- .gitignore ----------
+{
+    my $path = "$game/.gitignore";
+    my $c = slurp($path);
+    $c = '' unless defined $c;
+    my $orig = $c;
+    unless ($c =~ /^\/dist-verify$/m) {
+        $c .= "\n# Replay verifier module — regenerated by tools/build_verify.sh\n/dist-verify\n/dist-verify.zip\n";
+    }
+    unless ($c =~ /^\/build\/replays$/m) {
+        $c .= "# Local replays written when GX_REPLAY_DIR points here\n/build/replays\n";
+    }
+    spit($path, $c) if $c ne $orig;
+}
+
+# ---------- assets/info.json ----------
+{
+    my $path = "$game/assets/info.json";
+    my $c = slurp($path);
+    if (defined $c) {
+        my $orig = $c;
+        if (index($c, '"verify_url"') < 0) {
+            if ($c =~ /"game_url":\s*"([^"]*)"/) {
+                my $game_url = $1;
+                my $verify_line = "        \"verify_url\": \"$game_url/verify.zip\",\n";
+                unless ($c =~ s/("demo_url":\s*"[^"]*",\n)/$1$verify_line/) {
+                    hand_edit("assets/info.json: 'demo_url' line not found; add \"verify_url\" by hand");
+                }
+            } else {
+                hand_edit('assets/info.json: no "game_url" found; add "verify_url": "<game_url>/verify.zip" by hand');
+            }
+        }
+        spit($path, $c) if $c ne $orig;
+    } else {
+        hand_edit("no assets/info.json found");
+    }
+}
+
+print "$_\n" for @hand_edits;
+PERL_EOF
+fi
+
+# The perl edits above write multi-line blocks with their own spacing (not
+# necessarily rustfmt's); format the game so CI stays green, same as
+# rollout-record.sh.
+if command -v cargo >/dev/null 2>&1; then
+  (cd "$GAME" && cargo fmt --all) || echo "HAND EDIT: cargo fmt failed in $GAME; run it before committing"
+else
+  echo "HAND EDIT: cargo not on PATH; run cargo fmt --all in $GAME before committing"
+fi
+
+echo "rollout-replay: files in place for $GAME"
+echo "next: (cd $GAME && cargo check --features verify)"
