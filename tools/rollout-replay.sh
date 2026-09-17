@@ -87,7 +87,11 @@ if [ "$UPGRADE" -eq 0 ] && [ -e "$GAME/src/game/sim.rs" ] && ! cmp -s "$TEMPLATE
 fi
 if [ ! -f "$GAME/src/game/scoring.rs" ]; then
   echo "HAND EDIT: src/game/scoring.rs: missing; replay/mod.rs needs an impl of LeaderboardScore for your GameData"
-elif ! grep -q 'pub score' "$GAME/src/game/scoring.rs"; then
+elif ! grep -q 'pub score' "$GAME/src/game/scoring.rs" \
+  && ! grep -q 'impl LeaderboardScore' "$GAME/src/game/scoring.rs"; then
+  # The `impl` clause matters for --upgrade: a game that was ported already
+  # has one, and telling it again to write the thing it wrote is noise in a
+  # list whose whole value is that every line needs acting on.
   echo "HAND EDIT: src/game/scoring.rs: no 'score' field on GameData; implement LeaderboardScore for it"
 fi
 if grep -rn "ButtonInput<KeyCode>" "$GAME/src/game" --include="*.rs" 2>/dev/null | grep -v autopilot | grep -q .; then
