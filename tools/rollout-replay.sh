@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # Copies replay verification (deterministic sim, GXR1 replays, the wasm
 # verifier: src/game/sim.rs, src/game/replay/, src/bin/verify.rs, build.rs,
-# tools/build_verify.sh, tools/verify_fixture.mjs, docs/replay-verification.md)
+# tools/build_verify.sh, tools/verify_fixture.mjs, docs/replay-verification.md,
+# tests/archetype_order.rs)
 # from this template into a game checkout and wires it: Cargo.toml lib/bin
 # split + features + deps, src/lib.rs + src/main.rs, the `pub mod
 # replay`/`sim` + `GamePlugin { headless }` shape in src/game/mod.rs,
 # build_web.sh's verify.zip step, the CI/release workflow steps, .gitignore,
 # assets/info.json's verify_url, and src/game/host.rs's HostCommand::Seed arm
 # + optional GlobalVolume. Idempotent. The script never edits a
-# copied file's contents (the two exceptions — src/bin/verify.rs and
-# tests/selftest.rs — get only a mechanical `gamebient_game::` ->
-# `<snake>::` crate-path substitution; see the comment at that copy step).
+# copied file's contents (the three exceptions — src/bin/verify.rs,
+# tests/selftest.rs and tests/archetype_order.rs — get only a mechanical
+# `gamebient_game::` -> `<snake>::` crate-path substitution; see the comment
+# at that copy step).
 # game-specific behaviour (porting GamePlugin::build onto sim::SimSet,
 # adding this game's own checksum_<game> system after sim::checksum_tick,
 # writing the selftest script) is a HAND EDIT for the skill's
@@ -22,8 +24,10 @@
 # committed template version of that file is a stale verbatim copy and is
 # overwritten with the current one; a copy that matches no template version
 # has been edited in the game and is left untouched with a HAND EDIT naming
-# the base to merge from. `src/game/replay/selftest.rs` is deliberately
-# exempt — after the port it is the game's own script, never the template's.
+# the base to merge from. `src/game/replay/selftest.rs` is narrower: it is
+# refreshed while it is still byte-identical to a committed template version
+# (nobody replaced the skeleton), and once it is the game's own script it is
+# left alone with no HAND EDIT, since there is nothing to act on.
 #
 # Usage: tools/rollout-replay.sh [--upgrade] <game-dir>
 set -euo pipefail
@@ -51,6 +55,21 @@ fi
 # ---------------------------------------------------------------------------
 # Pre-flight HAND EDITs. Informational only — never stop the script.
 # ---------------------------------------------------------------------------
+#
+# "Already ported": the gameplay runs through sim::SimSet, so GamePlugin::build
+# has been done. Two of the HAND EDITs below are printed unconditionally on a
+# first rollout because the script cannot tell whether the work is done — but
+# under --upgrade it can, and re-printing them on every upgrade of every game
+# devalues a list whose whole point is that each line needs acting on.
+PORTED=0
+if [ -f "$GAME/src/game/mod.rs" ] && grep -q 'sim::SimSet' "$GAME/src/game/mod.rs"; then
+  PORTED=1
+fi
+SUPPRESS_PORTED_NOISE=0
+if [ "$UPGRADE" -eq 1 ] && [ "$PORTED" -eq 1 ]; then
+  SUPPRESS_PORTED_NOISE=1
+fi
+
 if [ ! -f "$GAME/src/game/mod.rs" ]; then
   echo "HAND EDIT: src/game/mod.rs: flat layout (no src/game/); wire sim/replay and GamePlugin by hand, see irregular-games.md"
 fi
@@ -85,20 +104,170 @@ if [ "$UPGRADE" -eq 0 ] && [ -e "$GAME/src/game/sim.rs" ] && ! cmp -s "$TEMPLATE
     echo "HAND EDIT: src/game/sim.rs: already exists and isn't the template's sim.rs; rename your sim.rs (e.g. shot_sim.rs) and re-run"
   fi
 fi
+# `LeaderboardScore` is NOT one of the files this script copies: the trait
+# and its impl live in each game's own src/game/scoring.rs, while sim.rs,
+# replay/mod.rs, replay/recorder.rs and host.rs (all copied or edited here)
+# `use` it. So a game without one does not compile after the rollout — and
+# the old check only spoke up when there was no `score` field at all, which
+# is the minority case. Most of the fleet has `pub score: u32` and no impl,
+# got no warning, and simply failed to build.
+#
+# The `pub score: u32` case is mechanical and identical in every game, so
+# automate it with the template's own text rather than asking for it. Any
+# other shape (a u64 score, a score on something that isn't GameData, no
+# score at all) is a judgement call about polarity and units — golf strokes
+# are lower-is-better, a race time needs inverting — so that stays a HAND
+# EDIT. Guarded on the impl, so a second run is a no-op.
+#
+# The "is it already implemented" test spans all of src/ and tolerates a
+# qualified path: `impl scoring::LeaderboardScore for GameData` and
+# `impl crate::game::scoring::LeaderboardScore for GameData` are both real
+# shapes, and an impl does not have to live in scoring.rs. A `grep -q 'impl
+# LeaderboardScore'` on scoring.rs alone misses every one of those and
+# appends a duplicate, which is E0119 — a worse failure than the one this
+# automation exists to prevent.
 if [ ! -f "$GAME/src/game/scoring.rs" ]; then
   echo "HAND EDIT: src/game/scoring.rs: missing; replay/mod.rs needs an impl of LeaderboardScore for your GameData"
-elif ! grep -q 'pub score' "$GAME/src/game/scoring.rs" \
-  && ! grep -q 'impl LeaderboardScore' "$GAME/src/game/scoring.rs"; then
-  # The `impl` clause matters for --upgrade: a game that was ported already
-  # has one, and telling it again to write the thing it wrote is noise in a
-  # list whose whole value is that every line needs acting on.
-  echo "HAND EDIT: src/game/scoring.rs: no 'score' field on GameData; implement LeaderboardScore for it"
+elif grep -rqE 'impl\b[^{]*\bLeaderboardScore\b[^{]*\bfor\b' "$GAME/src" --include='*.rs'; then
+  : # already implemented, anywhere in src/ and under any path spelling
+elif grep -rq 'trait LeaderboardScore' "$GAME/src" --include='*.rs' \
+  && ! grep -q 'trait LeaderboardScore' "$GAME/src/game/scoring.rs"; then
+  # The trait exists but not in the file we would append to, so the impl
+  # would need a `use` whose path we would have to guess. Ask instead.
+  echo "HAND EDIT: src/game/scoring.rs: the LeaderboardScore trait is declared outside scoring.rs but never implemented for GameData; add 'impl LeaderboardScore for GameData { fn leaderboard_score(&self) -> u32 { .. } }' with the right 'use' by hand"
+elif grep -qE '^\s*pub score: u32,' "$GAME/src/game/scoring.rs" \
+  && grep -q 'struct GameData' "$GAME/src/game/scoring.rs"; then
+  # Decided BEFORE the append opens the file for writing: reading and writing
+  # the same file in one redirection group is a trap even when the order
+  # happens to work out.
+  NEED_TRAIT=0
+  grep -q 'trait LeaderboardScore' "$GAME/src/game/scoring.rs" || NEED_TRAIT=1
+  {
+    printf '\n'
+    if [ "$NEED_TRAIT" -eq 1 ]; then
+      cat <<'RUST'
+/// The single higher-is-better integer the leaderboard ranks. The template's
+/// `GameData` has `score`; games without one (golf, racing) compute it here.
+pub trait LeaderboardScore {
+    fn leaderboard_score(&self) -> u32;
+}
+
+RUST
+    fi
+    cat <<'RUST'
+impl LeaderboardScore for GameData {
+    fn leaderboard_score(&self) -> u32 {
+        self.score
+    }
+}
+RUST
+  } >>"$GAME/src/game/scoring.rs"
+  echo "rollout-replay: src/game/scoring.rs: added 'impl LeaderboardScore for GameData' over the existing 'pub score: u32' field"
+else
+  echo "HAND EDIT: src/game/scoring.rs: no 'pub score: u32' field on GameData to implement LeaderboardScore from; write 'impl LeaderboardScore for GameData { fn leaderboard_score(&self) -> u32 { .. } }' by hand (higher is better — invert a time, convert strokes to points), or the copied sim/replay/recorder/host code will not compile (it all uses the trait)"
 fi
-if grep -rn "ButtonInput<KeyCode>" "$GAME/src/game" --include="*.rs" 2>/dev/null | grep -v autopilot | grep -q .; then
+# Comment lines are stripped before the check: the template's own `input.rs`
+# mentions `ButtonInput<KeyCode>` in a doc comment explaining what NOT to do,
+# and firing on prose teaches people to skim the HAND EDIT list.
+if grep -rn "ButtonInput<KeyCode>" "$GAME/src/game" --include="*.rs" 2>/dev/null \
+  | grep -v autopilot \
+  | sed -E 's/^[^:]*:[0-9]+://' \
+  | grep -vE '^[[:space:]]*(//|\*|/\*)' \
+  | grep -q .; then
   echo "HAND EDIT: src/game: gameplay reads raw ButtonInput<KeyCode>; route through TickInput instead"
 fi
-if [ -f "$GAME/src/game/autopilot.rs" ] && grep -n 'data\.\w* = ' "$GAME/src/game/autopilot.rs" | grep -q .; then
+if [ "$SUPPRESS_PORTED_NOISE" -eq 0 ] \
+  && [ -f "$GAME/src/game/autopilot.rs" ] \
+  && grep -n 'data\.\w* = ' "$GAME/src/game/autopilot.rs" | grep -q .; then
   echo "HAND EDIT: src/game/autopilot.rs: writes GameData fields directly (dev-only; keep that path out of the selftest script)"
+fi
+
+# `drive_autopilot.before(collect_input)` was unambiguous while gameplay read
+# the per-frame `GameInput`. It is not once the sim reads `TickInput`:
+# gamebient-input registers `accumulate_input.before(collect_input)`, so
+# "before collect_input" leaves the bot and the accumulator unordered relative
+# to each other, and Bevy's schedule builder picks. A tap written after the
+# accumulator has run is folded into `GameInput` for that frame and never
+# reaches a fixed tick — so the bot appears to press buttons the replay never
+# records. Order it before the accumulator instead.
+if [ -f "$GAME/src/game/autopilot.rs" ] \
+  && grep -q 'before(gamebient_input::input::collect_input)' "$GAME/src/game/autopilot.rs"; then
+  perl -pi -e 's/before\(gamebient_input::input::collect_input\)/before(gamebient_input::input::accumulate_input)/g' \
+    "$GAME/src/game/autopilot.rs"
+  echo "rollout-replay: src/game/autopilot.rs: reordered drive_autopilot before accumulate_input (collect_input is too late once the sim reads TickInput)"
+fi
+
+# Advisory only, and deliberately a heuristic. A presentation system left in
+# `Update` that INSERTS a component onto an entity a SimSet system queries
+# changes that entity's archetype, and archetype order is the order Bevy
+# iterates a `Query` in. The verifier adds no render plugins, so it never
+# performs the insert and iterates a different order — a desync that every
+# fixture passes (nothing renders during a selftest) and only replays of
+# real, rendered runs expose. Grand Theft Auto-Reply hit exactly this:
+# `src/assets/projectiles.rs` and `inbox_view.rs` decorate the live
+# `Projectile` and `Email` entities that `combat::advance_projectiles` and
+# `inbox::tick_emails` iterate.
+#
+# Scans ALL of src/, `src/game/` included: Dough.io keeps its decorators in
+# `src/game/presentation.rs`, so excluding the sim's own directory would
+# print nothing for it. That means benign shapes are named too — a system
+# that spawns an entity and decorates it in the same breath (this template's
+# own `player::spawn_player`), or a decorator already inside `SimSet`. Hence
+# "advisory": it says which files to read, never which are wrong. The test
+# that answers the question is `tests/archetype_order.rs`.
+# Emits one `<path>:<Component>` line per (file, component) pair where that
+# file pulls an entity out of a query and inserts/removes/despawns on it,
+# naming a component declared and queried under $1/src/game. Two filters do
+# the discriminating: the component must be one the GAME declares (so
+# `Transform`, `Sprite` and friends, which are everywhere, never appear), and
+# the file must not itself spawn it ("decorate the entity I just spawned" is
+# benign — both paths do it, so no archetype diverges; decorating an entity
+# SOMEONE ELSE spawned is the shape that bites).
+archetype_insert_pairs() {
+  local root="$1" comps f comp
+  [ -d "$root/src/game" ] || return 0
+  comps="$(grep -rhE -A4 '#\[derive\([^)]*\bComponent\b' "$root/src/game" --include='*.rs' 2>/dev/null \
+    | grep -oE '^(pub )?(struct|enum) [A-Z][A-Za-z0-9_]*' \
+    | awk '{print $NF}' | sort -u)"
+  while read -r f; do
+    [ -n "$f" ] || continue
+    grep -q '\.entity(' "$f" || continue
+    grep -qE '\.insert\(|\.remove::<|\.despawn\(' "$f" || continue
+    for comp in $comps; do
+      grep -qE "(Query<[^>]*&(mut )?${comp}\b|With<${comp}>|Without<${comp}>|&(mut )?${comp}\b)" "$f" || continue
+      grep -rqE "(Query<[^>]*&(mut )?${comp}\b|With<${comp}>|Without<${comp}>)" "$root/src/game" --include='*.rs' 2>/dev/null || continue
+      grep -qE "spawn\(\(?[^)]*\b${comp}\b" "$f" && continue
+      printf '%s:%s\n' "${f#"$root/"}" "$comp"
+    done
+  done < <(find "$root/src" -name '*.rs' 2>/dev/null)
+}
+
+# Advisory only, and deliberately a heuristic. A presentation system left in
+# `Update` that INSERTS a component onto an entity a SimSet system queries
+# changes that entity's archetype, and archetype order is the order Bevy
+# iterates a `Query` in. The verifier adds no render plugins, so it never
+# performs the insert and iterates a different order — a desync that every
+# fixture passes (nothing renders during a selftest) and only replays of
+# real, rendered runs expose. Grand Theft Auto-Reply hit exactly this:
+# `src/assets/projectiles.rs` and `inbox_view.rs` decorate the live
+# `Projectile` and `Email` entities that `combat::advance_projectiles` and
+# `inbox::tick_emails` iterate.
+#
+# Scans ALL of src/, `src/game/` included: Dough.io keeps its decorators in
+# `src/game/presentation.rs`, so excluding the sim's own directory would find
+# nothing for it. What IS subtracted is whatever the same scan finds in this
+# template — every game inherits the same `cleanup_game_entities`,
+# pause-overlay and audio-fade boilerplate, and flagging it in every game for
+# ever would bury the game-specific hits that matter. (Run against the
+# template itself the two sets are equal, so nothing prints.)
+if [ -d "$GAME/src/game" ]; then
+  TEMPLATE_PAIRS="$(archetype_insert_pairs "$TEMPLATE" | sort -u)"
+  GAME_PAIRS="$(archetype_insert_pairs "$GAME" | sort -u)"
+  ADVISORY="$(comm -13 <(printf '%s\n' "$TEMPLATE_PAIRS") <(printf '%s\n' "$GAME_PAIRS") | tr '\n' ' ')"
+  ADVISORY="${ADVISORY% }"
+  if [ -n "$ADVISORY" ]; then
+    echo "HAND EDIT (advisory): these files change the archetype of entities src/game/ also queries — ${ADVISORY}. Where the entity is one a SimSet system ITERATES and the insert happens from Update, it reorders that query, and the verifier (no render plugins, so no insert) never sees the same order. Put the presentation on a CHILD entity, move the insert into the sim chain, or sort the sim query by a stable per-entity key. This is a grep: benign hits are expected (a decorator already inside SimSet is fine), so read the files, then extend tests/archetype_order.rs's markers to your real decorators and let that test answer it. See docs/replay-verification.md rule 1."
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -112,6 +281,9 @@ mkdir -p "$GAME/src/game/replay" "$GAME/src/bin" "$GAME/tests/fixtures" "$GAME/t
 # newline-joined string rather than an array: `"${a[@]}"` on an empty array
 # is an unbound-variable error under `set -u` in older bashes.
 REFRESHED=""
+# Set when --upgrade found no tests/archetype_order.rs and deliberately did
+# not create one (see the probe's block below); reported in the summary.
+MISSING_PROBE=0
 
 # The newest template commit whose version of $1 is byte-identical to the
 # file $2 — with the `gamebient_game::` -> `$SNAKE::` substitution applied
@@ -217,10 +389,10 @@ if [ "$UPGRADE" -eq 1 ]; then
   # it keeps its own pre-flight message and the copy-if-absent below, which
   # must not overwrite a game's own unrelated sim.rs.)
   COPY_LIST=(src/game/sim.rs "${COPY_LIST[@]}")
-  # src/game/replay/selftest.rs is NOT in the list: the template's is a
-  # skeleton the port replaces with this game's own script, so refreshing it
-  # would throw that away, and a HAND EDIT about it would be noise on every
-  # upgrade of every game.
+  # src/game/replay/selftest.rs is NOT in the list: after the port it is the
+  # game's own script, so the "locally modified" HAND EDIT would fire on
+  # every upgrade of every game and mean nothing. It is handled by its own
+  # narrowed rule below instead of being exempted outright.
 else
   # sim.rs already has its own pre-flight message (rename-and-re-run) above;
   # only perform the copy here, and only when nothing is in the way.
@@ -231,6 +403,39 @@ fi
 for rel in "${COPY_LIST[@]}"; do
   copy_or_hand_edit "$rel"
 done
+
+# The two files the port REPLACES rather than keeps — replay/selftest.rs's
+# script and tests/archetype_order.rs's markers are this game's, not the
+# template's — get a narrower --upgrade rule than "never touch them". A copy
+# that is byte-identical to SOME committed template version is one nobody
+# ever replaced (the port skipped it, or the template moved the skeleton
+# underneath it), and refreshing that throws nothing away: do it, and name it
+# in the summary like any other stale verbatim copy. A copy that matches no
+# template version is the game's own: leave it, and say nothing, because
+# there is nothing for a human to act on.
+if [ "$UPGRADE" -eq 1 ] && [ -n "$PKG" ]; then
+  refresh_if_untouched() {
+    local rel="$1" mode="$2" dst="$GAME/$1" expected stale
+    if [ "$mode" = rename ]; then
+      expected="$(sed "s/gamebient_game::/${SNAKE}::/g" "$TEMPLATE/$rel")"
+    else
+      expected="$(cat "$TEMPLATE/$rel")"
+    fi
+    if [ ! -e "$dst" ]; then
+      mkdir -p "$(dirname "$dst")"
+      printf '%s\n' "$expected" >"$dst"
+      return 0
+    fi
+    [ "$(cat "$dst")" = "$expected" ] && return 0
+    stale="$(template_sha_matching "$rel" "$dst" "$mode")"
+    if [ -n "$stale" ]; then
+      printf '%s\n' "$expected" >"$dst"
+      REFRESHED="${REFRESHED}${rel} (was template ${stale:0:7})"$'\n'
+    fi
+  }
+  refresh_if_untouched src/game/replay/selftest.rs verbatim
+fi
+
 chmod +x "$GAME/tools/build_verify.sh" 2>/dev/null || true
 
 # src/bin/verify.rs and tests/selftest.rs hardcode `use gamebient_game::...`
@@ -267,6 +472,59 @@ copy_with_crate_rename() {
 if [ -n "$PKG" ]; then
   copy_with_crate_rename src/bin/verify.rs
   copy_with_crate_rename tests/selftest.rs
+
+  # ---- tests/archetype_order.rs -------------------------------------------
+  #
+  # The differential probe for the archetype-order trap. It has its own rule
+  # rather than going through copy_with_crate_rename, for one reason: the
+  # template's version hard-references the template's own sim entity
+  # (`game::player::Player`), which only a handful of games have. A copy of it
+  # does not compile anywhere else, so every path has to be deliberate about
+  # whether it is putting a red test into a game.
+  #
+  #   absent, first rollout  -> write it, and say it must be adapted. The port
+  #                             is happening now; a red test with a named hand
+  #                             edit beats no test at all.
+  #   absent, --upgrade      -> do NOT write it. The game compiles today, and
+  #                             materialising a file that references a `Player`
+  #                             it does not have would turn a green checkout
+  #                             red with nothing in the output to explain it.
+  #                             Ask for it instead, and name it in the summary.
+  #   present, byte-identical to the template's (after the crate rename)
+  #                          -> unadapted, whenever it got there. Say so.
+  #   present and different  -> adapted. Silent, always: that is the finished
+  #                             state, and it is never "exists and differs;
+  #                             move it aside and re-run".
+  #   present, matching an OLDER template version, --upgrade
+  #                          -> a stale unadapted copy: refresh it to current
+  #                             (and the identity check below then asks for it
+  #                             to be adapted, which it still needs).
+  PROBE_REL=tests/archetype_order.rs
+  PROBE_DST="$GAME/$PROBE_REL"
+  PROBE_EXPECTED="$(sed "s/gamebient_game::/${SNAKE}::/g" "$TEMPLATE/$PROBE_REL")"
+  if [ ! -e "$PROBE_DST" ]; then
+    if [ "$UPGRADE" -eq 1 ]; then
+      MISSING_PROBE=1
+      echo "HAND EDIT: $PROBE_REL: missing; copy it from the template and adapt the markers to your sim entities (see the port checklist, \"The two order traps\"). Not copied automatically: the template's version references its own \`Player\` entity, so dropping it in would turn this checkout's tests red with no explanation."
+    else
+      mkdir -p "$(dirname "$PROBE_DST")"
+      printf '%s\n' "$PROBE_EXPECTED" >"$PROBE_DST"
+    fi
+  elif [ "$UPGRADE" -eq 1 ] && [ "$(cat "$PROBE_DST")" != "$PROBE_EXPECTED" ]; then
+    PROBE_STALE="$(template_sha_matching "$PROBE_REL" "$PROBE_DST" rename)"
+    if [ -n "$PROBE_STALE" ]; then
+      printf '%s\n' "$PROBE_EXPECTED" >"$PROBE_DST"
+      REFRESHED="${REFRESHED}${PROBE_REL} (was template ${PROBE_STALE:0:7})"$'\n'
+    fi
+  fi
+  # Byte-identity with the template's current version is the ONLY test for
+  # "unadapted" — not whether the game has a `Player`, which says nothing
+  # about whether the markers were ever replaced. On the template's own
+  # checkout ($SNAKE == gamebient_game) the file is its own, by definition.
+  if [ "$SNAKE" != gamebient_game ] && [ -e "$PROBE_DST" ] \
+    && [ "$(cat "$PROBE_DST")" = "$PROBE_EXPECTED" ]; then
+    echo "HAND EDIT: $PROBE_REL: still the template's copy — adapt it before it compiles. It references the template's own \`Player\` sim entity; replace the marker components and decorate_* systems with stand-ins for THIS game's Update decorators (reproduce their branching: different entities getting different component sets is what splits the archetype), and point trace_order at the queries your order-sensitive sim systems iterate. It is the only test that catches the archetype-order trap; the \"delete the system and re-run --selftest\" check provably cannot. See the file's doc comment and the port checklist, 'What may stay in Update'."
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -278,11 +536,11 @@ fi
 # above) — every one of these edits keys off the package name in some way.
 # ---------------------------------------------------------------------------
 if [ -n "$PKG" ]; then
-perl - "$GAME" "$PKG" "$SNAKE" "$UPGRADE" <<'PERL_EOF'
+perl - "$GAME" "$PKG" "$SNAKE" "$UPGRADE" "$SUPPRESS_PORTED_NOISE" <<'PERL_EOF'
 use strict;
 use warnings;
 
-my ($game, $pkg, $snake, $upgrade) = @ARGV;
+my ($game, $pkg, $snake, $upgrade, $suppress_ported_noise) = @ARGV;
 my @hand_edits;
 sub hand_edit { push @hand_edits, "HAND EDIT: $_[0]"; }
 
@@ -341,11 +599,22 @@ sub spit {
             }
         }
 
+        # `=0.2.108`, not `0.2.108`: a caret range lets `cargo update` walk the
+        # game to 0.2.126 while install.sh and both workflows still install the
+        # 0.2.108 CLI, and a CLI/lib skew produces a bundle that fails to load
+        # at runtime with nothing in CI to catch it. That is the drift the pilot
+        # had to unpick by hand; the `=` form makes cargo refuse it instead.
         if ($c !~ /^wasm-bindgen = /m) {
-            my $line = "wasm-bindgen = { version = \"0.2.108\", optional = true }\n";
+            my $line = "wasm-bindgen = { version = \"=0.2.108\", optional = true }\n";
             unless ($c =~ s/(^getrandom = \{ version = "0\.3", features = \["wasm_js"\] \}\n)/$1$line/m) {
-                hand_edit('Cargo.toml: add wasm-bindgen = { version = "0.2.108", optional = true } after the wasm32 getrandom line');
+                hand_edit('Cargo.toml: add wasm-bindgen = { version = "=0.2.108", optional = true } after the wasm32 getrandom line');
             }
+        }
+        # A game pinned before the `=` form existed, or one whose pin drifted.
+        $c =~ s/^wasm-bindgen = \{ version = "0\.2\.\d+", optional = true \}$/wasm-bindgen = { version = "=0.2.108", optional = true }/m;
+        if ($c =~ /^wasm-bindgen = /m
+            && $c !~ /^wasm-bindgen = \{ version = "=0\.2\.108", optional = true \}$/m) {
+            hand_edit('Cargo.toml: wasm-bindgen is not pinned as { version = "=0.2.108", optional = true }; pin it exactly by hand, or cargo update can drift the library away from the 0.2.108 CLI install.sh and both workflows install');
         }
 
         if ($c =~ /gamebient-input = .*tag = "v0\.2\.\d+"/) {
@@ -456,11 +725,15 @@ sub spit {
             }
         }
 
-        # Always surfaced: the build() body is game-specific free-form code
-        # this script cannot safely touch (system ordering, what stays in
-        # Update vs moves into sim::SimSet, what this game's own checksum
-        # system folds).
-        hand_edit('src/game/mod.rs: port GamePlugin::build to run gameplay through sim::SimSet, gate scene/audio/dev-harness setup on !self.headless, and add a checksum_<game> system after sim::checksum_tick folding your key run state (see docs/replay-verification.md rule 6). Three specifics that cost the pilot hours: (a) the set\'s run condition is THREE clauses -- sim::SimSet.run_if(in_state(GameState::Playing).and(states::not_paused).and(sim::run_not_over)) -- plus .init_resource::<sim::RunOver>(), or the game-over fade adds a frame-rate-dependent tail of ticks the verifier cannot reproduce (rule 10); (b) every system the headless app runs must take resources the headless app actually has -- assets in particular: GameAssets/Assets<Mesh>/Assets<StandardMaterial> are only inserted by the windowed build, so a spawn system needs Option<Res<GameAssets>> and an asset-free branch, or Bevy fails it with \"Parameter ... failed validation\" and no system name; (c) CI\'s Node fixture steps fail until tests/fixtures/selftest.gxr AND tests/fixtures/selftest-wasm.gxr are generated (skill step 4)');
+        # Always surfaced on a first rollout: the build() body is
+        # game-specific free-form code this script cannot safely touch
+        # (system ordering, what stays in Update vs moves into sim::SimSet,
+        # what this game's own checksum system folds). Under --upgrade on a
+        # game whose mod.rs already names sim::SimSet the work is demonstrably
+        # done, and repeating it every time devalues the rest of the list.
+        unless ($upgrade && $suppress_ported_noise) {
+            hand_edit('src/game/mod.rs: port GamePlugin::build to run gameplay through sim::SimSet, gate scene/audio/dev-harness setup on !self.headless, and add a checksum_<game> system after sim::checksum_tick folding your key run state (see docs/replay-verification.md rule 6). Three specifics that cost the pilot hours: (a) the set\'s run condition is THREE clauses -- sim::SimSet.run_if(in_state(GameState::Playing).and(states::not_paused).and(sim::run_not_over)) -- plus .init_resource::<sim::RunOver>(), or the game-over fade adds a frame-rate-dependent tail of ticks the verifier cannot reproduce (rule 10); (b) every system the headless app runs must take resources the headless app actually has -- assets in particular: GameAssets/Assets<Mesh>/Assets<StandardMaterial> are only inserted by the windowed build, so a spawn system needs Option<Res<GameAssets>> and an asset-free branch, or Bevy fails it with \"Parameter ... failed validation\" and no system name; (c) CI\'s Node fixture steps fail until tests/fixtures/selftest.gxr AND tests/fixtures/selftest-wasm.gxr are generated (skill step 4)');
+        }
 
         spit($path, $c) if $c ne $orig;
     } else {
@@ -542,6 +815,7 @@ sub spit {
 {
     my $path = "$game/build_web.sh";
     my $c = slurp($path);
+    my $verify_step_reported = 0;
     if (defined $c) {
         my $orig = $c;
 
@@ -574,7 +848,17 @@ sub spit {
             }
         }
 
-        if ($c !~ /tools\/build_verify\.sh/) {
+        # Guard on the INSERTED LINE, anchored, not on the bare path. The
+        # verify.wasm comment block above contains the literal text
+        # "tools/build_verify.sh" in its prose, and it is inserted by this
+        # same pass into this same $c — so a guard of /tools\/build_verify\.sh/
+        # read its own sibling's comment as proof the work was done, skipped
+        # the insertion, and printed no HAND EDIT. The build and the deploy
+        # both succeeded; the only symptom was in production, where
+        # properties.verify_url 404s and every honest run came back "No
+        # verifier for this game build yet". Every game rolled out between
+        # the comment landing and this fix is affected.
+        if ($c !~ /^bash tools\/build_verify\.sh$/m) {
             my $anchor = "    dist/${pkg}_bg.wasm -o dist/${pkg}_bg.wasm\n";
             my $addition = "\n# Build the headless replay verifier and publish it alongside the game bundle\n"
                           . "# as dist/verify.zip — the site fetches it from properties.verify_url. Run\n"
@@ -587,8 +871,19 @@ sub spit {
             if ($idx >= 0) {
                 substr($c, $idx + length($anchor), 0) = $addition;
             } else {
-                hand_edit("build_web.sh: wasm-opt output line ('dist/${pkg}_bg.wasm -o dist/${pkg}_bg.wasm') not found; add the tools/build_verify.sh step by hand after wasm-opt");
+                hand_edit("build_web.sh: wasm-opt output line ('dist/${pkg}_bg.wasm -o dist/${pkg}_bg.wasm') not found; add 'bash tools/build_verify.sh' + 'cp dist-verify.zip dist/verify.zip' by hand after wasm-opt, or the deploy ships without dist/verify.zip and verify_url 404s");
+                $verify_step_reported = 1;
             }
+        }
+
+        # Belt and braces for the silent-skip class of bug above: whatever
+        # path we took, build_web.sh must end up publishing verify.zip. Say
+        # so loudly if it does not, rather than leaving it to production.
+        if (!$verify_step_reported && $c !~ /^bash tools\/build_verify\.sh$/m) {
+            hand_edit("build_web.sh: still has no 'bash tools/build_verify.sh' line after this script's edits; add it (and 'cp dist-verify.zip dist/verify.zip' after it) by hand, or the web deploy ships without dist/verify.zip and properties.verify_url 404s for every run");
+        }
+        if ($c =~ /^bash tools\/build_verify\.sh$/m && $c !~ /^cp dist-verify\.zip dist\/verify\.zip$/m) {
+            hand_edit("build_web.sh: runs tools/build_verify.sh but never copies the result; add 'cp dist-verify.zip dist/verify.zip' after it by hand, or dist/ has no verify.zip to deploy");
         }
 
         spit($path, $c) if $c ne $orig;
@@ -770,7 +1065,10 @@ if [ "$UPGRADE" -eq 1 ]; then
   else
     echo "rollout-replay --upgrade: nothing to refresh — every copied file is already the template's current version or locally modified (see the HAND EDIT lines above)"
   fi
-  echo "rollout-replay --upgrade: src/game/replay/selftest.rs is never refreshed (it is this game's own script after the port)"
+  echo "rollout-replay --upgrade: src/game/replay/selftest.rs and tests/archetype_order.rs are refreshed only while they are still byte-identical to a committed template version; once the port has replaced them they are left alone, silently"
+  if [ "$MISSING_PROBE" -eq 1 ]; then
+    echo "rollout-replay --upgrade: tests/archetype_order.rs is ABSENT and was not created — copy it from $TEMPLATE/tests/archetype_order.rs and adapt its markers (see the HAND EDIT above). It is the only test that catches the archetype-order trap."
+  fi
 fi
 
 echo "rollout-replay: files in place for $GAME"

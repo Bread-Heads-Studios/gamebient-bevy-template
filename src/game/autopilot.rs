@@ -2,7 +2,7 @@
 //!
 //! Drives the REAL input path by writing the gamebient-input crate's
 //! `VirtualInput` (the same source its touch overlay and `gx:input` host relay
-//! use) before `collect_input` folds it into `GameInput`, plays a scripted tour
+//! use) before `accumulate_input` folds it into the tick path, plays a scripted tour
 //! (logo → title → how-to-play → a bot-played run → pause → game over), and
 //! saves renderer screenshots at each beat. Used to verify playability and
 //! visuals without a human at the keyboard, and by `make-cartridge.sh` to
@@ -80,11 +80,18 @@ impl Plugin for AutopilotPlugin {
         std::fs::create_dir_all(shot_dir()).expect("autopilot shot dir");
         app.init_resource::<Autopilot>()
             .add_systems(Startup, apply_scale_override)
-            // Before the crate's collector so this frame's snapshot carries
-            // the injected buttons, exactly like a touch-overlay press.
+            // Before the crate's ACCUMULATOR, not just before `collect_input`.
+            // gamebient-input registers `accumulate_input.before(collect_input)`,
+            // so ordering only against `collect_input` leaves the bot and the
+            // accumulator unordered relative to each other and Bevy's schedule
+            // builder picks. A tap written after the accumulator has run is
+            // folded into the per-frame `GameInput` and never reaches a fixed
+            // tick — so the bot presses buttons the sim (and the replay) never
+            // see. Before the accumulator, the injected buttons are
+            // indistinguishable from a touch-overlay press on both paths.
             .add_systems(
                 PreUpdate,
-                drive_autopilot.before(gamebient_input::input::collect_input),
+                drive_autopilot.before(gamebient_input::input::accumulate_input),
             );
     }
 }
@@ -137,8 +144,18 @@ fn shot(commands: &mut Commands, name: &str) {
     }
 }
 
-/// Steers the whole session. Runs before `collect_input` so the injected
-/// buttons are indistinguishable from a human player's.
+/// Steers the whole session. Runs before `accumulate_input` (and so before
+/// `collect_input`, which the crate orders after it) so the injected buttons
+/// are indistinguishable from a human player's on the per-frame AND the
+/// per-tick path.
+///
+/// A direction held for exactly one frame can still miss a tick:
+/// `accumulate_input` OVERWRITES the held set every frame and only the
+/// latched (press-edge) bits survive to the next tick, so a one-frame hold
+/// lands on a tick only if that frame happens to contain one. On a 120 Hz
+/// display roughly half of them vanish. Re-emit a direction for at least two
+/// frames (a short cooldown works, and still reads as a single step as long
+/// as it stays inside the auto-repeat delay).
 #[allow(clippy::too_many_arguments)]
 fn drive_autopilot(
     mut commands: Commands,

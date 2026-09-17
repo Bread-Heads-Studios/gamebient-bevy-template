@@ -5,7 +5,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 rustup target add wasm32-unknown-unknown 2>/dev/null || true
-cargo build --profile wasm-release --target wasm32-unknown-unknown \
+# --locked for the same reason build_web.sh uses it: the verifier module and
+# the game bundle must be built from one dependency set, and the wasm-bindgen
+# library must match the pinned CLI below.
+cargo build --locked --profile wasm-release --target wasm32-unknown-unknown \
     --bin verify --features verify
 command -v wasm-bindgen >/dev/null || { echo "wasm-bindgen-cli missing (see install.sh)" >&2; exit 1; }
 command -v wasm-opt >/dev/null || { echo "wasm-opt missing (binaryen)" >&2; exit 1; }

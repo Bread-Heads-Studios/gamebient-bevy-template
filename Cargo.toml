@@ -97,7 +97,11 @@ bevy = { version = "0.18", features = ["bevy_gilrs", "wayland", "x11"] }
 # (.cargo/config.toml sets --cfg getrandom_backend="wasm_js")
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
-wasm-bindgen = { version = "0.2.108", optional = true }
+# Pinned EXACTLY (`=`), not as a caret range: install.sh and both workflows
+# install wasm-bindgen-cli@0.2.108, and a CLI/lib skew produces a bundle that
+# fails to load at runtime with nothing in CI to catch it. A `cargo update`
+# that walks the library forward must fail to resolve, not succeed quietly.
+wasm-bindgen = { version = "=0.2.108", optional = true }
 
 [profile.dev]
 opt-level = 1

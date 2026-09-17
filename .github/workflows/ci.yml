@@ -52,6 +52,46 @@ jobs:
         working-directory: tools
         run: python3 -m unittest test_cut_clips -v
 
+  rollout:
+    name: rollout-replay.sh
+    runs-on: ubuntu-latest
+    steps:
+      # The rollout script and its test suite drive git history (they classify
+      # a game's copy of a file against every committed template version), so
+      # the shallow default checkout is not enough.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rollout
+
+      - name: shellcheck
+        run: shellcheck tools/*.sh build_web.sh install.sh
+
+      # --no-game skips part (b), the only part that needs a sibling
+      # games/cannonball-putt checkout — a separate private repo this
+      # workflow has no token for. Parts (a) and (c)-(h) all run, and that
+      # includes both silent failures the wave-1 rollouts exposed: (g)
+      # covers the missing LeaderboardScore impl AND the build_web.sh
+      # verify.zip step that shipped games whose verify_url 404s. Part (b)
+      # is still the only end-to-end "an unported game compiles after the
+      # rollout" coverage, so run the suite WITHOUT the flag locally before
+      # changing the script.
+      - name: Rollout script test suite (no sibling game checkout)
+        run: bash tools/test_rollout_replay.sh --no-game
+
   build-web:
     name: build wasm bundle
     runs-on: ubuntu-latest

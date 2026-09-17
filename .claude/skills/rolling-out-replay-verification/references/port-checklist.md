@@ -107,6 +107,92 @@ Grep: `grep -n 'add_systems(Update' src/game/mod.rs` — anything that
 mutates a resource `checksum_tick` or a later system reads should be in the
 list above, not here.
 
+### The two order traps
+
+Rule 1 is usually read as "does this system write sim state?". Two ways of
+breaking a replay pass that test and still desync, and both were found by
+reviewing a wave-1 port rather than by any fixture:
+
+**A system left in `Update` must not insert or remove components on, or
+spawn or despawn, any entity a `SimSet` system queries.** Inserting a
+presentation component onto a sim entity moves that entity to a different
+archetype, and archetype order is the order a `Query` iterates in. The
+windowed game performs the insert and iterates one order; the verifier adds
+no render plugins, never performs it, and iterates another. Nothing in the
+selftest catches this — nothing renders during a selftest — so the fixtures
+stay green and only replays of real, rendered runs diverge.
+
+Grand Theft Auto-Reply is the worked example. Its `src/assets/` visuals
+decorate live `Email` and `Projectile` entities — the same entities
+`inbox::tick_emails` and `combat::advance_projectiles` iterate inside
+`SimSet`. Three of six seeds diverged under a two-ticks-per-frame schedule
+while every fixture passed. The fixes, in order of preference:
+
+1. Put the presentation on a **child** entity the sim never queries.
+2. Move the insert into the chain, so both paths do it.
+3. Make the sim system's iteration order not depend on the archetype —
+   which is the second trap.
+
+**Sorting discipline: any sim system that iterates a `Query` and accumulates
+order-sensitively must sort by a stable per-entity key first.**
+Order-sensitive means a running multiplier, pushing into a `Vec` the sim
+later reads in order, a sequential float threshold, "the first entity within
+range wins" — anything where swapping two entities changes the result. The
+key must be something the *sim* assigns and both paths agree on: an inbox
+slot, a spawn sequence number, a grid index. **Not `Entity`** — its value
+depends on allocation order, which is exactly what is in question.
+
+```rust
+// before: whatever order the archetype happens to give
+for email in &emails {
+    combo *= email.multiplier;   // f32: not associative, so order IS the result
+}
+
+// after: a stable key the sim owns
+let mut live: Vec<_> = emails.iter().collect();
+live.sort_by_key(|email| email.slot);
+for email in live {
+    combo *= email.multiplier;
+}
+```
+
+Note what that example is *not*: `*` is commutative, and it still matters,
+because f32 multiplication is not **associative** — reordering the operands
+moves the last bit, and the checksum folds bits. So "the operator is
+commutative" is not the test; "would reordering the operands change the
+value" is. Integer sums, maxes, counts and bitwise ORs genuinely do not care,
+and neither does a system that only reads.
+
+The per-entity folds in a `checksum_<game>` system are the most
+order-sensitive code in the game by construction — a hash is order-dependent
+by design — so those must **always** be sorted before folding, commutative
+accumulator or not. That is rule 5's own advice; this clause is the rest of
+the sim.
+
+`tools/rollout-replay.sh` prints an **advisory** HAND EDIT for this, as
+`<file>:<Component>` pairs: any file under `src/` that takes an entity out of
+a query and calls `.insert(`/`.remove::<`/`.despawn(` on it, naming a
+component the game declares *and* queries in `src/game/`. Three filters keep
+it readable — only game-declared components (so `Transform` and `Sprite` never
+appear), not a file that spawns the component itself ("decorate what I just
+spawned" is benign: both paths do it), and minus whatever the same scan finds
+in the template (every game inherits the same cleanup/pause/audio
+boilerplate). On Grand Theft Auto-Reply:
+
+```
+src/assets/inbox_view.rs:Email  src/assets/projectiles.rs:Email
+src/assets/projectiles.rs:Projectile  src/game/audio/mod.rs:RaidSiren
+src/game/combat.rs:Email  src/game/combat.rs:Projectile
+src/game/inbox.rs:Email
+```
+
+The first three are the real bug. The rest are sim code decorating its own
+entities from inside the chain, which is fine — both paths do it — and is
+what "advisory" means: it is a reading list, not a verdict. Expect false
+negatives too (an entity reached through a resource rather than a query, or a
+file that both spawns and decorates the same type). The thing that *answers*
+the question is `tests/archetype_order.rs`.
+
 ### What the headless app does not have
 
 `build_headless_app` is `MinimalPlugins` + `StatesPlugin` + `InputPlugin` and
@@ -128,6 +214,32 @@ you know the list. The three that bit the pilot:
 | `GlobalVolume` | `AudioPlugin` | `host::apply_host_commands` takes `Option<ResMut<GlobalVolume>>` (the template already does; games predating that change do not) |
 | the game's `GameAssets` | the game's `AssetsPlugin` | hole/level setup takes `Option<Res<GameAssets>>` and spawns only the entities the sim reads |
 | `ScreenFade` | `UiPlugin` | `Option<Res<…>>` / `Option<ResMut<…>>` in `toggle_pause` and the game-over site |
+| **messages**, not resources: `HostEvent`, `TickInput`, `TickFrame` | `GxInputPlugin` | see below — a harness that builds the sim plugin standalone must `add_message::<HostEvent>()` and init the tick-input resources, or use `build_headless_app` |
+
+That last row is a different failure with the same nameless error, and it
+bites test harnesses rather than the verifier. `replay::recorder::seal_run`
+takes a `MessageWriter<HostEvent>`, and `HostEvent`'s message queue is
+registered by `GxInputPlugin`. `build_headless_app` adds the whole
+`GamePlugin`, so the verifier is fine — but a game whose own test harness
+builds just its sim plugin (Dough.io's `SimCorePlugin`, a balance sweep, a
+playtest) has no `GxInputPlugin`, and the game-over path dies with Bevy's
+
+```
+Parameter `Enable the debug feature to see the name` failed validation:
+Message not initialized
+```
+
+`TickInput` and `TickFrame` are the same class: the sim reads them, the
+input crate inits them. Either add them in the sim plugin —
+
+```rust
+app.add_message::<gamebient_input::HostEvent>()
+    .init_resource::<gamebient_input::TickInput>()
+    .init_resource::<gamebient_input::TickFrame>();
+```
+
+— or build harness apps through `replay::build_headless_app` so they get the
+same shape the verifier does. Prefer the second where the harness can take it.
 
 The second one is the interesting one: a game that builds its level out of
 meshes has to split "spawn the thing the sim moves" from "spawn what it looks
@@ -216,10 +328,35 @@ from `RunSeed` or from a draw off `GameRng`, not from `rand::rng()` or
 `from_os_rng()` — see `references/irregular-games.md` for Attic Excavator's
 specific case.
 
+**The harness trap, and it is silent.** `sim::begin_run` **overwrites**
+`GameRng` on every `OnEnter(Playing)`, reseeding it from `RunSeed`. So an
+existing test harness or balance sweep that inserts its own seeded RNG
+resource before entering `Playing` — the normal pre-port way to make a
+playtest deterministic — has it thrown away, and the run proceeds on a
+locally drawn seed. Nothing errors; the harness simply stops being
+deterministic, and a CSV of "seeded" results quietly becomes noise. Dough.io
+hit this.
+
+Stage `sim::PendingSeed` instead and let `begin_run` do the reseeding,
+exactly as a host-issued seed does. `sim::seed_bytes(u64) -> [u8; 32]`
+(unit-tested in `sim.rs`) widens a harness/CLI `u64` seed to the 32 bytes the
+resource takes, so `--seed 7` means the same run in the harness, the sweep
+and the replay:
+
+```rust
+// before: undone by begin_run, silently
+app.insert_resource(SimRng::seeded(seed));
+
+// after
+app.world_mut().resource_mut::<sim::PendingSeed>().0 = Some(sim::seed_bytes(seed));
+```
+
 Grep: the forbidden-names test already fails the build on
 `rand::rng()`/`from_os_rng`/`thread_rng`/`SmallRng` inside `src/game/`
 (`cargo test sim::tests::no_forbidden_randomness_or_hashmaps_in_game_code`);
-run it after the port, don't just grep by hand.
+run it after the port, don't just grep by hand. It cannot catch the harness
+trap — that code is correct Rust doing the wrong thing — so check by hand
+that every harness entry point stages `PendingSeed`.
 
 ## Rule 4 — no `std::collections::HashMap` in sim state
 
@@ -334,8 +471,13 @@ registered `.before(sim::SimSet)`, not inside the chained tuple.
 
 ## Rule 9 — `LeaderboardScore`, not `GameData.score`
 
-Games without a plain `score` field (golf strokes, a race time, Hunted's
-survival timer) implement the trait instead of relying on the blanket impl:
+The trait and its impl live in each game's **own** `src/game/scoring.rs` —
+`rollout-replay.sh` does not copy that file — while `sim.rs`,
+`replay/mod.rs`, `replay/recorder.rs` and `host.rs` all `use` it. A game
+without one simply does not compile after the rollout.
+
+The common shape (`pub score: u32` on `GameData`, no impl) the script now
+writes for you, verbatim from the template:
 ```rust
 pub trait LeaderboardScore {
     fn leaderboard_score(&self) -> u32;
@@ -347,6 +489,12 @@ impl LeaderboardScore for GameData {
     }
 }
 ```
+Anything else is a HAND EDIT, because it is a judgement call about polarity
+and units rather than a copy — games without a plain `score` field (golf
+strokes, a race time, Hunted's survival timer) write their own, as in the
+before/after below.
+
+Once the impl exists, the plumbing is the same either way:
 `sim::checksum_tick` folds `data.leaderboard_score()`;
 `replay::recorder::seal_run` seals `u64::from(data.leaderboard_score())`;
 `host::report_score`/`report_game_over` report `leaderboard_score()` too —
@@ -606,6 +754,71 @@ hole_index 3 strokes 8 results [Some(2), Some(8), Some(8), Some(8), None, ...]
 A verdict that matches with `score: 0` and `hole_index: 0` is a bot that never
 scored, and a checksum that proves nothing.
 
+### Verify the tamper test fails for the right reason
+
+`tests/selftest.rs`'s `tampered_inputs_do_not_verify` is copied in, and a
+test that passes vacuously is worse than no test. The template's version
+tampers with the **back half** of the runs (strip every `latched` bit, flip
+the D-pad bits in `held`), asserts the untampered replay verifies first, and
+asserts the re-simulated **checksum differs** from the claimed one — not
+just `matches == false`, which a decode error or a score-only difference
+would also produce.
+
+The reason it is shaped that way: the original flipped one bit in
+`runs[0]`, which assumes tick-1 input moves the sim. Any game that opens on
+an intro card, a title plaque or a countdown ignores tick-1 input entirely,
+so the tampered replay reproduced the claimed checksum and the test reported
+"tampering detected" when it had detected nothing.
+
+After the port, prove it on this game:
+
+```bash
+cargo test --all-features tampered_inputs_do_not_verify -- --nocapture
+```
+then break it on purpose — narrow the tamper to `runs[0].held ^= 4` — and
+confirm it now **fails** for your game. If the one-bit version still passes,
+the back-half version is the one doing the work and you have just learned
+that your game's opening ticks are inert. If neither fails, the selftest
+script is not exercising anything the checksum folds; fix the script, not
+the test.
+
+## The autopilot and the accumulator
+
+Two facts about `VirtualInput` that only start to matter once the sim reads
+`TickInput`. Both cost a wave-1 port a debugging session.
+
+**Order the bot before `accumulate_input`, not before `collect_input`.**
+`gamebient-input` registers `accumulate_input.before(collect_input)`, so
+ordering a bot only against `collect_input` leaves the bot and the
+accumulator unordered relative to each other and Bevy's schedule builder
+picks. A tap written after the accumulator has run is folded into the
+per-frame `GameInput` and never reaches a fixed tick — so the bot presses
+buttons the sim, and therefore the replay, never sees. `rollout-replay.sh`
+rewrites this in a game's `src/game/autopilot.rs` automatically; check any
+other system that writes `VirtualInput` (a `--sim` harness bot, a demo
+attract mode) by hand:
+
+```rust
+// before — insufficient once the sim reads TickInput
+drive_autopilot.before(gamebient_input::input::collect_input)
+// after
+drive_autopilot.before(gamebient_input::input::accumulate_input)
+```
+
+**A one-frame direction hold can miss a tick entirely.**
+`TickInput.move_x`/`move_y` derive from the accumulator's *held* set, which
+`accumulate_input` **overwrites every frame**; only press edges ride the
+`latched` bits through to the next tick. So a bot that holds a direction for
+exactly one frame lands on a tick only when that frame happens to contain
+one — on a 120 Hz display roughly half its steps vanish, and the failure is
+silent and frame-rate-dependent. Grand Theft Auto-Reply's first autopilot
+tour after the port quietly lost its `06-mission-passed` beat to this.
+
+The pattern: re-emit the direction for at least two frames (a `MOVE_SECS`
+cooldown works, and still reads as a single step as long as it stays inside
+the 0.32 s auto-repeat delay). Taps are unaffected — that is what `latched`
+is for.
+
 ## What may stay in `Update`
 
 A system may stay in `Update`, ungated by `SimSet`, only if it writes
@@ -615,12 +828,49 @@ system before trusting this: if it writes a component the sim also reads
 (e.g. a `Transform` the physics also moves) or a resource `checksum_tick`
 or the game's own checksum system folds, it must move into the chain.
 
-**The test that proves a system is safe to leave in `Update`:** remove it
-entirely (comment it out) and re-run
+**The test that proves a system is *value*-safe:** remove it entirely
+(comment it out) and re-run
 `cargo run --features verify --bin verify -- --selftest`. If the printed
 checksum is unchanged, the system's output isn't part of what the replay
-reproduces and it's safe where it is. If the checksum changes, the system
-was folding into game state after all and belongs in the chain.
+reproduces. If the checksum changes, the system was folding into game state
+after all and belongs in the chain.
+
+**That test proves value-safety only, and CANNOT detect the archetype
+trap.** Deleting a decorator changes nothing about a headless checksum,
+because there is no decoration in a headless run — the selftest never
+renders, so the system under test never ran in the first place. A decorator
+can pass this check perfectly and still desync every rendered run, by moving
+the entities it touches into a different archetype (see "The two order traps"
+above). It is exactly the check Grand Theft Auto-Reply's port passed.
+
+**The test that does detect it:** `tests/archetype_order.rs`, copied into
+every game by the rollout script. It records the selftest script twice — once
+in a plain headless app, once in a headless app that also runs `Update`
+systems inserting inert markers onto the entities the sim queries — and
+asserts the two agree on score, checksum and ticks, and that the decorated
+recording still `verify()`s in a plain app (which is the production question:
+the browser records decorated, Node verifies bare). Repeated over several
+seeds at 1, 2 and 3 sim ticks per frame, because at one tick per frame the
+`Update` decoration and the `FixedUpdate` sim interleave one-to-one and a
+reorder can stay hidden.
+
+**Extend its markers to your game's real decorators during the port** — as
+shipped it is a smoke test, since the template's sim queries one entity and
+one entity has no order to get wrong. It also does not *compile* unadapted in
+most games: the template's version references the template's own `Player`.
+(That is why `rollout-replay.sh --upgrade` refuses to create the file when a
+game does not already have one, and asks for it instead.) Two things matter
+when you adapt it:
+
+* **Reproduce the branching.** A decorator that attaches a different
+  component set to different entities (golden crumbs get a sparkle, rivals
+  get a mood) is what splits one archetype into several. Markers that are
+  identical for every entity cannot reproduce the bug.
+* **Keep the child spawn.** `ChildOf` puts `Children` on the *parent*, so a
+  decorator that only spawns children still moves its parent's archetype.
+
+The file's own doc comment carries both, plus how to extend `trace_order` for
+the queries your order-sensitive sim systems iterate.
 
 **Before / after (the pilot's specific Update-vs-SimSet split)** — Cannonball
 Putt's ten chained `Update` systems split six/four. The six that moved into
@@ -752,10 +1002,23 @@ value moved and, usually, which call produced it.
 
 When the bisect confirms drift, no workflow change is needed — the
 native-vs-Node step (`Cross-check the native fixture under Node`) is already
-`continue-on-error: true` — but write the measurement down in the game's PR
-and in its `docs/replay-verification.md`: the two checksums, the agreeing
-`score` and `ticks`, and the first tick at which they part. The next person
-should not have to redo the bisect.
+`continue-on-error: true` — but write the measurement down: the two
+checksums, the agreeing `score` and `ticks`, the first tick at which they
+part, and the call site responsible. The next person should not have to redo
+the bisect.
+
+**Write it in the game's own `docs/replay-notes.md`, never in
+`docs/replay-verification.md`.** That second file is copied verbatim from the
+template into every game, and `--upgrade` refreshes it *only while it is
+still byte-identical to a committed template version*. Appending a per-game
+section to it permanently converts it to "locally modified": the game stops
+receiving fleet-wide contract changes automatically and gets a HAND EDIT
+about it on every future upgrade instead. Dough.io did exactly this and
+called it out in its own PR.
+
+So: `docs/replay-notes.md`, a new file the game owns outright, with a pointer
+to it from the PR body. One line in the game's README or its
+`docs/conventions.md` naming the file is enough for discoverability.
 
 What does **not** get an excuse is `Verify the wasm-recorded fixture under
 Node`. Both sides of that one are wasm arithmetic, which is

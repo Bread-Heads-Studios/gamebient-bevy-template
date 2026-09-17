@@ -49,6 +49,36 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
    `sim::SimSet` (`FixedUpdate`, 60 Hz, chained) — never in `Update`. Bevy's
    `FixedUpdate` runs zero or more times per frame; `Update` code can't be
    replayed tick-for-tick.
+   A system left in `Update` must also not **insert or remove components on,
+   or spawn or despawn, any entity a `SimSet` system queries.** Inserting a
+   presentation component onto a sim entity moves it to a different
+   archetype, and archetype order is the order a `Query` iterates in — so the
+   windowed game iterates one order and the verifier, which adds no render
+   plugins and therefore never performs the insert, iterates another. The
+   fixtures never catch it (nothing renders during a selftest); only replays
+   of real, rendered runs diverge. Grand Theft Auto-Reply hit exactly this:
+   `src/assets/` decorated live `Email` and `Projectile` entities that
+   `inbox::tick_emails` and `combat::advance_projectiles` iterate. Put the
+   presentation on a child entity, or move the insert into the chain.
+   The "delete the system and re-run `--selftest`" check cannot detect this
+   — a headless run never decorates, so deleting the decorator changes
+   nothing. `tests/archetype_order.rs` is the test that can: it records the
+   scripted run with and without the decoration and asserts both that the
+   checksums agree and that the decorated recording still `verify()`s in a
+   bare app, across several seeds and tick-per-frame cadences.
+
+   *Sorting discipline*, the same hazard from the other end: any sim system
+   that iterates a `Query` and accumulates **order-sensitively** — a running
+   multiplier, pushing into a `Vec` the sim later reads in order, a
+   sequential float threshold, "the first entity within range wins" — must
+   sort by a stable per-entity key first (a slot index, a spawn sequence
+   number, an id the sim assigns — *not* `Entity`, whose value depends on
+   allocation order). Query iteration order is an implementation detail of
+   the archetype layout even where nothing inserts. The test is not "is the
+   operator commutative" — float `+` and `*` are, and still move their last
+   bit when reordered, which the checksum folds — but "would reordering the
+   operands change the value". Integer sums, maxes, counts and bitwise ORs do
+   not care; a `checksum_<game>` system's per-entity folds always do.
 2. **`TickInput`, not `GameInput`, in sim systems.** `GameInput` is a
    per-frame resource for menus/UI; the sim reads the once-per-tick
    `TickInput` the replay actually records.
@@ -123,12 +153,22 @@ fixture). `tools/rollout-replay.sh --upgrade <game-dir>` pulls it forward:
 each copied file that is byte-identical to *any* committed template version
 is a stale verbatim copy and is overwritten with the current one, while a
 file that matches no template version was edited in the game and is left
-untouched with a `HAND EDIT:` naming the template commit to diff against
-(`src/game/replay/selftest.rs` is exempt — after the port it is the game's
-own script). Refreshing `sim.rs` generally changes the checksum, so
+untouched with a `HAND EDIT:` naming the template commit to diff against.
+`src/game/replay/selftest.rs` is narrower: it is refreshed while it is
+still byte-identical to a committed template version (nobody replaced the
+skeleton), and once it is the game's own script it is left alone with no
+`HAND EDIT:`, since there is nothing to act on. Refreshing `sim.rs` generally changes the checksum, so
 regenerate both fixtures afterwards; the resulting build id change
 invalidates nothing, since the site selects a verifier module by each
 replay's own `build` field.
+
+**Keep game-specific notes out of this file.** It is copied verbatim into
+every game, and `--upgrade` refreshes it only while the game's copy is still
+byte-identical to a committed template version. A per-game addition — a
+native-vs-wasm drift measurement, a "this game ships only the wasm fixture"
+caveat — permanently marks it locally modified, so the game stops receiving
+fleet-wide contract changes and gets a HAND EDIT about it on every upgrade
+instead. Those belong in a game-local `docs/replay-notes.md`.
 
 ## Commands
 

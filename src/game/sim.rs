@@ -162,8 +162,40 @@ impl RunSeed {
 }
 
 /// A host-supplied seed waiting for the next run.
+///
+/// **This, not `GameRng`, is what a test harness must set.** `begin_run`
+/// overwrites `GameRng` on every `OnEnter(Playing)` from `RunSeed`, so a
+/// harness that inserts its own seeded RNG resource before entering `Playing`
+/// has it silently thrown away and runs on a locally drawn seed instead —
+/// deterministic-looking code that is not. Stage the seed here and let
+/// `begin_run` do the reseeding, exactly as a host-issued seed does; see
+/// [`seed_bytes`] for widening a `u64` harness seed to the 32 bytes this
+/// takes.
 #[derive(Resource, Debug, Default)]
 pub struct PendingSeed(pub Option<[u8; 32]>);
+
+/// Widens a harness/CLI `u64` seed into the 32 bytes [`PendingSeed`] takes.
+///
+/// Test harnesses and balance sweeps are seeded with a plain integer; the
+/// replay format carries 32 bytes. This is the one conversion, so a game's
+/// `--seed 7` means the same run everywhere. It is a fixed, documented
+/// expansion (the `u64` little-endian, repeated across all four 8-byte
+/// lanes with a per-lane counter mixed in so the lanes differ), not a hash:
+/// it must never change, or every recorded harness seed means something
+/// different afterwards.
+pub fn seed_bytes(seed: u64) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    // Indexed rather than `chunks_exact_mut(8)`: newer clippy rejects a
+    // constant chunk size in favour of `as_chunks_mut`, which is not stable
+    // on every toolchain the fleet builds with. This compiles everywhere.
+    for lane in 0..4usize {
+        let mixed = seed
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(lane as u64);
+        out[lane * 8..lane * 8 + 8].copy_from_slice(&mixed.to_le_bytes());
+    }
+    out
+}
 
 /// The one RNG the sim may use. Xoshiro256++ explicitly: `SmallRng` picks a
 /// different algorithm on wasm32, which would break native-vs-wasm replay.
@@ -296,6 +328,39 @@ pub fn checksum_tick(data: Res<GameData>, tick: Res<SimTick>, mut sum: ResMut<Ch
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seed_bytes_is_deterministic_distinct_and_stable() {
+        // Same input, same output — the whole point.
+        assert_eq!(seed_bytes(7), seed_bytes(7));
+        // Different inputs must not collide, or two harness seeds would be
+        // the same run.
+        assert_ne!(seed_bytes(7), seed_bytes(8));
+        assert_ne!(seed_bytes(0), seed_bytes(u64::MAX));
+        // The four 8-byte lanes must differ, or the RNG is seeded with one
+        // value repeated and loses entropy.
+        let b = seed_bytes(7);
+        let lanes: Vec<&[u8]> = (0..4).map(|l| &b[l * 8..l * 8 + 8]).collect();
+        for (i, a) in lanes.iter().enumerate() {
+            for (j, other) in lanes.iter().enumerate().skip(i + 1) {
+                assert_ne!(a, other, "lanes {i} and {j} are identical");
+            }
+        }
+        // Pinned: changing this expansion silently changes what every
+        // recorded harness seed means.
+        assert_eq!(
+            seed_bytes(1),
+            [
+                0x15, 0x7c, 0x4a, 0x7f, 0xb9, 0x79, 0x37, 0x9e, 0x16, 0x7c, 0x4a, 0x7f, 0xb9, 0x79,
+                0x37, 0x9e, 0x17, 0x7c, 0x4a, 0x7f, 0xb9, 0x79, 0x37, 0x9e, 0x18, 0x7c, 0x4a, 0x7f,
+                0xb9, 0x79, 0x37, 0x9e,
+            ]
+        );
+        // And it really does drive the RNG apart.
+        let mut x = GameRng::from_seed(&seed_bytes(7));
+        let mut y = GameRng::from_seed(&seed_bytes(8));
+        assert_ne!(x.0.next_u64(), y.0.next_u64());
+    }
 
     #[test]
     fn tick_duration_is_sixty_hz() {
