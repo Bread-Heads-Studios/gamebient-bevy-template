@@ -143,23 +143,31 @@ slot, a spawn sequence number, a grid index. **Not `Entity`** — its value
 depends on allocation order, which is exactly what is in question.
 
 ```rust
-// before: order-sensitive over whatever order the archetype happens to give
-for (mut email, fuse) in &mut emails {
-    combo *= email.multiplier;
+// before: whatever order the archetype happens to give
+for email in &emails {
+    combo *= email.multiplier;   // f32: not associative, so order IS the result
 }
 
 // after: a stable key the sim owns
-let mut live: Vec<_> = emails.iter_mut().collect();
-live.sort_by_key(|(email, _)| email.slot);
-for (mut email, fuse) in live {
+let mut live: Vec<_> = emails.iter().collect();
+live.sort_by_key(|email| email.slot);
+for email in live {
     combo *= email.multiplier;
 }
 ```
 
-A system that only reads, or that accumulates commutatively (a sum, a max, a
-count, a bitwise OR), is safe as it is — including the per-entity folds in a
-`checksum_<game>` system, as long as *those* are sorted before folding
-(which is rule 5's own advice).
+Note what that example is *not*: `*` is commutative, and it still matters,
+because f32 multiplication is not **associative** — reordering the operands
+moves the last bit, and the checksum folds bits. So "the operator is
+commutative" is not the test; "would reordering the operands change the
+value" is. Integer sums, maxes, counts and bitwise ORs genuinely do not care,
+and neither does a system that only reads.
+
+The per-entity folds in a `checksum_<game>` system are the most
+order-sensitive code in the game by construction — a hash is order-dependent
+by design — so those must **always** be sorted before folding, commutative
+accumulator or not. That is rule 5's own advice; this clause is the rest of
+the sim.
 
 `tools/rollout-replay.sh` prints an **advisory** HAND EDIT for this, as
 `<file>:<Component>` pairs: a file outside `src/game/` that takes an entity

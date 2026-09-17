@@ -68,9 +68,11 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
    sort by a stable per-entity key first (a slot index, a spawn sequence
    number, an id the sim assigns — *not* `Entity`, whose value depends on
    allocation order). Query iteration order is an implementation detail of
-   the archetype layout even where nothing inserts; a system that only
-   reads, or that accumulates commutatively (a sum, a max, a count), is safe
-   as it is.
+   the archetype layout even where nothing inserts. The test is not "is the
+   operator commutative" — float `+` and `*` are, and still move their last
+   bit when reordered, which the checksum folds — but "would reordering the
+   operands change the value". Integer sums, maxes, counts and bitwise ORs do
+   not care; a `checksum_<game>` system's per-entity folds always do.
 2. **`TickInput`, not `GameInput`, in sim systems.** `GameInput` is a
    per-frame resource for menus/UI; the sim reads the once-per-tick
    `TickInput` the replay actually records.
