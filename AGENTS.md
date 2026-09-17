@@ -129,3 +129,8 @@ These cost real debugging time on the project this template was extracted from:
   `rand_xoshiro::Xoshiro256PlusPlus` explicitly.
 - **The wasm verifier must not call `App::run`**: Bevy's wasm runner wants
   `window.setTimeout`, which Node lacks; `verify()` steps `app.update()` itself.
+- **`GX_BUILD_ID` must be unique per release**: `build.rs` and
+  `tools/build_verify.sh` derive the sha from `git rev-parse --short=7 HEAD`,
+  falling back to `VERCEL_GIT_COMMIT_SHA`; a build with neither fails on
+  purpose (never ships `+unknown`), because the site caches a verifier per
+  build id — every release must carry a new one.

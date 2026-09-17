@@ -111,11 +111,14 @@ jobs:
           mkdir -p build
           (cd dist && zip -r ../build/gamebient-game-web.zip .)
 
-      - name: Build and zip replay verifier
+      # build.sh web -> build_web.sh already ran tools/build_verify.sh and
+      # produced dist-verify.zip at the repo root; just place it under its
+      # release asset name.
+      - name: Package replay verifier
         if: matrix.target == 'web'
         run: |
-          bash tools/build_verify.sh
-          (cd dist-verify && zip -r ../build/gamebient-game-verify.zip .)
+          mkdir -p build
+          cp dist-verify.zip build/gamebient-game-verify.zip
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

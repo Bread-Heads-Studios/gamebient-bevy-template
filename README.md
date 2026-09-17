@@ -97,6 +97,7 @@ palette) before release. Needs `rsvg-convert` (`brew install librsvg`).
 The marketplace mints from `assets/info.json`: `name`, a real one-to-two
 sentence `description`, `image` → the cover, `attributes` (Genre, Platform,
 Players), and `properties` with `game_url`/`demo_url` (the live Vercel host),
+`verify_url` (the web deploy's `/verify.zip`, built by `build_web.sh`),
 `binary_url` (the flat cartridge tarball the release workflow produces) and
 `binary_type: "bevy-tar"`. Fill in the placeholder description and check every
 URL resolves before publishing.

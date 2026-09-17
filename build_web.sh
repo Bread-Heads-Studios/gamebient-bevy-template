@@ -70,6 +70,14 @@ wasm-opt -Oz \
     --enable-sign-ext \
     dist/gamebient-game_bg.wasm -o dist/gamebient-game_bg.wasm
 
+# Build the headless replay verifier and publish it alongside the game bundle
+# as dist/verify.zip — the site fetches it from properties.verify_url. Run
+# after this script's own wasm-bindgen/wasm-opt steps (and after the `find`
+# above, which already excludes verify.wasm by name) so there's no ambiguity
+# about which .wasm is the game bundle.
+bash tools/build_verify.sh
+cp dist-verify.zip dist/verify.zip
+
 # --- Content-hash the immutable assets ---------------------------------------
 # index.html stays unhashed (served no-cache); the wasm and the JS glue get an
 # 8-char content hash so vercel.json can mark them immutable and repeat visits
