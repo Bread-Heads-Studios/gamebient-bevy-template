@@ -671,11 +671,13 @@ filters, not the system name.
 ## Native vs Node mismatch: telling ulp drift from a real bug
 
 Step 5 of the skill compares the native verifier against the Node one, and
-`docs/replay-verification.md`'s Caveat says a game whose sim calls
-`sin`/`cos`/`powf` may see them disagree because native libm and wasm are not
-required to round transcendental functions identically. That is a real
-escape hatch and also a very convenient excuse, so prove which one you are
-looking at before reaching for `continue-on-error: true`.
+`docs/replay-verification.md` ("Two fixtures, and which one is the gate")
+says a game whose sim calls `sin`/`cos`/`powf` may see them disagree because
+native libm and wasm are not required to round transcendental functions
+identically. CI already treats that comparison as informational, so nothing
+turns red on its own — which makes it a very convenient excuse. Prove which
+one you are looking at before you write "it's just libm" in a PR, because
+the same symptom is what a genuine desync looks like from a distance.
 
 **Read the verdicts first.** Ulp drift shows up as *identical* `score` and
 `ticks` with a different `checksum` — the sim played exactly the same game,
@@ -691,33 +693,71 @@ tick. A system left in `Update`, a stray `rand::rng()` or a `HashMap`
 iteration does not behave like that: it desynchronises the *run*, so the
 score and usually the tick count move too.
 
-**Then bisect with a replay that avoids the suspect math.** Build a replay of
-N empty ticks (`push_tick(0, 0, 0, 0)`), verify it natively, seal its own
-answer as the claim, write it out, and run Node on the file. Pick an N that
-keeps the game in a state where nothing transcendental runs — for Cannonball
-Putt that is "before any shot is fired", so no `power_meter` (cos),
-`shot_velocity` (`Vec2::from_angle`) or `tilt_accel` (sin) is ever called:
+**Then bisect the real replay by truncated prefix.** The question to answer
+is *where* the two sides part company, and the cheapest instrument is the
+failing replay itself, cut short. Decode it, keep only the first N ticks of
+its runs, fix the header's `ticks` to match (the claimed `score` and
+`checksum` are now meaningless and both verifiers will say `matches: false` —
+ignore that and read the **printed `checksum`**), then run both verifiers on
+the truncated file and compare. Binary-search N for the first tick at which
+the two checksums differ.
 
-```rust
-for n in [60u32, 300, 900] {
-    let mut r = /* n ticks of push_tick(0, 0, 0, 0) */;
-    let v = verify(&r);
-    r.score = v.score;
-    r.checksum = v.checksum;
-    std::fs::write(format!("build/replays/probe-{n}.gxr"), r.encode()).unwrap();
-}
+Save this as `tools/truncate_gxr.py` for the duration of the hunt:
+
+```python
+import struct, sys
+src, dst, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
+b = bytearray(open(src, "rb").read())
+hdr = 4 + 1 + b[4] + 2 + 32 + 1        # magic, build, tick_hz, seed, origin -> `ticks`
+runs_at = hdr + 4 + 8 + 8              # ticks, score, checksum -> run count
+(nruns,) = struct.unpack_from("<I", b, runs_at)
+out, left = bytearray(), n
+for r in range(nruns):
+    if left == 0:
+        break
+    o = runs_at + 4 + r * 8            # held u16, latched u16, ax i8, ay i8, count u16
+    take = min(struct.unpack_from("<H", b, o + 6)[0], left)
+    left -= take
+    out += b[o:o + 6] + struct.pack("<H", take)
+assert left == 0, f"replay has fewer than {n} ticks"
+struct.pack_into("<I", b, hdr, n)      # header `ticks` must equal the run-count sum
+open(dst, "wb").write(bytes(b[:runs_at]) + struct.pack("<I", len(out) // 8) + bytes(out))
 ```
-```
-probe-60  node: {"score":0,"checksum":"17727649758524066137",…,"matches":true}
-probe-300 node: {"score":0,"checksum":"15235349493428633922",…,"matches":true}
-probe-900 node: {"score":0,"checksum":"14301338000482344684",…,"matches":true}
+(the layout it walks is the `GXR1` table in `docs/replay-verification.md`.)
+
+```bash
+N=1800
+python3 tools/truncate_gxr.py build/replays/<ms>.gxr /tmp/p.gxr $N
+cargo run -q --features verify --bin verify -- /tmp/p.gxr   # native checksum
+node tools/verify_fixture.mjs /tmp/p.gxr                    # wasm checksum
 ```
 
-Bit-identical across 900 ticks with no transcendental in the loop, diverging
-only once one runs, is the evidence that justifies the caveat. If the empty
-probe *already* diverges, it is not libm — go back to the rules.
+Read only the `checksum` field, and halve or double N until you have the
+first N where they disagree.
 
-When you do mark the CI step `continue-on-error: true`, put the measurement in
-the comment (the two checksums, the agreeing score and ticks, and the probe
-result) so the next person does not have to rediscover it, and say out loud
-that `cargo test`'s native `--selftest` is now the regression coverage.
+What ulp drift looks like under this bisect: the two sides stay
+**bit-identical for a long stretch**, often many hundreds of ticks *after*
+the first `sin`/`cos`/`powf` call, and then diverge at one specific tick —
+because libm implementations agree on most arguments and differ on a few. So
+"the first transcendental runs at tick 40 and the checksums first differ at
+tick 1173" is the expected shape, not a contradiction. What a real bug looks
+like: the divergence point tracks something structural (the first RNG draw,
+the first spawn, the tick a `HashMap` is iterated) and the run's `score` or
+`ticks` move with it.
+
+Having the exact tick also tells you what to read. Diff the folded state at
+that tick — add a temporary `eprintln!` in the game's own `checksum_<game>`
+system for `tick == N` and run both verifiers again — and you will see which
+value moved and, usually, which call produced it.
+
+When the bisect confirms drift, no workflow change is needed — the
+native-vs-Node step (`Cross-check the native fixture under Node`) is already
+`continue-on-error: true` — but write the measurement down in the game's PR
+and in its `docs/replay-verification.md`: the two checksums, the agreeing
+`score` and `ticks`, and the first tick at which they part. The next person
+should not have to redo the bisect.
+
+What does **not** get an excuse is `Verify the wasm-recorded fixture under
+Node`. Both sides of that one are wasm arithmetic, which is
+spec-deterministic, so a failure there is a real determinism regression no
+matter how many transcendentals the sim calls.
