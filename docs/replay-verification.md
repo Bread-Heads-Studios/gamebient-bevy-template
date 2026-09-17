@@ -65,16 +65,32 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
    nothing. `tests/archetype_order.rs` is the test that can: it records the
    scripted run with and without the decoration and asserts both that the
    checksums agree and that the decorated recording still `verify()`s in a
-   bare app, across several seeds and tick-per-frame cadences.
+   bare app, across several seeds and tick-per-frame cadences. It runs two
+   decoration modes, and a port must keep both: `faithful` mirrors the
+   game's real decorators (it documents the real partitioning), while
+   `split` additionally halves every sim archetype on a key the sim cannot
+   see (it is the detector). Measured on Dough.io against a real,
+   score-changing instance of this bug: the faithful mode passed 18/18 by
+   luck and the split mode failed 2/18.
 
    *Sorting discipline*, the same hazard from the other end: any sim system
    that iterates a `Query` and accumulates **order-sensitively** — a running
    multiplier, pushing into a `Vec` the sim later reads in order, a
    sequential float threshold, "the first entity within range wins" — must
-   sort by a stable per-entity key first (a slot index, a spawn sequence
-   number, an id the sim assigns — *not* `Entity`, whose value depends on
-   allocation order). Query iteration order is an implementation detail of
-   the archetype layout even where nothing inserts. The test is not "is the
+   sort by a stable per-entity key first. **`sim::SpawnOrder` is that key**,
+   and it is the recommended one: a monotonic index the sim stamps on an
+   entity as it spawns it, from `sim::SpawnCounter`, which `sim::begin_run`
+   rewinds to 0 at the start of every run so a replay sorts by the same
+   numbers the recorded run did. It is in `src/game/sim.rs`, so
+   `tools/rollout-replay.sh` copies it into every game — there is nothing to
+   write. A game-owned equivalent (a slot index, a grid cell, a bake
+   counter) is fine where one already exists; what is *not* fine is
+   `Entity`, whose value depends on allocation order, which is exactly what
+   is in question. Query it non-optionally: an entity spawned without a key
+   then stops matching and a playtest says so, where a `Default` of 0 would
+   silently hand every un-stamped entity the same key and the tie back to
+   archetype order. Query iteration order is an implementation detail of the
+   archetype layout even where nothing inserts. The test is not "is the
    operator commutative" — float `+` and `*` are, and still move their last
    bit when reordered, which the checksum folds — but "would reordering the
    operands change the value". Integer sums, maxes, counts and bitwise ORs do
