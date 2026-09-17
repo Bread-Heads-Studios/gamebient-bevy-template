@@ -116,6 +116,8 @@ tools/build_verify.sh && node tools/verify_fixture.mjs tests/fixtures/selftest.g
 
 See [docs/replay-verification.md](docs/replay-verification.md) for the format,
 the determinism rules gameplay code must follow, and the server contract.
+Porting this into a game (not the template) is `tools/rollout-replay.sh
+<game-dir>` followed by the `rolling-out-replay-verification` skill.
 
 ## Deploying (web)
 
