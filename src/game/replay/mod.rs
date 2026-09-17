@@ -277,6 +277,19 @@ pub fn run_verify_app(app: &mut App, replay: &Replay) -> Verdict {
         if *app.world().resource::<State<GameState>>().get() != GameState::Playing {
             return Some(Ended::GameOver);
         }
+        // A queued transition counts as game over, and has to be checked
+        // before `done`. A sim that ends its own run (`sim::end_run`) sets
+        // `NextState` from `FixedUpdate`, which Bevy does not apply until
+        // the next `app.update()` — while the feeder runs dry on that same
+        // tick, because the recorder stopped recording there too
+        // (`sim::RunOver`). Checking `done` first would report every real
+        // game-over run as `input_exhausted`.
+        if !matches!(
+            *app.world().resource::<NextState<GameState>>(),
+            NextState::Unchanged
+        ) {
+            return Some(Ended::GameOver);
+        }
         if app.world().resource::<ReplayFeeder>().done {
             return Some(Ended::InputExhausted);
         }
@@ -817,17 +830,29 @@ mod tests {
             .expect("run sealed on OnExit(Playing)");
         assert_eq!(replay.ticks, END_AT);
 
-        let v = verify(&replay);
+        // Re-simulate it the way the site does -- headless, no fade -- but
+        // with the same ending system in the chain, which is what a real
+        // game's own game-over system is. `verify()` alone would replay 30
+        // ticks of input through a sim that never ends, which reproduces the
+        // checksum but tests nothing about how the run ended.
+        let mut replayed = build_verify_app(&replay);
+        end_the_run_at_in_sim_set(&mut replayed, END_AT);
+        let v = run_verify_app(&mut replayed, &replay);
         assert!(v.matches, "{v:?}");
-        assert_eq!(v.ticks, END_AT);
-        // `Ended::InputExhausted`, not `GameOver`: the replay carries exactly
-        // the ticks the sim ran, so the feeder runs dry on the same tick the
-        // headless `end_run` queues the transition -- and `NextState` is not
-        // applied until the next update, one `check_ended` too late. Which
-        // of the two end reasons wins is bookkeeping; `matches` is the
-        // verdict. See `a_sim_that_ends_before_its_input_reports_gameover`
-        // for the other ordering.
-        assert_eq!(v.ended, Ended::InputExhausted);
+        assert_eq!(v.ticks, END_AT, "{v:?}");
+        // The run ended because the sim ended it, on its last recorded tick
+        // -- the feeder runs dry on that same tick, so this only reports
+        // `gameover` because `check_ended` looks at the queued `NextState`
+        // before it looks at `ReplayFeeder::done`.
+        assert_eq!(v.ended, Ended::GameOver, "{v:?}");
+
+        // The contrast: the same replay through a sim with no ending system
+        // reproduces exactly the same numbers and reports `input_exhausted`,
+        // because nothing queued a transition -- the input simply ran out.
+        let plain = verify(&replay);
+        assert_eq!(plain.ended, Ended::InputExhausted, "{plain:?}");
+        assert_eq!(plain.ticks, v.ticks);
+        assert_eq!(plain.checksum, v.checksum);
     }
 
     #[test]

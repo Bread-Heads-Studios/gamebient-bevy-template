@@ -185,6 +185,18 @@ loading it is the expensive part, `verify()` itself is sub-second. The
 replay header's `build` field is what selects which release's
 `gamebient-game-verify.zip` to load.
 
+`ended` says why the re-simulation stopped, and is diagnostic — `matches` is
+the verdict. A run the sim ended itself (rule 10: `sim::end_run` latches
+`RunOver` and queues `NextState(GameOver)`) reports **`gameover`**, which is
+what every real run that reaches the game-over screen produces. That takes a
+deliberate ordering in `run_verify_app`: such a run's replay carries exactly
+the ticks it simulated, so the feeder runs dry on the very tick the
+transition is queued, and a queued `NextState` is therefore checked *before*
+`ReplayFeeder::done`. `input_exhausted` means the input ran out with the run
+still live — a quit-to-title, or a selftest replay whose script simply
+stopped. `cap` means the sim outran `ticks + 60` without ending, which is a
+determinism failure dressed as a timeout.
+
 ## Two fixtures, and which one is the gate
 
 `tests/fixtures/` holds two recordings of the same scripted selftest run:
@@ -193,6 +205,13 @@ replay header's `build` field is what selects which release's
 |---|---|---|---|
 | `selftest-wasm.gxr` | the wasm verifier module | wasm, under Node (CI) | **the gate** |
 | `selftest.gxr` | the native build | native (`cargo test`), and informationally by Node | native regression check |
+
+Both files' header `build` lags `HEAD` by construction: it is the
+`GX_BUILD_ID` of the commit that recorded them, and any commit after that
+leaves it behind. Nothing in verification reads it — `verify()` re-simulates
+from the seed and inputs alone, and `build` only matters to the *site*, which
+uses it to pick which release's verifier module to load. A fixture whose
+`build` disagrees with `HEAD` is normal, not stale.
 
 `selftest-wasm.gxr` is the one CI blocks on, because both sides of that
 comparison are wasm arithmetic — which is exactly what ships: the browser
