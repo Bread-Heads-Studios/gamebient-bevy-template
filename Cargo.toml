@@ -2,6 +2,9 @@
 name = "gamebient-game"
 version = "0.1.0"
 edition = "2024"
+# `cargo run` / `cargo run --features verify` is ambiguous with two [[bin]]
+# targets; name the game explicitly.
+default-run = "gamebient-game"
 
 [lib]
 name = "gamebient_game"

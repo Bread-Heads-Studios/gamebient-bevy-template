@@ -6,7 +6,8 @@
 # split + features + deps, src/lib.rs + src/main.rs, the `pub mod
 # replay`/`sim` + `GamePlugin { headless }` shape in src/game/mod.rs,
 # build_web.sh's verify.zip step, the CI/release workflow steps, .gitignore,
-# and assets/info.json's verify_url. Idempotent. The script never edits a
+# assets/info.json's verify_url, and src/game/host.rs's HostCommand::Seed arm
+# + optional GlobalVolume. Idempotent. The script never edits a
 # copied file's contents (the two exceptions — src/bin/verify.rs and
 # tests/selftest.rs — get only a mechanical `gamebient_game::` ->
 # `<snake>::` crate-path substitution; see the comment at that copy step).
@@ -47,11 +48,6 @@ if grep -rn "ButtonInput<KeyCode>" "$GAME/src/game" --include="*.rs" 2>/dev/null
 fi
 if [ -f "$GAME/src/game/autopilot.rs" ] && grep -n 'data\.\w* = ' "$GAME/src/game/autopilot.rs" | grep -q .; then
   echo "HAND EDIT: src/game/autopilot.rs: writes GameData fields directly (dev-only; keep that path out of the selftest script)"
-fi
-if [ -f "$GAME/src/game/host.rs" ] && grep -q 'match command' "$GAME/src/game/host.rs" \
-  && ! grep -q 'HostCommand::Seed' "$GAME/src/game/host.rs" \
-  && ! grep -qE '^\s*_\s*=>' "$GAME/src/game/host.rs"; then
-  echo "HAND EDIT: src/game/host.rs: gamebient-input v0.3.0 added HostCommand::Seed; add 'HostCommand::Seed(bytes) => pending.0 = Some(*bytes)' (needs a 'mut pending: ResMut<sim::PendingSeed>' param) to apply_host_commands so host-supplied seeds reach the sim, or the match won't compile"
 fi
 
 # ---------------------------------------------------------------------------
@@ -170,6 +166,17 @@ sub spit {
             my $block = "\n[lib]\nname = \"$snake\"\npath = \"src/lib.rs\"\n\n[[bin]]\nname = \"$pkg\"\npath = \"src/main.rs\"\n\n[[bin]]\nname = \"verify\"\npath = \"src/bin/verify.rs\"\nrequired-features = [\"verify\"]\n";
             unless ($c =~ s/(edition = "2024"\n)/$1$block/) {
                 hand_edit("Cargo.toml: no 'edition = \"2024\"' line to anchor the [lib]/[[bin]] blocks on; add them by hand");
+            }
+        }
+
+        # After the [lib] insertion above, so it lands between `edition` and
+        # the blank line that starts the [lib] block -- i.e. still inside
+        # [package], which is the only place cargo accepts it. Without it
+        # `cargo run` is ambiguous the moment the verify bin exists.
+        if ($c !~ /^default-run = /m) {
+            my $line = "# `cargo run` / `cargo run --features verify` is ambiguous with two [[bin]]\n# targets; name the game explicitly.\ndefault-run = \"$pkg\"\n";
+            unless ($c =~ s/(^edition = "2024"\n)/$1$line/m) {
+                hand_edit("Cargo.toml: no 'edition = \"2024\"' line to anchor 'default-run = \"$pkg\"' on; add it under [package] by hand or `cargo run` stays ambiguous");
             }
         }
 
@@ -306,11 +313,81 @@ sub spit {
         # this script cannot safely touch (system ordering, what stays in
         # Update vs moves into sim::SimSet, what this game's own checksum
         # system folds).
-        hand_edit('src/game/mod.rs: port GamePlugin::build to run gameplay through sim::SimSet, gate scene/audio/dev-harness setup on !self.headless, and add a checksum_<game> system after sim::checksum_tick folding your key run state (see docs/replay-verification.md rule 6). CI\'s Node fixture step will fail until tests/fixtures/selftest.gxr is generated (skill step 4)');
+        hand_edit('src/game/mod.rs: port GamePlugin::build to run gameplay through sim::SimSet, gate scene/audio/dev-harness setup on !self.headless, and add a checksum_<game> system after sim::checksum_tick folding your key run state (see docs/replay-verification.md rule 6). Three specifics that cost the pilot hours: (a) the set\'s run condition is THREE clauses -- sim::SimSet.run_if(in_state(GameState::Playing).and(states::not_paused).and(sim::run_not_over)) -- plus .init_resource::<sim::RunOver>(), or the game-over fade adds a frame-rate-dependent tail of ticks the verifier cannot reproduce (rule 10); (b) every system the headless app runs must take resources the headless app actually has -- assets in particular: GameAssets/Assets<Mesh>/Assets<StandardMaterial> are only inserted by the windowed build, so a spawn system needs Option<Res<GameAssets>> and an asset-free branch, or Bevy fails it with \"Parameter ... failed validation\" and no system name; (c) CI\'s Node fixture steps fail until tests/fixtures/selftest.gxr AND tests/fixtures/selftest-wasm.gxr are generated (skill step 4)');
 
         spit($path, $c) if $c ne $orig;
     } else {
         hand_edit("no src/game/mod.rs found (flat layout?); declare 'pub mod replay'/'pub mod sim' and port GamePlugin by hand");
+    }
+}
+
+# ---------- src/game/host.rs ----------
+#
+# Two edits every game written against the template's pre-v0.3.0 host.rs
+# needs, and both are hard failures rather than warnings:
+#
+#   * `mut global_volume: ResMut<GlobalVolume>` — `GlobalVolume` is inserted
+#     by Bevy's `AudioPlugin`, which the headless verifier never adds, so the
+#     system fails Bevy's parameter validation with a message that names no
+#     system. This was the real cause of the pilot's "8 red tests".
+#   * `HostCommand::Seed` — added by gamebient-input v0.3.0 (which this
+#     script pins). A `match command` with no wildcard arm stops compiling
+#     the moment the tag bumps, and without the arm a host-issued seed never
+#     reaches `sim::PendingSeed`, so every run would be `origin = Local`.
+{
+    my $path = "$game/src/game/host.rs";
+    my $c = slurp($path);
+    if (defined $c) {
+        my $orig = $c;
+
+        if ($c !~ /global_volume:\s*Option<ResMut<GlobalVolume>>/) {
+            my $comment = "    // `GlobalVolume` is only inserted by `AudioPlugin`, which the headless\n"
+                        . "    // build (no window, no audio) never adds — read as optional so a host\n"
+                        . "    // `mute` doesn't panic there.\n";
+            unless ($c =~ s/^[ \t]*mut global_volume: ResMut<GlobalVolume>,\n/$comment    mut global_volume: Option<ResMut<GlobalVolume>>,\n/m) {
+                hand_edit("src/game/host.rs: 'mut global_volume: ResMut<GlobalVolume>,' not found in apply_host_commands; make it Option<ResMut<GlobalVolume>> by hand — the headless verifier has no AudioPlugin and Bevy rejects the system with a nameless \"Parameter ... failed validation\"");
+            }
+        }
+        # The `Mute` arm then has to cope with the Option.
+        if ($c !~ /global_volume\.as_deref_mut\(\)/) {
+            unless ($c =~ s/^([ \t]*)global_volume\.volume = ([^\n]*);\n/${1}if let Some(volume) = global_volume.as_deref_mut() {\n${1}    volume.volume = ${2};\n${1}}\n/m) {
+                hand_edit("src/game/host.rs: the Mute arm's 'global_volume.volume = ...;' line not found; guard it with 'if let Some(volume) = global_volume.as_deref_mut()' by hand");
+            }
+        }
+
+        if ($c !~ /HostCommand::Seed/) {
+            if ($c =~ /^\s*_\s*=>/m) {
+                hand_edit("src/game/host.rs: apply_host_commands has a '_ =>' wildcard arm, so it compiles against gamebient-input v0.3.0 — but a host-issued seed is silently swallowed and every run stays origin = Local. Add 'HostCommand::Seed(bytes) => pending.0 = Some(*bytes),' (plus a 'mut pending: ResMut<crate::game::sim::PendingSeed>' param) explicitly");
+            } else {
+                my $before_seed = $c;
+                my $ok = 1;
+                # Param: before the closing paren of apply_host_commands's
+                # signature, found by scanning forward from the fn to the
+                # first line that is exactly ") {".
+                my $fn = index($c, "fn apply_host_commands(");
+                my $close = $fn >= 0 ? index($c, "\n) {", $fn) : -1;
+                if ($close >= 0) {
+                    substr($c, $close + 1, 0) = "    mut pending: ResMut<crate::game::sim::PendingSeed>,\n";
+                } else {
+                    hand_edit("src/game/host.rs: apply_host_commands's signature doesn't end in a line of its own ') {'; add 'mut pending: ResMut<crate::game::sim::PendingSeed>' by hand");
+                    $ok = 0;
+                }
+                # Arm: after the Hello arm, which every template-derived
+                # host.rs has as the last arm of the match.
+                unless ($c =~ s/^([ \t]*)(HostCommand::Hello \{ \.\. \} => \{\}\n)/${1}${2}${1}HostCommand::Seed(bytes) => pending.0 = Some(*bytes),\n/m) {
+                    hand_edit("src/game/host.rs: no 'HostCommand::Hello { .. } => {}' arm to anchor on; add 'HostCommand::Seed(bytes) => pending.0 = Some(*bytes),' to apply_host_commands by hand, or the match won't compile against gamebient-input v0.3.0");
+                    $ok = 0;
+                }
+                # Half an edit is worse than none: it would not compile and
+                # the HAND EDIT above would be about the other half. Rewind
+                # only the Seed edits -- the GlobalVolume ones above stand.
+                $c = $before_seed unless $ok;
+            }
+        }
+
+        spit($path, $c) if $c ne $orig;
+    } else {
+        hand_edit("no src/game/host.rs found; wire HostCommand::Seed -> sim::PendingSeed and an optional GlobalVolume by hand");
     }
 }
 
@@ -327,7 +404,11 @@ sub spit {
                     . "    echo \"ERROR: no .wasm found in target/wasm32-unknown-unknown/wasm-release/\" >&2\n"
                     . "    exit 1\n"
                     . "fi\n";
-            my $new = "WASM=\$(find target/wasm32-unknown-unknown/wasm-release -maxdepth 1 -name '*.wasm' ! -name 'verify.wasm')\n"
+            my $new = "# verify.wasm is excluded by name: tools/build_verify.sh builds the replay\n"
+                    . "# verifier into the same directory, and shipping it as the game would deploy a\n"
+                    . "# module with no window, renderer or assets. Anything else unexpected in there\n"
+                    . "# is a hard error rather than a coin flip about which .wasm gets deployed.\n"
+                    . "WASM=\$(find target/wasm32-unknown-unknown/wasm-release -maxdepth 1 -name '*.wasm' ! -name 'verify.wasm')\n"
                     . "if [ -z \"\$WASM\" ]; then\n"
                     . "    echo \"ERROR: no game .wasm found in target/wasm32-unknown-unknown/wasm-release/\" >&2\n"
                     . "    exit 1\n"

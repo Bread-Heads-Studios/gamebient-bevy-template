@@ -4,13 +4,17 @@
 #
 #   (a) a copy of this template itself -> running the script must be a
 #       no-op (it already has every feature file and wiring edit in place).
-#   (b) a copy of games/cannonball-putt -> the one documented hand edit
+#   (b) a copy of games/cannonball-putt's `main` (NOT its working tree: the
+#       point is a game that has not been ported yet, and the real checkout
+#       may be sitting on a rollout branch) -> the one documented hand edit
 #       (rename its own test-only src/game/sim.rs) is applied first, then
 #       the script must leave `cargo check --features verify` passing after
-#       the still-required per-game hand edits are applied (LeaderboardScore,
-#       plus the HostCommand::Seed match arm — see below), and its HAND EDIT
-#       output must name LeaderboardScore and the GamePlugin::build port, and
-#       nothing about sim.rs (it was renamed away before the script ran).
+#       the one still-required per-game hand edit (LeaderboardScore), and its
+#       HAND EDIT output must name LeaderboardScore and the GamePlugin::build
+#       port, and nothing about sim.rs (it was renamed away before the script
+#       ran). It must also have made the edits the pilot had to do by hand:
+#       `default-run`, host.rs's optional GlobalVolume and HostCommand::Seed
+#       arm, and build_web.sh's verify.wasm comment block.
 #   (c) a second copy of the template with release.yml's upload artifact
 #       reverted to a pre-rollout shape but its `path:` line already
 #       drifted -> the script must print a HAND EDIT naming release.yml's
@@ -56,6 +60,23 @@ snapshot_as_git_baseline() {
   )
 }
 
+# Same, but from a named git ref rather than the working tree: used for the
+# game copy, which must be a *pre-rollout* checkout regardless of what branch
+# the real repo happens to be on.
+snapshot_git_ref_as_baseline() {
+  local src="$1" ref="$2" dst="$3"
+  mkdir -p "$dst"
+  (cd "$src" && git archive "$ref") | tar -C "$dst" -xf -
+  (
+    cd "$dst"
+    git init -q
+    git config user.email test@example.com
+    git config user.name "rollout-replay test"
+    git add -A
+    git commit -q -m baseline
+  )
+}
+
 # ---------------------------------------------------------------------------
 # (a) Template copy: the script must be a no-op.
 # ---------------------------------------------------------------------------
@@ -78,7 +99,7 @@ pass "(a) template copy: rollout-replay.sh is a no-op (git status clean except C
 [ -d "$CANNONBALL" ] || fail "games/cannonball-putt not found at $CANNONBALL"
 
 COPY_B="$SCRATCH_ROOT/cannonball-putt-copy"
-snapshot_as_git_baseline "$CANNONBALL" "$COPY_B"
+snapshot_git_ref_as_baseline "$CANNONBALL" main "$COPY_B"
 
 # The one documented hand edit: cannonball-putt already has its own
 # test-only src/game/sim.rs (the shot-physics simulator used by its harness
@@ -103,20 +124,36 @@ if grep -q "sim\.rs" "$SCRATCH_ROOT/b-output.txt"; then
 fi
 pass "(b) HAND EDIT output names LeaderboardScore and the GamePlugin::build port, nothing about sim.rs"
 
-# --- A gap beyond the documented LeaderboardScore hand edit -----------------
+# --- The edits the script now makes for us ---------------------------------
 #
-# The mandated gamebient-input v0.2.0 -> v0.3.0 bump (required by the plan's
-# Global Constraints) added HostCommand::Seed. cannonball-putt's own
-# pre-existing host.rs matches HostCommand without a wildcard arm, so this
-# non-exhaustive match is a hard compile error the moment the tag bumps —
-# true for any game's host.rs written against v0.2.0, not just this one.
-# rollout-replay.sh's pre-flight now HAND EDITs it (see the "HostCommand::
-# Seed" check); wire it here the same way the template does, so
-# host-supplied seeds actually reach the sim rather than merely compiling.
-perl -0pi -e '
-  s/(mut sinks: Query<&mut AudioSink>,\n)(\) \{)/$1    mut pending: ResMut<crate::game::sim::PendingSeed>,\n$2/;
-  s/(HostCommand::Hello \{ \.\. \} => \{\}\n)/$1            HostCommand::Seed(bytes) => pending.0 = Some(*bytes),\n/;
-' "$COPY_B/src/game/host.rs"
+# Each of these cost the pilot real time as a hand edit, and each is a hard
+# failure rather than a warning if it is missed:
+#
+#   default-run            `cargo run` is ambiguous the moment the verify bin
+#                          exists, so playing the game stops working.
+#   Option<GlobalVolume>   `GlobalVolume` comes from Bevy's AudioPlugin, which
+#                          the headless verifier never adds; without the
+#                          Option the system fails Bevy's parameter validation
+#                          with a message that names no system.
+#   HostCommand::Seed      gamebient-input v0.3.0 (pinned by the script) added
+#                          the variant; a match with no wildcard arm stops
+#                          compiling, and without the arm host seeds never
+#                          reach sim::PendingSeed.
+#   build_web.sh comment   the four lines explaining why verify.wasm is
+#                          excluded from the game-bundle glob.
+grep -q '^default-run = "cannonball-putt"$' "$COPY_B/Cargo.toml" \
+  || fail "(b) Cargo.toml did not gain default-run"
+grep -q 'mut global_volume: Option<ResMut<GlobalVolume>>,' "$COPY_B/src/game/host.rs" \
+  || fail "(b) host.rs's global_volume was not made optional"
+grep -q 'if let Some(volume) = global_volume.as_deref_mut()' "$COPY_B/src/game/host.rs" \
+  || fail "(b) host.rs's Mute arm was not guarded for the optional GlobalVolume"
+grep -q 'HostCommand::Seed(bytes) => pending.0 = Some(\*bytes),' "$COPY_B/src/game/host.rs" \
+  || fail "(b) host.rs did not gain the HostCommand::Seed arm"
+grep -q 'mut pending: ResMut<crate::game::sim::PendingSeed>,' "$COPY_B/src/game/host.rs" \
+  || fail "(b) host.rs did not gain the PendingSeed param"
+grep -q "verify.wasm is excluded by name" "$COPY_B/build_web.sh" \
+  || fail "(b) build_web.sh lost the template's verify.wasm comment block"
+pass "(b) default-run, host.rs (optional GlobalVolume + HostCommand::Seed) and build_web.sh's comment block are automated"
 
 # The documented hand edit: GameData has no `score` field, so LeaderboardScore
 # must be implemented for it (the trait itself doesn't exist yet either —
@@ -143,9 +180,19 @@ RUST
 CARGO_TARGET_DIR="${TMPDIR:-/tmp}/rollout-replay-test-cargo-target"
 export CARGO_TARGET_DIR
 if (cd "$COPY_B" && cargo check --features verify); then
-  pass "(b) cargo check --features verify succeeds after the documented + discovered hand edits"
+  pass "(b) cargo check --features verify succeeds after the one documented hand edit"
 else
   fail "(b) cargo check --features verify failed"
+fi
+
+# `cargo run` must be unambiguous again: with two [[bin]] targets and the
+# verify feature on, cargo refuses to pick one without default-run.
+DEFAULT_RUN="$(cd "$COPY_B" && cargo metadata --no-deps --format-version 1 \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0].get("default_run"))')"
+if [ "$DEFAULT_RUN" = "cannonball-putt" ]; then
+  pass "(b) cargo metadata reports default_run = cannonball-putt (cargo run is unambiguous)"
+else
+  fail "(b) cargo metadata default_run is '$DEFAULT_RUN', expected 'cannonball-putt'"
 fi
 
 # ---------------------------------------------------------------------------
