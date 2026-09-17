@@ -112,6 +112,24 @@ The greppable ones (`rand::rng()`, `from_os_rng`, `thread_rng`, `SmallRng`,
 usage, checksum folding, wall-clock reads, run-end latching — aren't
 mechanically checkable and need review.
 
+## Keeping a ported game current
+
+Games are copies of this template, not dependents, so a game ported in an
+earlier wave keeps the version of `sim.rs`, `replay/`, `verify.rs`,
+`build_verify.sh` and this document that it was given — including whatever
+the template has fixed since (rule 10's `RunOver` latch, the
+`NextState`-before-`done` ordering in `run_verify_app`, the wasm-recorded
+fixture). `tools/rollout-replay.sh --upgrade <game-dir>` pulls it forward:
+each copied file that is byte-identical to *any* committed template version
+is a stale verbatim copy and is overwritten with the current one, while a
+file that matches no template version was edited in the game and is left
+untouched with a `HAND EDIT:` naming the template commit to diff against
+(`src/game/replay/selftest.rs` is exempt — after the port it is the game's
+own script). Refreshing `sim.rs` generally changes the checksum, so
+regenerate both fixtures afterwards; the resulting build id change
+invalidates nothing, since the site selects a verifier module by each
+replay's own `build` field.
+
 ## Commands
 
 ```bash
