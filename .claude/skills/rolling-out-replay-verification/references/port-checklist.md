@@ -5,9 +5,12 @@ This is that contract applied: for each rule, what a game usually looks
 like before the port, what the template's own code looks like after it (the
 `after` shapes below are quoted verbatim from this template — they're what
 `tools/rollout-replay.sh` ports in, so they're the same in every game), and
-what to grep for. Snippets marked `<!-- from pilot -->` are filled in from
-the Cannonball Putt port; until then, treat the rule's prose and the
-template's own `after` shape as the guidance.
+what to grep for. The game-specific `before`/`after` snippets are from the
+Cannonball Putt port (the pilot, `games/cannonball-putt`, PR "deterministic
+sim + replay verification") — a game with no `score` field, floats everywhere
+in its physics, and a screenshot tour that writes run state. Read them as one
+worked example, not a template: the shapes to copy are the rule's prose and
+this template's own `after` blocks.
 
 ## Rule 1 — `SimSet` only
 
@@ -17,9 +20,31 @@ systems (particles, trails, aim arrows, HUD text) may stay in `Update`
 **only if** they write nothing the sim reads and nothing `Checksum` folds —
 see "What may stay in `Update`" below.
 
-**Before** (a typical pre-port game, `Update`-gated, mutating run state):
+**Before** (a typical pre-port game, `Update`-gated, mutating run state) —
+Cannonball Putt's whole gameplay tuple before the port, presentation and sim
+chained together in one `Update` block:
 ```rust
-<!-- from pilot -->
+.add_systems(
+    Update,
+    (
+        // Order matters within the frame: input drives the shot,
+        // physics moves the ball, flow reacts to the outcome, and
+        // the visuals read the final state.
+        shot::update_shot,
+        ball::integrate,
+        ball::animate_sink,
+        hole_flow::update_hole_flow,
+        shot::update_aim_arrow,
+        hazards::advance_tilt_clock,
+        hazards::animate_flow_particles,
+        hazards::animate_tilt_indicators,
+        ball::spawn_trail,
+        ball::fade_trail,
+    )
+        .chain()
+        .run_if(in_state(GameState::Playing).and(states::not_paused)),
+)
+.add_systems(OnExit(GameState::Playing), cleanup_game_entities)
 ```
 
 **After** — the template's own `GamePlugin::build` (`src/game/mod.rs`),
@@ -82,6 +107,38 @@ Grep: `grep -n 'add_systems(Update' src/game/mod.rs` — anything that
 mutates a resource `checksum_tick` or a later system reads should be in the
 list above, not here.
 
+### What the headless app does not have
+
+`build_headless_app` is `MinimalPlugins` + `StatesPlugin` + `InputPlugin` and
+nothing else — no `AssetPlugin`, no `AudioPlugin`, no render, no `UiPlugin`.
+Any system the plugin still registers in headless mode that takes a `Res<T>`
+from one of those fails parameter validation, and Bevy reports it as
+
+```
+Encountered an error in system `Enable the debug feature to see the name`:
+Parameter `Enable the debug feature to see the name` failed validation:
+Resource does not exist
+```
+
+with no system name in a release-ish test build, so budget for a bisect unless
+you know the list. The three that bit the pilot:
+
+| Resource | Owner | Fix |
+|---|---|---|
+| `GlobalVolume` | `AudioPlugin` | `host::apply_host_commands` takes `Option<ResMut<GlobalVolume>>` (the template already does; games predating that change do not) |
+| the game's `GameAssets` | the game's `AssetsPlugin` | hole/level setup takes `Option<Res<GameAssets>>` and spawns only the entities the sim reads |
+| `ScreenFade` | `UiPlugin` | `Option<Res<…>>` / `Option<ResMut<…>>` in `toggle_pause` and the game-over site |
+
+The second one is the interesting one: a game that builds its level out of
+meshes has to split "spawn the thing the sim moves" from "spawn what it looks
+like". Cannonball Putt's `build_hole` spawns the ball unconditionally and
+returns early before the felt, walls, hazards, cup and aim arrow when there
+are no assets — the ball is the only entity any `SimSet` system queries.
+
+Also: adding `src/bin/verify.rs` gives the crate a second binary, so plain
+`cargo run` (and `cargo run --features autopilot`) becomes ambiguous. Add
+`default-run = "<kebab-name>"` under `[package]`.
+
 ## Rule 2 — `TickInput`, not `GameInput`, in sim systems
 
 `GameInput` is the per-frame resource menus read; the sim reads the
@@ -89,10 +146,22 @@ once-per-tick `TickInput` the replay actually records. This is the swap
 `rollout-replay.sh`'s "gameplay reads raw `ButtonInput<KeyCode>`" HAND EDIT
 is warning about — the fix is `TickInput`, not the raw button map either.
 
-**Before:**
+**Before** — Cannonball Putt's `shot::update_shot`, the system that reads the
+two-tap shot's press edges (`src/game/shot.rs`):
 ```rust
-<!-- from pilot -->
+use super::input::GameInput;
+
+/// Per-frame driver for the Intro/Aiming/Power phases.
+pub fn update_shot(
+    time: Res<Time>,
+    input: Res<GameInput>,
+    // ...
 ```
+After the port the `use` line goes away entirely and the parameter reads
+`input: Res<gamebient_input::TickInput>`; the body is untouched, because
+`TickInput` derefs to the same `GameInput` fields (`primary_just_pressed`,
+`secondary_just_pressed`, `move_x`). That is the whole of rule 2 in most
+games — a parameter type, not a rewrite.
 
 **After** — the template's `player::move_player` (`src/game/player.rs`),
 the canonical "sim system reads `TickInput`" example:
@@ -170,10 +239,29 @@ reproduces the score by accident rather than by faithfully replaying the
 inputs. Register the game's own system directly after `sim::checksum_tick`
 in the chain (rule 1's `after` block).
 
-**Before:**
+**Before** — nothing. A pre-port game folds nothing, so all
+`sim::checksum_tick` has to go on is the leaderboard score, and in Cannonball
+Putt the same points total is reachable from wildly different rounds
+(`max(0, 2·par − strokes) × 100` per hole, so a bogey on a par 4 and a par on
+a par 3 both score 300). What the pilot added, in `src/game/ball.rs`,
+registered straight after `sim::checksum_tick`:
 ```rust
-<!-- from pilot -->
+pub fn checksum_golf(
+    data: Res<GameData>,
+    ball_q: Query<&Transform, With<Ball>>,
+    mut sum: ResMut<super::sim::Checksum>,
+) {
+    if let Ok(tf) = ball_q.single() {
+        sum.fold(u64::from(tf.translation.x.to_bits()));
+        sum.fold(u64::from(tf.translation.y.to_bits()));
+    }
+    sum.fold(data.hole_index as u64);
+    sum.fold(u64::from(data.strokes));
+}
 ```
+The ball's position is what makes the checksum sensitive to the physics
+actually being reproduced; `hole_index` and `strokes` pin where in the round
+the sim thinks it is.
 
 **After** — the template's `player::checksum_player`
 (`src/game/player.rs`), the model for a game's `checksum_<game>` system:
@@ -268,10 +356,40 @@ except the HUD, which may keep showing the game's native unit (strokes,
 time) as long as the number it reports to the host and folds into the
 replay is the leaderboard integer.
 
-**Before / after (game-specific scoring function):**
+**Before / after (game-specific scoring function)** — Cannonball Putt has no
+`score`; its `GameData` carries strokes, which are lower-is-better and reset
+per hole:
 ```rust
-<!-- from pilot -->
+// before: the only round-wide number, and the wrong polarity for a leaderboard
+impl GameData {
+    /// Sum of recorded holes plus the in-progress hole.
+    pub fn total_strokes(&self) -> u32 {
+        self.results.iter().flatten().map(|&s| s as u32).sum::<u32>() + self.strokes as u32
+    }
+}
 ```
+```rust
+// after: golf points, higher is better, incomplete holes contribute nothing
+impl LeaderboardScore for GameData {
+    fn leaderboard_score(&self) -> u32 {
+        self.results
+            .iter()
+            .zip(course::HOLES.iter())
+            .filter_map(|(result, hole)| {
+                result.map(|strokes| {
+                    let par = u32::from(hole.par);
+                    let strokes = u32::from(strokes);
+                    (2 * par).saturating_sub(strokes) * 100
+                })
+            })
+            .sum()
+    }
+}
+```
+`saturating_sub` is doing real work: it is the `max(0, …)` floor, and without
+it a hole played past `2 × par` would wrap to a colossal score. The HUD still
+shows strokes; only the host event, the replay seal and the checksum switch to
+points.
 
 ## Run end always through `ScreenFade::request`
 
@@ -284,10 +402,67 @@ reproduce in lockstep. Dough.io is the one game in the fleet that does this
 today (`eating.rs`, `next_state.set(GameState::GameOver)`); see
 `references/irregular-games.md`.
 
-**After** — the template's own game-over sites all read the same way, e.g.
-`hole_flow.rs`'s pattern in Cannonball Putt or this template's own
-`sim::begin_run`/`OnExit` shape: request the fade, let the fade's own
-`OnEnter`/`OnExit` transition drive `NextState` once the fade completes.
+**After** — the game's own game-over site requests the fade and lets the
+fade's `OnEnter`/`OnExit` transition drive `NextState` once it completes.
+Headless there is no `ScreenFade` at all, so the same system takes it as
+`Option<ResMut<ScreenFade>>` and falls back to `NextState` — Cannonball Putt's
+`hole_flow::update_hole_flow`:
+```rust
+if shot.round_over {
+    data.finalize_round();
+    over.0 = true; // freeze the sim on this tick -- see below
+    match fade {
+        Some(mut fade) => {
+            fade.request(GameState::GameOver);
+        }
+        None => next.set(GameState::GameOver),
+    }
+    return;
+}
+```
+
+### The fade tail: freeze the sim on the tick the run ends
+
+**Every game that ends a run this way needs this, and it is not obvious.** The
+two paths above do not leave `Playing` at the same sim tick. Headless leaves
+on the ending tick itself; the windowed game keeps ticking for the length of
+the fade (`DEFAULT_FADE_SECS` = 0.4 s ≈ 24 ticks) because `ScreenFade::tick`
+runs in `Update` on the *frame* delta. Those extra ticks are recorded, fold
+into `Checksum`, and their count depends on the frame rate — so a real run
+that reaches the game-over screen seals a checksum its own replay can never
+reproduce, while the selftest (which leaves `Playing` from outside the sim)
+passes happily. It is a mismatch you only see in step 5, on the exact path
+players use.
+
+The fix is to stop the sim on the ending tick in both modes. Cannonball Putt
+latches a resource next to `Paused` in `src/game/states.rs`:
+```rust
+#[derive(Resource, Default, PartialEq, Eq)]
+pub struct RunOver(pub bool);
+
+/// Run condition: true until the round has ended.
+pub fn run_not_over(over: Res<RunOver>) -> bool {
+    !over.0
+}
+```
+cleared alongside `Paused` on `OnEnter(Playing)`, and adds it to the set's
+run condition:
+```rust
+.configure_sets(
+    FixedUpdate,
+    sim::SimSet.run_if(
+        in_state(GameState::Playing)
+            .and(states::not_paused)
+            .and(states::run_not_over),
+    ),
+)
+```
+The fade then plays over a frozen sim — visually identical, since the round is
+already over — and both paths seal the same tick count and the same checksum.
+Cover it with a unit test per path (`the_windowed_path_ends_the_run_through_the_fade`
+/ `the_headless_path_ends_the_run_without_a_fade` in the pilot's
+`hole_flow.rs`); a run that ends by input exhaustion, as the selftest does,
+will not catch it.
 
 ## The selftest script skeleton
 
@@ -322,10 +497,83 @@ placing, whatever the game's `TickInput` fields are) that the checksum
 would visibly differ if a ported system regressed. ≥ 600 ticks (10 s at
 60 Hz); longer if the game's first scoring event doesn't happen that fast.
 
-**Game-specific script:**
+**Game-specific script** — Cannonball Putt's golf bot
+(`src/game/replay/selftest.rs`). The decision function is pure and unit-tested
+on its own; the system's only job is to read what a player could see and write
+`VirtualInput`:
 ```rust
-<!-- from pilot -->
+pub const SELFTEST_TICKS: u32 = 3600; // 60 s: four of nine holes complete
+
+/// What the bot presses on one tick, given only what a player can see.
+/// Returns `(held, tapped)`; `tapped` is a one-frame latch.
+pub fn bot_input(
+    phase: ShotPhase,
+    aim_angle: f32,
+    cup_angle: f32,
+    power: f32,
+    strokes: u8,
+) -> (Buttons, Buttons) {
+    let i = usize::from(strokes) % AIM_OFFSETS.len();
+    match phase {
+        ShotPhase::Intro => (Buttons::NONE, Buttons::A), // skip the plaque
+        ShotPhase::Aiming => {
+            let delta = angle_delta(aim_angle, cup_angle + AIM_OFFSETS[i]);
+            if delta.abs() > AIM_TOLERANCE {
+                // Right sweeps clockwise (decreasing angle).
+                let held = if delta > 0.0 { Buttons::LEFT } else { Buttons::RIGHT };
+                (held, Buttons::NONE)
+            } else {
+                (Buttons::NONE, Buttons::A) // lock the aim
+            }
+        }
+        // The meter rises from zero: fire on its first crossing.
+        ShotPhase::Power if power >= POWER_TARGETS[i] => (Buttons::NONE, Buttons::A),
+        ShotPhase::Power | ShotPhase::Rolling | ShotPhase::Sunk => (Buttons::NONE, Buttons::NONE),
+    }
+}
+
+fn script(
+    shot: Res<Shot>,
+    data: Res<GameData>,
+    ball_q: Query<&Transform, With<Ball>>,
+    mut virt: ResMut<VirtualInput>,
+) {
+    let Some(def) = HOLES.get(data.hole_index) else { return };
+    let ball = ball_q.single().map(|tf| tf.translation.truncate()).unwrap_or(def.tee);
+    let cup_angle = (def.cup - ball).to_angle();
+    let (held, tapped) = bot_input(shot.phase, shot.aim_angle, cup_angle, shot.power, data.strokes);
+    virt.set_held(held);
+    virt.latched |= tapped;
+}
 ```
+Three things worth copying.
+
+**Vary the plan per attempt.** `AIM_OFFSETS` and `POWER_TARGETS` are indexed
+by the stroke number, so a hole the bot can't sink gets eight different shots
+instead of the same one eight times — that is what moves `hole_index`,
+`strokes` and the score far enough for the checksum to have something to
+catch.
+
+**Read state, never write it.** The script may look at `Shot` and `GameData`
+the way a player looks at the screen; the moment it assigns to one, the replay
+stops reproducing. That is exactly why a game's autopilot/screenshot tour is
+not a selftest — Cannonball Putt's writes `shot.aim_angle`, `data.hole_index`
+and `shot.celebrate(…)` directly to fit a 90 s screenshot budget.
+
+**Pick `SELFTEST_TICKS` so the run does not finish.** `record_scripted_run`
+loops `while SimTick < SELFTEST_TICKS`, and a run that ends early stops
+advancing the tick and hangs that loop for ever.
+
+Check what the script actually reached before committing the fixture — a
+throwaway integration test that runs `build_verify_app`/`run_verify_app` and
+prints `GameData` is enough:
+```
+verdict Verdict { score: 200, checksum: 5538231768564850416, ticks: 3600,
+                  ended: InputExhausted, matches: true }
+hole_index 3 strokes 8 results [Some(2), Some(8), Some(8), Some(8), None, ...]
+```
+A verdict that matches with `score: 0` and `hole_index: 0` is a bot that never
+scored, and a checksum that proves nothing.
 
 ## What may stay in `Update`
 
@@ -343,7 +591,102 @@ checksum is unchanged, the system's output isn't part of what the replay
 reproduces and it's safe where it is. If the checksum changes, the system
 was folding into game state after all and belongs in the chain.
 
-**Before / after (the pilot's specific Update-vs-SimSet split):**
+**Before / after (the pilot's specific Update-vs-SimSet split)** — Cannonball
+Putt's ten chained `Update` systems split six/four. The six that moved into
+`SimSet`, with the scaffolding around them:
 ```rust
-<!-- from pilot -->
+.add_systems(
+    FixedUpdate,
+    (
+        sim::advance_tick,
+        shot::update_shot,           // two-tap state machine, power meter
+        ball::integrate,             // physics, hazards, cup capture
+        ball::animate_sink,          // writes the ball Transform -> folded
+        hole_flow::update_hole_flow, // hole advance, round end
+        hazards::advance_tilt_clock, // the deck-tilt clock integrate reads
+        sim::checksum_tick,
+        ball::checksum_golf,
+        replay::recorder::record_tick,
+        sim::remember_sim_prev,
+    )
+        .chain()
+        .in_set(sim::SimSet),
+)
 ```
+and the four that stayed, now registered only in the windowed branch:
+```rust
+// Presentation only: these read `Shot`/`Ball`/`TiltClock` and write nothing
+// the sim reads or the checksum folds, so they keep the frame delta.
+.add_systems(
+    Update,
+    (
+        shot::update_aim_arrow,           // AimArrow/ArrowShaft/ArrowTip transforms
+        hazards::animate_flow_particles,  // FlowParticle transforms
+        hazards::animate_tilt_indicators, // TiltIndicator transforms
+        ball::spawn_trail,                // spawns TrailDot entities
+        ball::fade_trail,                 // TrailDot life + scale
+    )
+        .run_if(in_state(GameState::Playing).and(states::not_paused)),
+)
+```
+The judgement call that is easy to get wrong is `ball::animate_sink`. It is
+named like an animation and reads like presentation, but it writes the
+**ball's own** `Transform` during the sink celebration — the exact component
+`checksum_golf` folds — so it belongs in the chain. The five that stayed write
+transforms too, but only on entities of their own (`AimArrow`, `FlowParticle`,
+`TiltIndicator`, `TrailDot`) that nothing in the chain queries. Read the query
+filters, not the system name.
+
+## Native vs Node mismatch: telling ulp drift from a real bug
+
+Step 5 of the skill compares the native verifier against the Node one, and
+`docs/replay-verification.md`'s Caveat says a game whose sim calls
+`sin`/`cos`/`powf` may see them disagree because native libm and wasm are not
+required to round transcendental functions identically. That is a real
+escape hatch and also a very convenient excuse, so prove which one you are
+looking at before reaching for `continue-on-error: true`.
+
+**Read the verdicts first.** Ulp drift shows up as *identical* `score` and
+`ticks` with a different `checksum` — the sim played exactly the same game,
+and only the folded float bits moved. Cannonball Putt's fixture:
+
+```
+native  {"score":200,"checksum":"5538231768564850416","ticks":3600,…,"matches":true}
+node    {"score":200,"checksum":"6557314733352226416","ticks":3600,…,"matches":false}
+```
+
+and its 6720-tick real run likewise agreed on `score: 3000` and on every
+tick. A system left in `Update`, a stray `rand::rng()` or a `HashMap`
+iteration does not behave like that: it desynchronises the *run*, so the
+score and usually the tick count move too.
+
+**Then bisect with a replay that avoids the suspect math.** Build a replay of
+N empty ticks (`push_tick(0, 0, 0, 0)`), verify it natively, seal its own
+answer as the claim, write it out, and run Node on the file. Pick an N that
+keeps the game in a state where nothing transcendental runs — for Cannonball
+Putt that is "before any shot is fired", so no `power_meter` (cos),
+`shot_velocity` (`Vec2::from_angle`) or `tilt_accel` (sin) is ever called:
+
+```rust
+for n in [60u32, 300, 900] {
+    let mut r = /* n ticks of push_tick(0, 0, 0, 0) */;
+    let v = verify(&r);
+    r.score = v.score;
+    r.checksum = v.checksum;
+    std::fs::write(format!("build/replays/probe-{n}.gxr"), r.encode()).unwrap();
+}
+```
+```
+probe-60  node: {"score":0,"checksum":"17727649758524066137",…,"matches":true}
+probe-300 node: {"score":0,"checksum":"15235349493428633922",…,"matches":true}
+probe-900 node: {"score":0,"checksum":"14301338000482344684",…,"matches":true}
+```
+
+Bit-identical across 900 ticks with no transcendental in the loop, diverging
+only once one runs, is the evidence that justifies the caveat. If the empty
+probe *already* diverges, it is not libm — go back to the rules.
+
+When you do mark the CI step `continue-on-error: true`, put the measurement in
+the comment (the two checksums, the agreeing score and ticks, and the probe
+result) so the next person does not have to rediscover it, and say out loud
+that `cargo test`'s native `--selftest` is now the regression coverage.
