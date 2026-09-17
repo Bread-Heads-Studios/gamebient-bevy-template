@@ -6,8 +6,10 @@ echo "Building Voidrunner for Web (WASM)..."
 # Ensure wasm target is installed
 rustup target add wasm32-unknown-unknown 2>/dev/null || true
 
-# Build
-cargo build --profile wasm-release --target wasm32-unknown-unknown
+# Build. --locked: Cargo.lock is committed, and this same script is the
+# Vercel build command, so a deploy must use the exact dependency versions CI
+# tested (wasm-bindgen in particular, whose CLI install.sh pins separately).
+cargo build --locked --profile wasm-release --target wasm32-unknown-unknown
 
 # Check for wasm-bindgen
 if ! command -v wasm-bindgen &> /dev/null; then
