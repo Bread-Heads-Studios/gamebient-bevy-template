@@ -25,10 +25,16 @@ fn tampered_inputs_do_not_verify() {
     // Auto-Reply's 2.4 s shift card is the worked example.)
     //
     // Tamper over the BACK HALF of the runs instead, and in the shape a
-    // cheat would take: strip every press edge (`latched`) and flip the
-    // D-pad bits in `held`, i.e. claim a score off inputs that were never
-    // played. Assert on the checksum as well as on `matches`, so the test
-    // fails for the right reason — a changed verdict, not a decode error.
+    // cheat would take: strip every press edge (`latched`), toggle two
+    // non-opposing D-pad bits in `held` and reverse the stick, i.e. claim a
+    // score off inputs that were never played. Two bits, not all four: XOR
+    // with UP|DOWN|LEFT|RIGHT turns an idle D-pad into four held directions
+    // that cancel to zero movement, so a script that steers by the analog
+    // axis (Dough.io's bot) came out untouched and this test passed on
+    // nothing. Toggling UP|RIGHT always moves the D-pad vector, and negating
+    // the axis moves an analog script. Assert on the checksum as well as on
+    // `matches`, so the test fails for the right reason — a changed verdict,
+    // not a decode error.
     let replay = record_scripted_run();
 
     // Guard against vacuity from the other end: if the untampered replay did
@@ -39,7 +45,7 @@ fn tampered_inputs_do_not_verify() {
         "the untampered replay must verify before tampering proves anything: {honest:?}"
     );
 
-    const DPAD: u16 = 0b1111; // Buttons::UP | DOWN | LEFT | RIGHT
+    const TOGGLE: u16 = 0b1001; // Buttons::UP | Buttons::RIGHT
 
     let mut tampered = replay.clone();
     let half = tampered.runs.len() / 2;
@@ -51,7 +57,9 @@ fn tampered_inputs_do_not_verify() {
     );
     for run in &mut tampered.runs[half..] {
         run.latched = 0;
-        run.held ^= DPAD;
+        run.held ^= TOGGLE;
+        run.ax = run.ax.saturating_neg();
+        run.ay = run.ay.saturating_neg();
     }
     assert_ne!(
         tampered.runs, replay.runs,
