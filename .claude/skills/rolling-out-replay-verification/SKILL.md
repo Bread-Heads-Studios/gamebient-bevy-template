@@ -32,6 +32,10 @@ real run, the web build, shipping, and the production proof. The feature's
 contract lives in `docs/replay-verification.md` (rules 1–10); this skill's
 job is to apply it to one more game and prove it end to end.
 
+For a game that was already ported and has since fallen behind, use
+`tools/rollout-replay.sh --upgrade <game-dir>` instead — see
+"[Upgrading a ported game](#upgrading-a-ported-game)" below.
+
 Supporting files: [port-checklist.md](references/port-checklist.md) (the
 determinism rules with before/after code — the reference to keep open while
 porting), [catalog-2026-09-16.md](references/catalog-2026-09-16.md) (every
@@ -152,6 +156,69 @@ attic-excavator, grand-theft-otto).
    git add .claude/skills/rolling-out-replay-verification/references/catalog-2026-09-16.md
    git commit -m "docs(skills): <game> shipped with verified replays"
    ```
+
+## Upgrading a ported game
+
+A game ported in an earlier wave keeps the template files it was given, not
+the ones the template has now — `sim::RunOver`/`sim::end_run`, the
+`NextState`-before-`done` ordering in `run_verify_app`, the wasm-recorded
+fixture, a `zip` guard in `build_verify.sh`. Nothing tells the game about
+any of it, so pulling it forward is its own job:
+
+```bash
+cd games/<game>
+git checkout main && git pull
+git checkout -b chore/replay-upgrade
+bash ../../libs/gamebient-bevy-template/tools/rollout-replay.sh --upgrade .
+```
+
+`--upgrade` classifies each copied feature file instead of skipping it:
+
+* **Byte-identical to any committed template version** → a stale verbatim
+  copy nobody edited; it is overwritten with the current one and listed in
+  the summary at the end.
+* **Matches no template version** → the game edited it. It is left exactly
+  as it is, with
+  `HAND EDIT: <path>: locally modified; merge template changes by hand (git -C <template> diff <sha>:<path> HEAD:<path> …)`.
+  That `<sha>` is the last template version this game's own history did
+  match, so the diff is precisely the set of template changes it is missing
+   — read it and port them, keeping the game-specific parts (its
+  `checksum_<game>` system, its `LeaderboardScore`, its `AUTOPILOT_*`
+  constants).
+* **`src/game/replay/selftest.rs` is never touched.** After the port it is
+  the game's own script, not the template's.
+
+`.github/workflows/ci.yml` gets the same treatment structurally: a game
+whose Node step still verifies only the native fixture has that step (and
+the comment block above it, usually a `continue-on-error` rationale) replaced
+with the wasm gate plus the informational native cross-check. A game that
+already gained the wasm gate by hand is left alone.
+
+Then, in this order:
+
+1. Do every HAND EDIT. The common one is moving a game off its own
+   `states::RunOver`/`run_not_over` onto `sim::RunOver` + `sim::end_run`
+   (delete the local copies; the run-ending system calls `sim::end_run`,
+   `GamePlugin::build`'s run condition uses `sim::run_not_over`, and
+   `sim::begin_run` clears the latch so the game's own `reset_*` system
+   should stop doing it).
+2. Re-pin `wasm-bindgen` to the fleet's version if the game drifted:
+   `install.sh`, both workflows, and `Cargo.lock`
+   (`cargo update -p wasm-bindgen --precise <version>`, plus `js-sys`,
+   `web-sys`, `wasm-bindgen-futures` and the three `wasm-bindgen-*` crates
+   as needed). A CLI/lib skew produces a bundle that fails to load, and the
+   fleet's CI installs one pinned CLI.
+3. Rebuild the verifier and **regenerate `tests/fixtures/selftest-wasm.gxr`**
+   (`bash tools/build_verify.sh` then
+   `node tools/verify_fixture.mjs --record tests/fixtures/selftest-wasm.gxr`,
+   then verify it) — a refreshed `sim.rs` usually changes the checksum, and
+   a wasm-bindgen change changes the module.
+4. Gates as in step 7 below, plus `bash build_web.sh` and one autopilot tour.
+
+The build id in the header of already-submitted replays changes, and that
+invalidates nothing: the site picks the verifier module by the replay's own
+`build` field, so old replays keep verifying against the release they were
+recorded against.
 
 ## When it fails
 

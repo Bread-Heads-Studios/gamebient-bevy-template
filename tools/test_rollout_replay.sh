@@ -4,9 +4,10 @@
 #
 #   (a) a copy of this template itself -> running the script must be a
 #       no-op (it already has every feature file and wiring edit in place).
-#   (b) a copy of games/cannonball-putt's `main` (NOT its working tree: the
-#       point is a game that has not been ported yet, and the real checkout
-#       may be sitting on a rollout branch) -> the one documented hand edit
+#   (b) a copy of games/cannonball-putt at its last PRE-ROLLOUT commit (not
+#       its working tree, and no longer `main` either: the pilot has since
+#       merged, so `main` is a ported game and would silently turn this into
+#       a re-run test) -> the one documented hand edit
 #       (rename its own test-only src/game/sim.rs) is applied first, then
 #       the script must leave `cargo check --features verify` passing after
 #       the one still-required per-game hand edit (LeaderboardScore), and its
@@ -27,6 +28,12 @@
 #       of the template's own sim.rs (what an already-ported game looks like
 #       on a second rollout) -> the HAND EDIT must say "stale template copy"
 #       and must not tell you to rename the file.
+#   (f) the same shape, run with --upgrade: a template copy whose
+#       src/game/sim.rs and src/bin/verify.rs are older committed versions
+#       and whose src/game/replay/feeder.rs has a local edit -> the two
+#       stale verbatim copies must come back byte-identical to HEAD's, the
+#       locally modified one must survive untouched with a HAND EDIT naming
+#       it, and nothing else in the copy may change.
 #
 # Usage: tools/test_rollout_replay.sh
 set -euo pipefail
@@ -102,8 +109,23 @@ pass "(a) template copy: rollout-replay.sh is a no-op (git status clean except C
 # ---------------------------------------------------------------------------
 [ -d "$CANNONBALL" ] || fail "games/cannonball-putt not found at $CANNONBALL"
 
+# The pilot merged, so `main` is now a ported game: snapshotting it would
+# quietly convert this part from "a first rollout onto a virgin game" into a
+# re-run, and the renames below would clobber the game's real shot_sim.rs.
+# Derive the last commit before the rollout instead — the parent of whichever
+# commit first added src/game/replay/mod.rs — and assert it really is
+# pre-rollout before using it.
+ADDED_REPLAY="$(git -C "$CANNONBALL" rev-list main -- src/game/replay/mod.rs | tail -1)"
+[ -n "$ADDED_REPLAY" ] || fail "(b) setup: no commit on cannonball-putt's main adds src/game/replay/mod.rs"
+PRE_ROLLOUT="$ADDED_REPLAY^"
+for path in src/game/replay/mod.rs src/bin/verify.rs; do
+  if git -C "$CANNONBALL" cat-file -e "$PRE_ROLLOUT:$path" 2>/dev/null; then
+    fail "(b) setup: $PRE_ROLLOUT still has $path, so it is not a pre-rollout commit"
+  fi
+done
+
 COPY_B="$SCRATCH_ROOT/cannonball-putt-copy"
-snapshot_git_ref_as_baseline "$CANNONBALL" main "$COPY_B"
+snapshot_git_ref_as_baseline "$CANNONBALL" "$PRE_ROLLOUT" "$COPY_B"
 
 # The one documented hand edit: cannonball-putt already has its own
 # test-only src/game/sim.rs (the shot-physics simulator used by its harness
@@ -319,5 +341,73 @@ if grep "sim\.rs" "$SCRATCH_ROOT/e-output.txt" | grep -q "rename"; then
   fail "(e) HAND EDIT output still tells you to rename a stale template sim.rs"
 fi
 pass "(e) an older committed template sim.rs is reported as a stale copy, not as a name clash"
+
+# ---------------------------------------------------------------------------
+# (f) --upgrade on a fresh template copy that has fallen behind.
+#
+# The mode exists for games ported months ago, and it has to tell two cases
+# apart that look identical to `cmp`: a file nobody touched in the game that
+# the template has since moved on from (refresh it), and a file the game
+# edited (leave it alone and say so). Reproduce both in one copy: sim.rs and
+# src/bin/verify.rs are restored to the FIRST committed version of each --
+# what a game ported at that commit still has -- while feeder.rs gets a
+# local edit that matches no template version at all.
+# ---------------------------------------------------------------------------
+COPY_F="$SCRATCH_ROOT/template-copy-f"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_F"
+
+# `log` is newest-first, so the last line is the commit that added the file.
+first_commit_for() {
+  git -C "$TEMPLATE" log --format=%H -- "$1" | tail -1
+}
+OLD_SIM="$(first_commit_for src/game/sim.rs)"
+OLD_VERIFY="$(first_commit_for src/bin/verify.rs)"
+[ -n "$OLD_SIM" ] || fail "(f) setup: no commit found for src/game/sim.rs"
+[ -n "$OLD_VERIFY" ] || fail "(f) setup: no commit found for src/bin/verify.rs"
+git -C "$TEMPLATE" show "$OLD_SIM:src/game/sim.rs" >"$COPY_F/src/game/sim.rs"
+git -C "$TEMPLATE" show "$OLD_VERIFY:src/bin/verify.rs" >"$COPY_F/src/bin/verify.rs"
+if cmp -s "$TEMPLATE/src/game/sim.rs" "$COPY_F/src/game/sim.rs"; then
+  fail "(f) setup: the first committed sim.rs is identical to HEAD's; nothing to refresh"
+fi
+if cmp -s "$TEMPLATE/src/bin/verify.rs" "$COPY_F/src/bin/verify.rs"; then
+  fail "(f) setup: the first committed verify.rs is identical to HEAD's; nothing to refresh"
+fi
+
+# The locally modified one: a comment no template version ever had.
+FEEDER_F="$COPY_F/src/game/replay/feeder.rs"
+printf '\n// Local edit this game made; --upgrade must not throw it away.\n' >>"$FEEDER_F"
+cp "$FEEDER_F" "$SCRATCH_ROOT/feeder-before.rs"
+
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_F" >"$SCRATCH_ROOT/f-output.txt" 2>&1
+cat "$SCRATCH_ROOT/f-output.txt"
+
+cmp -s "$TEMPLATE/src/game/sim.rs" "$COPY_F/src/game/sim.rs" \
+  || fail "(f) --upgrade did not restore src/game/sim.rs to the template's current version"
+cmp -s "$TEMPLATE/src/bin/verify.rs" "$COPY_F/src/bin/verify.rs" \
+  || fail "(f) --upgrade did not restore src/bin/verify.rs to the template's current version"
+pass "(f) --upgrade overwrote the two stale verbatim copies with HEAD's versions"
+
+cmp -s "$SCRATCH_ROOT/feeder-before.rs" "$FEEDER_F" \
+  || fail "(f) --upgrade overwrote a locally modified src/game/replay/feeder.rs"
+grep -q "HAND EDIT: src/game/replay/feeder.rs: locally modified" "$SCRATCH_ROOT/f-output.txt" \
+  || fail "(f) no 'locally modified' HAND EDIT for the edited feeder.rs"
+pass "(f) the locally modified feeder.rs survived untouched and got a HAND EDIT naming it"
+
+# The summary has to name what it rewrote: an upgrade that silently changes
+# files is worse than one that refuses to.
+grep -q "src/game/sim.rs" "$SCRATCH_ROOT/f-output.txt" \
+  || fail "(f) the --upgrade summary doesn't name src/game/sim.rs"
+grep -q "src/bin/verify.rs" "$SCRATCH_ROOT/f-output.txt" \
+  || fail "(f) the --upgrade summary doesn't name src/bin/verify.rs"
+pass "(f) the summary names both refreshed files"
+
+# Nothing else moved: sim.rs and verify.rs are back to the baseline commit's
+# content, so the only dirty path left must be the one we edited ourselves.
+DIRTY_F="$(cd "$COPY_F" && git status --porcelain -- . ':!Cargo.lock' | awk '{print $2}')"
+if [ "$DIRTY_F" != "src/game/replay/feeder.rs" ]; then
+  echo "$DIRTY_F" >&2
+  fail "(f) --upgrade touched files beyond the stale copies and the edited feeder.rs"
+fi
+pass "(f) --upgrade made no collateral edits (git status shows only the deliberately edited file)"
 
 echo "test_rollout_replay: all checks passed"

@@ -16,10 +16,32 @@
 # writing the selftest script) is a HAND EDIT for the skill's
 # port-checklist, not this script.
 #
-# Usage: tools/rollout-replay.sh <game-dir>
+# --upgrade re-runs the rollout on a game that was ported months ago and has
+# since fallen behind the template. Every copied feature file is then
+# classified rather than skipped: a copy that is byte-identical to ANY
+# committed template version of that file is a stale verbatim copy and is
+# overwritten with the current one; a copy that matches no template version
+# has been edited in the game and is left untouched with a HAND EDIT naming
+# the base to merge from. `src/game/replay/selftest.rs` is deliberately
+# exempt — after the port it is the game's own script, never the template's.
+#
+# Usage: tools/rollout-replay.sh [--upgrade] <game-dir>
 set -euo pipefail
 TEMPLATE="$(cd "$(dirname "$0")/.." && pwd)"
-GAME="$(cd "${1:?usage: $0 <game-dir>}" && pwd)"
+UPGRADE=0
+GAME_ARG=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --upgrade) UPGRADE=1 ;;
+    -*)
+      echo "unknown option: $1 (usage: $0 [--upgrade] <game-dir>)" >&2
+      exit 2
+      ;;
+    *) GAME_ARG="$1" ;;
+  esac
+  shift
+done
+GAME="$(cd "${GAME_ARG:?usage: $0 [--upgrade] <game-dir>}" && pwd)"
 PKG=$(grep -m1 '^name' "$GAME/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/' || true)
 SNAKE=${PKG//-/_}
 if [ -z "$PKG" ]; then
@@ -41,7 +63,12 @@ fi
 # older template sim.rs left behind by an earlier rollout (re-copy it). The
 # latter is what a second rollout onto an already-ported game looks like, and
 # telling it to rename its sim.rs would be actively wrong.
-if [ -e "$GAME/src/game/sim.rs" ] && ! cmp -s "$TEMPLATE/src/game/sim.rs" "$GAME/src/game/sim.rs"; then
+#
+# Under --upgrade this is dead weight: re-copying the stale case is exactly
+# what that mode does, and it says so itself (through the same
+# refresh-or-hand-edit path as every other copied file), so skip the advice
+# rather than print two messages about one file.
+if [ "$UPGRADE" -eq 0 ] && [ -e "$GAME/src/game/sim.rs" ] && ! cmp -s "$TEMPLATE/src/game/sim.rs" "$GAME/src/game/sim.rs"; then
   STALE_AT=""
   if git -C "$TEMPLATE" rev-parse --git-dir >/dev/null 2>&1; then
     while read -r h; do
@@ -60,7 +87,11 @@ if [ -e "$GAME/src/game/sim.rs" ] && ! cmp -s "$TEMPLATE/src/game/sim.rs" "$GAME
 fi
 if [ ! -f "$GAME/src/game/scoring.rs" ]; then
   echo "HAND EDIT: src/game/scoring.rs: missing; replay/mod.rs needs an impl of LeaderboardScore for your GameData"
-elif ! grep -q 'pub score' "$GAME/src/game/scoring.rs"; then
+elif ! grep -q 'pub score' "$GAME/src/game/scoring.rs" \
+  && ! grep -q 'impl LeaderboardScore' "$GAME/src/game/scoring.rs"; then
+  # The `impl` clause matters for --upgrade: a game that was ported already
+  # has one, and telling it again to write the thing it wrote is noise in a
+  # list whose whole value is that every line needs acting on.
   echo "HAND EDIT: src/game/scoring.rs: no 'score' field on GameData; implement LeaderboardScore for it"
 fi
 if grep -rn "ButtonInput<KeyCode>" "$GAME/src/game" --include="*.rs" 2>/dev/null | grep -v autopilot | grep -q .; then
@@ -77,13 +108,93 @@ fi
 # ---------------------------------------------------------------------------
 mkdir -p "$GAME/src/game/replay" "$GAME/src/bin" "$GAME/tests/fixtures" "$GAME/tools"
 
+# Files --upgrade actually rewrote, for the summary at the end. A plain
+# newline-joined string rather than an array: `"${a[@]}"` on an empty array
+# is an unbound-variable error under `set -u` in older bashes.
+REFRESHED=""
+
+# The newest template commit whose version of $1 is byte-identical to the
+# file $2 — with the `gamebient_game::` -> `$SNAKE::` substitution applied
+# first when $3 is "rename", so the two crate-renamed copies compare on equal
+# terms. Prints nothing (and still succeeds) when no committed version
+# matches, or when the template isn't a git checkout.
+template_sha_matching() {
+  local rel="$1" file="$2" mode="${3:-verbatim}" h
+  git -C "$TEMPLATE" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  while read -r h; do
+    [ -n "$h" ] || continue
+    if [ "$mode" = rename ]; then
+      if git -C "$TEMPLATE" show "$h:$rel" 2>/dev/null \
+        | sed "s/gamebient_game::/${SNAKE}::/g" | cmp -s - "$file"; then
+        printf '%s\n' "$h"
+        return 0
+      fi
+    elif git -C "$TEMPLATE" show "$h:$rel" 2>/dev/null | cmp -s - "$file"; then
+      printf '%s\n' "$h"
+      return 0
+    fi
+  done < <(git -C "$TEMPLATE" log --format=%H -- "$rel" 2>/dev/null)
+  return 0
+}
+
+# The newest template commit whose version of $1 matches SOME version of $1
+# in the GAME's own history — i.e. the last point at which this game's copy
+# was still a verbatim template copy. That is the base a locally modified
+# file should be merged from: diffing it against the template's HEAD is
+# exactly the set of template changes the game hasn't got yet.
+game_history_base_sha() {
+  local rel="$1" mode="${2:-verbatim}" gh tmp sha
+  git -C "$GAME" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  tmp="$(mktemp)"
+  while read -r gh; do
+    [ -n "$gh" ] || continue
+    git -C "$GAME" show "$gh:$rel" >"$tmp" 2>/dev/null || continue
+    sha="$(template_sha_matching "$rel" "$tmp" "$mode")"
+    if [ -n "$sha" ]; then
+      rm -f "$tmp"
+      printf '%s\n' "$sha"
+      return 0
+    fi
+  done < <(git -C "$GAME" log --format=%H -- "$rel" 2>/dev/null)
+  rm -f "$tmp"
+  return 0
+}
+
+# --upgrade's one decision, shared by the verbatim and the crate-renamed
+# copies. Reached only for a file that exists and differs from the
+# template's current version.
+refresh_or_hand_edit() {
+  local rel="$1" src="$2" dst="$3" mode="$4" stale base
+  stale="$(template_sha_matching "$rel" "$dst" "$mode")"
+  if [ -n "$stale" ]; then
+    # Byte-identical to a committed template version: nobody edited it in
+    # the game, it was just left behind by an older rollout.
+    if [ "$mode" = rename ]; then
+      sed "s/gamebient_game::/${SNAKE}::/g" "$src" >"$dst"
+    else
+      cp "$src" "$dst"
+    fi
+    REFRESHED="${REFRESHED}${rel} (was template ${stale:0:7})"$'\n'
+    return 0
+  fi
+  base="$(game_history_base_sha "$rel" "$mode")"
+  if [ -n "$base" ]; then
+    echo "HAND EDIT: $rel: locally modified; merge template changes by hand (git -C $TEMPLATE diff $base:$rel HEAD:$rel shows what changed)"
+  else
+    echo "HAND EDIT: $rel: locally modified; merge template changes by hand (no committed template version matches this game's history of the file, so diff it against $TEMPLATE/$rel yourself)"
+  fi
+}
+
 copy_or_hand_edit() {
   local rel="$1" src dst
   src="$TEMPLATE/$rel"
   dst="$GAME/$rel"
   if [ -e "$dst" ]; then
-    if ! cmp -s "$src" "$dst"; then
-      echo "HAND EDIT: $rel: exists and differs from the template's version; move it aside and re-run to pick up the template copy"
+    cmp -s "$src" "$dst" && return 0
+    if [ "$UPGRADE" -eq 1 ]; then
+      refresh_or_hand_edit "$rel" "$src" "$dst" verbatim
+    else
+      echo "HAND EDIT: $rel: exists and differs from the template's version; move it aside and re-run to pick up the template copy (or re-run with --upgrade)"
     fi
   else
     mkdir -p "$(dirname "$dst")"
@@ -91,20 +202,33 @@ copy_or_hand_edit() {
   fi
 }
 
-# sim.rs already has its own pre-flight message (rename-and-re-run) above;
-# only perform the copy here, and only when nothing is in the way.
-[ -e "$GAME/src/game/sim.rs" ] || cp "$TEMPLATE/src/game/sim.rs" "$GAME/src/game/sim.rs"
+COPY_LIST=(
+  src/game/replay/mod.rs
+  src/game/replay/recorder.rs
+  src/game/replay/feeder.rs
+  build.rs
+  tools/build_verify.sh
+  tools/verify_fixture.mjs
+  docs/replay-verification.md
+)
+if [ "$UPGRADE" -eq 1 ]; then
+  # sim.rs joins the classified copies: on an already-ported game an
+  # out-of-date sim.rs is the whole point of --upgrade. (On a first rollout
+  # it keeps its own pre-flight message and the copy-if-absent below, which
+  # must not overwrite a game's own unrelated sim.rs.)
+  COPY_LIST=(src/game/sim.rs "${COPY_LIST[@]}")
+  # src/game/replay/selftest.rs is NOT in the list: the template's is a
+  # skeleton the port replaces with this game's own script, so refreshing it
+  # would throw that away, and a HAND EDIT about it would be noise on every
+  # upgrade of every game.
+else
+  # sim.rs already has its own pre-flight message (rename-and-re-run) above;
+  # only perform the copy here, and only when nothing is in the way.
+  [ -e "$GAME/src/game/sim.rs" ] || cp "$TEMPLATE/src/game/sim.rs" "$GAME/src/game/sim.rs"
+  COPY_LIST+=(src/game/replay/selftest.rs)
+fi
 
-for rel in \
-  src/game/replay/mod.rs \
-  src/game/replay/recorder.rs \
-  src/game/replay/feeder.rs \
-  src/game/replay/selftest.rs \
-  build.rs \
-  tools/build_verify.sh \
-  tools/verify_fixture.mjs \
-  docs/replay-verification.md \
-  ; do
+for rel in "${COPY_LIST[@]}"; do
   copy_or_hand_edit "$rel"
 done
 chmod +x "$GAME/tools/build_verify.sh" 2>/dev/null || true
@@ -126,8 +250,11 @@ copy_with_crate_rename() {
   dst="$GAME/$rel"
   expected="$(sed "s/gamebient_game::/${SNAKE}::/g" "$src")"
   if [ -e "$dst" ]; then
-    if [ "$(cat "$dst")" != "$expected" ]; then
-      echo "HAND EDIT: $rel: exists and differs from the template's version (with gamebient_game:: -> ${SNAKE}::); move it aside and re-run"
+    [ "$(cat "$dst")" = "$expected" ] && return 0
+    if [ "$UPGRADE" -eq 1 ]; then
+      refresh_or_hand_edit "$rel" "$src" "$dst" rename
+    else
+      echo "HAND EDIT: $rel: exists and differs from the template's version (with gamebient_game:: -> ${SNAKE}::); move it aside and re-run (or re-run with --upgrade)"
     fi
   else
     mkdir -p "$(dirname "$dst")"
@@ -151,11 +278,11 @@ fi
 # above) — every one of these edits keys off the package name in some way.
 # ---------------------------------------------------------------------------
 if [ -n "$PKG" ]; then
-perl - "$GAME" "$PKG" "$SNAKE" <<'PERL_EOF'
+perl - "$GAME" "$PKG" "$SNAKE" "$UPGRADE" <<'PERL_EOF'
 use strict;
 use warnings;
 
-my ($game, $pkg, $snake) = @ARGV;
+my ($game, $pkg, $snake, $upgrade) = @ARGV;
 my @hand_edits;
 sub hand_edit { push @hand_edits, "HAND EDIT: $_[0]"; }
 
@@ -474,6 +601,21 @@ sub spit {
 {
     my $path = "$game/.github/workflows/ci.yml";
     my $c = slurp($path);
+    # The pair of Node steps in their current shape, shared by the
+    # first-time insertion below and by --upgrade's replacement of the
+    # single-fixture step a pre-wasm-fixture rollout left behind.
+    my $node_steps = "      # The gate: selftest-wasm.gxr was recorded by this same wasm\n"
+                    . "      # module, so both sides are wasm arithmetic - what actually\n"
+                    . "      # ships, and spec-deterministic. A failure here is real.\n"
+                    . "      - name: Verify the wasm-recorded fixture under Node\n"
+                    . "        run: node tools/verify_fixture.mjs tests/fixtures/selftest-wasm.gxr\n"
+                    . "\n"
+                    . "      # Informational: selftest.gxr was recorded natively, so this\n"
+                    . "      # compares native libm against wasm and can drift by an ulp on\n"
+                    . "      # a sim that calls sin/cos/powf. See docs/replay-verification.md.\n"
+                    . "      - name: Cross-check the native fixture under Node (informational)\n"
+                    . "        continue-on-error: true\n"
+                    . "        run: node tools/verify_fixture.mjs tests/fixtures/selftest.gxr\n";
     if (defined $c) {
         my $orig = $c;
         if ($c !~ /verify_fixture\.mjs/) {
@@ -482,23 +624,35 @@ sub spit {
                           . "        with:\n"
                           . "          node-version: 22\n"
                           . "\n"
-                          . "      # The gate: selftest-wasm.gxr was recorded by this same wasm\n"
-                          . "      # module, so both sides are wasm arithmetic - what actually\n"
-                          . "      # ships, and spec-deterministic. A failure here is real.\n"
-                          . "      - name: Verify the wasm-recorded fixture under Node\n"
-                          . "        run: node tools/verify_fixture.mjs tests/fixtures/selftest-wasm.gxr\n"
-                          . "\n"
-                          . "      # Informational: selftest.gxr was recorded natively, so this\n"
-                          . "      # compares native libm against wasm and can drift by an ulp on\n"
-                          . "      # a sim that calls sin/cos/powf. See docs/replay-verification.md.\n"
-                          . "      - name: Cross-check the native fixture under Node (informational)\n"
-                          . "        continue-on-error: true\n"
-                          . "        run: node tools/verify_fixture.mjs tests/fixtures/selftest.gxr\n";
+                          . $node_steps;
             my $idx = index($c, $anchor);
             if ($idx >= 0) {
                 substr($c, $idx + length($anchor), 0) = $addition;
             } else {
                 hand_edit(".github/workflows/ci.yml: 'Build web bundle' step not found in the template's shape; add the setup-node + verify_fixture.mjs steps by hand");
+            }
+        } elsif ($c !~ /selftest-wasm\.gxr/) {
+            # A game ported before the wasm-recorded fixture existed has a
+            # single Node step reading the NATIVE fixture — often with a
+            # `continue-on-error: true` and a paragraph of its own
+            # explaining the libm drift that forced it. That whole
+            # apparatus is what the wasm fixture replaced, so the step and
+            # the comment block above it are replaced together with the
+            # gate + informational pair. Only under --upgrade: on a plain
+            # re-run, rewriting a workflow step is exactly the kind of
+            # guess this script refuses to make.
+            if ($upgrade) {
+                my $step = qr{
+                    (?:^[ \t]*\#[^\n]*\n)*                                  # its own comment block
+                    ^[ \t]*-\ name:\ Verify\ the\ committed\ fixture\ under\ Node\n
+                    (?:^[ \t]*continue-on-error:\ true\n)?
+                    ^[ \t]*run:\ node\ tools/verify_fixture\.mjs[^\n]*\n
+                }mx;
+                unless ($c =~ s/$step/$node_steps/) {
+                    hand_edit(".github/workflows/ci.yml: the single-fixture Node step isn't in the shape --upgrade knows how to replace ('- name: Verify the committed fixture under Node'); replace it with the wasm-gate + informational-native pair by hand");
+                }
+            } else {
+                hand_edit(".github/workflows/ci.yml: the Node step still verifies the native fixture only; re-run with --upgrade to replace it with the wasm gate + informational native cross-check");
             }
         }
         spit($path, $c) if $c ne $orig;
@@ -607,6 +761,16 @@ if command -v cargo >/dev/null 2>&1; then
   (cd "$GAME" && cargo fmt --all) || echo "HAND EDIT: cargo fmt failed in $GAME; run it before committing"
 else
   echo "HAND EDIT: cargo not on PATH; run cargo fmt --all in $GAME before committing"
+fi
+
+if [ "$UPGRADE" -eq 1 ]; then
+  if [ -n "$REFRESHED" ]; then
+    echo "rollout-replay --upgrade: refreshed these stale verbatim copies from the template:"
+    printf '%s' "$REFRESHED" | sed 's/^/  - /'
+  else
+    echo "rollout-replay --upgrade: nothing to refresh — every copied file is already the template's current version or locally modified (see the HAND EDIT lines above)"
+  fi
+  echo "rollout-replay --upgrade: src/game/replay/selftest.rs is never refreshed (it is this game's own script after the port)"
 fi
 
 echo "rollout-replay: files in place for $GAME"
