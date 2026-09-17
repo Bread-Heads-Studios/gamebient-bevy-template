@@ -9,7 +9,7 @@ use gamebient_input::input::TickFrame;
 use rand::{RngCore, SeedableRng};
 use rand_xoshiro::Xoshiro256PlusPlus;
 
-use super::scoring::GameData;
+use super::scoring::{GameData, LeaderboardScore};
 
 pub const TICK_HZ: u32 = 60;
 
@@ -204,7 +204,7 @@ pub fn checksum_tick(
     player: Query<&Transform, With<super::player::Player>>,
     mut sum: ResMut<Checksum>,
 ) {
-    sum.fold(u64::from(data.score));
+    sum.fold(u64::from(data.leaderboard_score()));
     sum.fold(u64::from(data.lives));
     sum.fold(u64::from(tick.0));
     if let Ok(tf) = player.single() {

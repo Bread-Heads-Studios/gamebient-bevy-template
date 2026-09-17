@@ -25,7 +25,7 @@ use bevy::audio::{AudioSinkPlayback, Volume};
 use bevy::prelude::*;
 use gamebient_input::{HostCommand, HostEvent};
 
-use crate::game::scoring::GameData;
+use crate::game::scoring::{GameData, LeaderboardScore};
 use crate::game::sim;
 use crate::game::states::{GameState, Paused};
 
@@ -111,12 +111,12 @@ fn report_started(mut out: MessageWriter<HostEvent>) {
 }
 
 fn report_game_over(data: Res<GameData>, mut out: MessageWriter<HostEvent>) {
-    out.write(HostEvent::Score(u64::from(data.score)));
+    out.write(HostEvent::Score(u64::from(data.leaderboard_score())));
     out.write(HostEvent::GameOver);
 }
 
 fn report_score(data: Res<GameData>, mut out: MessageWriter<HostEvent>) {
-    out.write(HostEvent::Score(u64::from(data.score)));
+    out.write(HostEvent::Score(u64::from(data.leaderboard_score())));
 }
 
 fn report_paused(paused: Res<Paused>, mut out: MessageWriter<HostEvent>) {

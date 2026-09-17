@@ -69,6 +69,9 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
    freeze the sim it is meant to reproduce), so it is the one bit a replay
    cannot carry. Pause belongs in `toggle_pause`, which runs before
    `SimSet`.
+8. **`LeaderboardScore`, not `GameData.score`, for the replay/host score.**
+   games without `score` implement `LeaderboardScore`; the HUD, host `score`
+   event and replay must agree.
 
 Paused ticks are skipped by `SimSet` and so are never recorded, but
 `collect_tick_input` still runs on them and would leave `TickFrame.prev`
