@@ -1,6 +1,6 @@
 # Determinism port checklist
 
-The contract is `docs/replay-verification.md`'s nine determinism rules.
+The contract is `docs/replay-verification.md`'s ten determinism rules.
 This is that contract applied: for each rule, what a game usually looks
 like before the port, what the template's own code looks like after it (the
 `after` shapes below are quoted verbatim from this template — they're what
@@ -391,37 +391,56 @@ it a hole played past `2 × par` would wrap to a colossal score. The HUD still
 shows strokes; only the host event, the replay seal and the checksum switch to
 points.
 
-## Run end always through `ScreenFade::request`
+## Rule 10 — end the run through `sim::end_run`
 
-Not one of the nine numbered rules, but load-bearing: a run ends by calling
-`ScreenFade::request(GameState::GameOver)` from a sim system, never
-`next_state.set(GameState::GameOver)` directly inside `FixedUpdate` — a
-direct `NextState::set` from inside `SimSet` changes state mid-chain, which
-the replay's headless re-simulation (driven by the same chain) can't
-reproduce in lockstep. Dough.io is the one game in the fleet that does this
-today (`eating.rs`, `next_state.set(GameState::GameOver)`); see
-`references/irregular-games.md`.
+A run ends by calling `sim::end_run` from a sim system, never by a bare
+`next_state.set(GameState::GameOver)` inside `FixedUpdate`. Two things have to
+happen on that one tick, and `end_run` (copied verbatim into every game with
+`sim.rs`) does both:
 
-**After** — the game's own game-over site requests the fade and lets the
-fade's `OnEnter`/`OnExit` transition drive `NextState` once it completes.
-Headless there is no `ScreenFade` at all, so the same system takes it as
-`Option<ResMut<ScreenFade>>` and falls back to `NextState` — Cannonball Putt's
-`hole_flow::update_hole_flow`:
 ```rust
-if shot.round_over {
-    data.finalize_round();
-    over.0 = true; // freeze the sim on this tick -- see below
+pub fn end_run(
+    over: &mut RunOver,
+    fade: Option<ResMut<ScreenFade>>,
+    next: &mut NextState<GameState>,
+) {
+    over.0 = true;
     match fade {
+        // One request; ScreenFade rejects re-requests while busy anyway.
         Some(mut fade) => {
             fade.request(GameState::GameOver);
         }
         None => next.set(GameState::GameOver),
     }
-    return;
 }
 ```
 
-### The fade tail: freeze the sim on the tick the run ends
+1. It latches `sim::RunOver`, the third clause of `SimSet`'s run condition, so
+   this is the last tick the sim simulates, checksums and records.
+2. It leaves `Playing`: through the fade when there is one (the windowed
+   game), straight through `NextState` when there is not (the headless
+   verifier, which has no UI at all). Take the fade as
+   `Option<ResMut<ScreenFade>>` — the one signature that compiles in both.
+
+Dough.io is the one game in the fleet that ends a run with a bare
+`next_state.set(GameState::GameOver)` (`eating.rs`); see
+`references/irregular-games.md`.
+
+**After** — the game's own game-over site. Cannonball Putt's
+`hole_flow::update_hole_flow`, with the pilot's hand-rolled version reduced to
+the call:
+```rust
+if shot.round_over {
+    data.finalize_round();
+    sim::end_run(&mut over, fade, &mut next);
+    return;
+}
+```
+where the system takes `mut over: ResMut<sim::RunOver>`,
+`fade: Option<ResMut<ScreenFade>>` and
+`mut next: ResMut<NextState<GameState>>`.
+
+### Why the latch: the fade tail
 
 **Every game that ends a run this way needs this, and it is not obvious.** The
 two paths above do not leave `Playing` at the same sim tick. Headless leaves
@@ -434,35 +453,47 @@ reproduce, while the selftest (which leaves `Playing` from outside the sim)
 passes happily. It is a mismatch you only see in step 5, on the exact path
 players use.
 
-The fix is to stop the sim on the ending tick in both modes. Cannonball Putt
-latches a resource next to `Paused` in `src/game/states.rs`:
+The latch stops the sim on the ending tick in both modes. `sim.rs` declares
+it and clears it in `begin_run`:
 ```rust
-#[derive(Resource, Default, PartialEq, Eq)]
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct RunOver(pub bool);
 
-/// Run condition: true until the round has ended.
+/// Run condition: true until the sim system that ends the run has latched
+/// [`RunOver`].
 pub fn run_not_over(over: Res<RunOver>) -> bool {
     !over.0
 }
 ```
-cleared alongside `Paused` on `OnEnter(Playing)`, and adds it to the set's
-run condition:
+and `GamePlugin::build` puts it in the set's run condition — all three
+clauses, in every game:
 ```rust
 .configure_sets(
     FixedUpdate,
     sim::SimSet.run_if(
         in_state(GameState::Playing)
             .and(states::not_paused)
-            .and(states::run_not_over),
+            .and(sim::run_not_over),
     ),
 )
 ```
-The fade then plays over a frozen sim — visually identical, since the round is
-already over — and both paths seal the same tick count and the same checksum.
+plus `.init_resource::<sim::RunOver>()`. The fade then plays over a frozen
+sim — visually identical, since the run is already over — and both paths seal
+the same tick count and the same checksum.
+
+> **Ported before this landed?** Cannonball Putt (the pilot) declares its own
+> `RunOver` / `run_not_over` in `src/game/states.rs` and latches the field by
+> hand in `hole_flow.rs`, because `sim::end_run` did not exist yet. That still
+> works and is not urgent to change — but don't copy it into a new port, and
+> expect `states::run_not_over` (not `sim::run_not_over`) in that game's run
+> condition.
+
 Cover it with a unit test per path (`the_windowed_path_ends_the_run_through_the_fade`
 / `the_headless_path_ends_the_run_without_a_fade` in the pilot's
 `hole_flow.rs`); a run that ends by input exhaustion, as the selftest does,
-will not catch it.
+will not catch it. The template's own regression tests for the shape are
+`sim::tests::end_run_latches_*` and
+`replay::tests::a_run_ended_from_the_sim_seals_on_that_tick_despite_the_windowed_fade`.
 
 ## The selftest script skeleton
 

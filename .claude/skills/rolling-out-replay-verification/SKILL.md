@@ -29,7 +29,7 @@ never overwrites a file it didn't create — anywhere it can't act safely it
 prints a `HAND EDIT:` line instead. This skill drives everything the script
 can't do: the per-game determinism port, the selftest script, a verified
 real run, the web build, shipping, and the production proof. The feature's
-contract lives in `docs/replay-verification.md` (rules 1–9); this skill's
+contract lives in `docs/replay-verification.md` (rules 1–10); this skill's
 job is to apply it to one more game and prove it end to end.
 
 Supporting files: [port-checklist.md](references/port-checklist.md) (the

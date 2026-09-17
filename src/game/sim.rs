@@ -8,6 +8,17 @@
 //! after `sim::checksum_tick` in the `SimSet` chain; `player::checksum_player`
 //! is this template's example. See docs/replay-verification.md, determinism
 //! rule 6.
+//!
+//! [`RunOver`] is the other fleet-wide piece here: a windowed game leaves
+//! `Playing` through a 0.4 s `ScreenFade`, which runs in `Update` on the
+//! *frame* delta, so the sim would keep ticking (and recording) for a
+//! frame-rate-dependent tail the headless verifier — which has no fade and
+//! leaves on the ending tick itself — can never reproduce. The sim system
+//! that ends the run latches [`RunOver`] on the same tick it asks for the
+//! fade, and [`run_not_over`] is part of `SimSet`'s run condition, so both
+//! paths freeze the sim on exactly the same tick. [`end_run`] does the
+//! windowed/headless split in one place. See docs/replay-verification.md,
+//! determinism rule 10.
 
 use std::time::Duration;
 
@@ -18,6 +29,8 @@ use rand::{RngCore, SeedableRng};
 use rand_xoshiro::Xoshiro256PlusPlus;
 
 use super::scoring::{GameData, LeaderboardScore};
+use super::states::GameState;
+use crate::ui::transition::ScreenFade;
 
 pub const TICK_HZ: u32 = 60;
 
@@ -47,6 +60,68 @@ pub struct SimSet;
 /// sees one. See [`remember_sim_prev`] and [`restore_tick_frame_while_paused`].
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SimPrev(pub Buttons);
+
+/// Latched by the sim system that ends the run, on the very tick it ends;
+/// cleared by [`begin_run`]. While it is set, [`run_not_over`] keeps
+/// `SimSet` from running, so no further tick is simulated or recorded.
+///
+/// This exists because the windowed game and the headless verifier leave
+/// `Playing` at different moments. The windowed game requests a
+/// `ScreenFade` (`DEFAULT_FADE_SECS` = 0.4 s), which is driven from
+/// `Update` with the frame delta — roughly 24 more fixed ticks at 60 fps,
+/// but however many the frame rate happens to produce. The verifier has no
+/// fade and leaves on the ending tick itself. Without the latch those extra
+/// ticks are recorded and folded into [`Checksum`], and a real run that
+/// reaches the game-over screen seals a checksum its own replay can never
+/// reproduce — while a selftest that ends by input exhaustion passes
+/// happily. Freezing the sim on the ending tick makes both paths seal the
+/// same tick count and the same checksum.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RunOver(pub bool);
+
+/// Run condition: true until the sim system that ends the run has latched
+/// [`RunOver`]. Third clause of `SimSet`'s run condition, alongside
+/// `in_state(Playing)` and `states::not_paused`.
+pub fn run_not_over(over: Res<RunOver>) -> bool {
+    !over.0
+}
+
+/// Ends the run from a `SimSet` system: latch [`RunOver`] so this is the
+/// last simulated and recorded tick, then leave `Playing` — through the
+/// fade when there is one (the windowed game), directly through `NextState`
+/// when there is not (the headless verifier, which has no UI at all).
+///
+/// Call it with the fade as `Option<ResMut<ScreenFade>>`; that is the one
+/// signature that compiles in both apps. The fade then plays over a frozen
+/// sim, which is visually identical since the run is already over.
+///
+/// ```ignore
+/// fn update_flow(
+///     mut over: ResMut<sim::RunOver>,
+///     fade: Option<ResMut<ScreenFade>>,
+///     mut next: ResMut<NextState<GameState>>,
+///     /* ... */
+/// ) {
+///     if lives_are_gone {
+///         sim::end_run(&mut over, fade, &mut next);
+///         return;
+///     }
+/// }
+/// ```
+pub fn end_run(
+    over: &mut RunOver,
+    fade: Option<ResMut<ScreenFade>>,
+    next: &mut NextState<GameState>,
+) {
+    over.0 = true;
+    match fade {
+        // One request; `ScreenFade` rejects re-requests while busy anyway.
+        Some(mut fade) => {
+            fade.request(GameState::GameOver);
+        }
+        None => next.set(GameState::GameOver),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
@@ -128,7 +203,8 @@ impl Checksum {
 
 /// `OnEnter(Playing)`: take the pending host seed (or draw a local one),
 /// reseed the RNG, zero the tick and checksum, and reset the tick-input
-/// press-edge tracker. Without that last reset, `collect_tick_input` would
+/// press-edge tracker, and clear the [`RunOver`] latch the previous run may
+/// have left set. Without the tick-input reset, `collect_tick_input` would
 /// derive tick 1's `just_pressed` against whatever was held in the menu
 /// (live play) or nothing at all (`verify()`'s fresh `App`) — two different
 /// starting points that would make the same first tick reproduce different
@@ -141,6 +217,7 @@ pub fn begin_run(
     mut sum: ResMut<Checksum>,
     mut frame: ResMut<TickFrame>,
     mut sim_prev: ResMut<SimPrev>,
+    mut over: ResMut<RunOver>,
 ) {
     *seed = match pending.0.take() {
         Some(bytes) => RunSeed {
@@ -154,6 +231,7 @@ pub fn begin_run(
     *sum = Checksum::default();
     *frame = TickFrame::default();
     *sim_prev = SimPrev::default();
+    *over = RunOver::default();
 }
 
 /// First in `SimSet`.
@@ -252,6 +330,7 @@ mod tests {
             .init_resource::<SimTick>()
             .init_resource::<Checksum>()
             .init_resource::<SimPrev>()
+            .init_resource::<RunOver>()
             .add_systems(
                 FixedPreUpdate,
                 collect_tick_input.in_set(TickInputSet::Collect),
@@ -296,6 +375,49 @@ mod tests {
         b.fold(1);
         assert_ne!(a.0, b.0);
         assert_ne!(a.0, Checksum::default().0);
+    }
+
+    #[test]
+    fn end_run_latches_and_falls_back_to_next_state_without_a_fade() {
+        // The headless verifier has no `ScreenFade` at all, so `end_run`
+        // must both freeze the sim and drive the transition itself.
+        let mut over = RunOver::default();
+        let mut next = NextState::<GameState>::default();
+        end_run(&mut over, None, &mut next);
+        assert!(over.0, "the latch must freeze SimSet on this very tick");
+        assert!(
+            matches!(next, NextState::Pending(GameState::GameOver)),
+            "no fade means end_run owns the transition"
+        );
+    }
+
+    #[test]
+    fn end_run_latches_and_leaves_the_transition_to_the_fade() {
+        // The windowed game keeps its fade-to-black: `end_run` asks for it
+        // and leaves `NextState` alone, so the fade's own completion drives
+        // the transition — over a sim that is already frozen.
+        use bevy::ecs::system::RunSystemOnce;
+
+        fn ends_the_run(
+            mut over: ResMut<RunOver>,
+            fade: Option<ResMut<ScreenFade>>,
+            mut next: ResMut<NextState<GameState>>,
+        ) {
+            end_run(&mut over, fade, &mut next);
+        }
+
+        let mut world = World::new();
+        world.init_resource::<RunOver>();
+        world.init_resource::<NextState<GameState>>();
+        world.insert_resource(ScreenFade::default());
+        world.run_system_once(ends_the_run).unwrap();
+
+        assert!(world.resource::<RunOver>().0);
+        assert!(!world.resource::<ScreenFade>().is_idle(), "fade requested");
+        assert!(matches!(
+            *world.resource::<NextState<GameState>>(),
+            NextState::Unchanged
+        ));
     }
 
     #[test]

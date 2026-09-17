@@ -79,6 +79,22 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
 9. **`LeaderboardScore`, not `GameData.score`, for the replay/host score.**
    games without `score` implement `LeaderboardScore`; the HUD, host `score`
    event and replay must agree.
+10. **Freeze the sim on the tick the run ends.** The sim system that ends
+   the run sets `RunOver(true)` on the same tick it requests the fade — or,
+   headless, sets `NextState(GameOver)` — and `sim::run_not_over` is the
+   third clause of `SimSet`'s run condition:
+   `in_state(Playing).and(not_paused).and(sim::run_not_over)`.
+   `sim::end_run(&mut over, fade, &mut next)` does both halves in one place;
+   call it with the fade as `Option<ResMut<ScreenFade>>`, the one signature
+   that compiles in the windowed game and in the headless verifier alike.
+   Without the latch the two paths leave `Playing` at different ticks: the
+   windowed game keeps ticking for the length of the fade, which
+   `ScreenFade::tick` drives from `Update` on the *frame* delta
+   (`DEFAULT_FADE_SECS` = 0.4 s ≈ 24 ticks, but however many the frame rate
+   produces), while the verifier leaves on the ending tick itself. Those
+   extra ticks are recorded and folded into `Checksum`, so a real run that
+   reaches the game-over screen seals a checksum its own replay can never
+   reproduce — and a selftest that ends by input exhaustion never notices.
 
 Paused ticks are skipped by `SimSet` and so are never recorded, but
 `collect_tick_input` still runs on them and would leave `TickFrame.prev`
@@ -93,8 +109,8 @@ feeder does. Host pauses (`gx:set`) are covered by the same rule.
 The greppable ones (`rand::rng()`, `from_os_rng`, `thread_rng`, `SmallRng`,
 `std::collections::HashMap`) are enforced by the forbidden-names test in
 `src/game/sim.rs` (`cargo test`); the rest — `SimSet` placement, `TickInput`
-usage, checksum folding, wall-clock reads — aren't mechanically checkable and
-need review.
+usage, checksum folding, wall-clock reads, run-end latching — aren't
+mechanically checkable and need review.
 
 ## Commands
 
