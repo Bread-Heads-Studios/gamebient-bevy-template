@@ -53,6 +53,7 @@ impl Plugin for GamePlugin {
             .init_resource::<sim::Checksum>()
             .init_resource::<sim::SimPrev>()
             .init_resource::<sim::RunOver>()
+            .init_resource::<sim::SpawnCounter>()
             .init_resource::<replay::recorder::ReplayRecorder>()
             .add_message::<scoring::ScoreEvent>()
             .add_message::<audio::SfxEvent>()

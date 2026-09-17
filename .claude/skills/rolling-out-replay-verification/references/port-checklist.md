@@ -142,6 +142,19 @@ key must be something the *sim* assigns and both paths agree on: an inbox
 slot, a spawn sequence number, a grid index. **Not `Entity`** — its value
 depends on allocation order, which is exactly what is in question.
 
+**Use `sim::SpawnOrder` unless the game already has a key.** It is in
+`src/game/sim.rs`, so the rollout copies it in: a `SpawnOrder(u64)` component
+stamped from the `SpawnCounter` resource as each sim entity is spawned, with
+`sim::begin_run` rewinding the counter to 0 at the start of every run so a
+replay sorts by the same numbers the recorded run did. Stamp it at *every*
+sim spawn site — `commands.spawn((Crumb, GameEntity, spawn.stamp(), ...))` —
+and query it **non-optionally**, so an entity spawned without one stops
+matching and the playtest suite notices at once. A `Default`-able or
+`#[require]`d version would give every un-stamped entity key 0 and hand the
+tie straight back to archetype order, which is worse than the bug. A key the
+game already owns (a bake counter, a hole index, an inbox slot) is fine; use
+it, and break exact-tie `min_by` searches on it too.
+
 ```rust
 // before: whatever order the archetype happens to give
 for email in &emails {
@@ -844,33 +857,54 @@ the entities it touches into a different archetype (see "The two order traps"
 above). It is exactly the check Grand Theft Auto-Reply's port passed.
 
 **The test that does detect it:** `tests/archetype_order.rs`, copied into
-every game by the rollout script. It records the selftest script twice — once
-in a plain headless app, once in a headless app that also runs `Update`
-systems inserting inert markers onto the entities the sim queries — and
-asserts the two agree on score, checksum and ticks, and that the decorated
-recording still `verify()`s in a plain app (which is the production question:
-the browser records decorated, Node verifies bare). Repeated over several
-seeds at 1, 2 and 3 sim ticks per frame, because at one tick per frame the
-`Update` decoration and the `FixedUpdate` sim interleave one-to-one and a
-reorder can stay hidden.
+every game by the rollout script. It records the selftest script three times
+per case — once in a plain headless app and once in each of two decoration
+modes, both of which run `Update` systems inserting inert markers onto the
+entities the sim queries — and asserts each decorated recording agrees with
+the plain one on score, checksum and ticks, and still `verify()`s in a plain
+app (which is the production question: the browser records decorated, Node
+verifies bare). Repeated over several seeds at 1, 2 and 3 sim ticks per
+frame, because at one tick per frame the `Update` decoration and the
+`FixedUpdate` sim interleave one-to-one and a reorder can stay hidden.
 
-**Extend its markers to your game's real decorators during the port** — as
+**The two modes are not redundant. Keep both.** `Decoration { on, split }`:
+
+* **`faithful`** (`on`) mirrors the game's real decorators — same
+  components, same entities, same branching. It is what makes a failure a
+  statement about the shipping game rather than about a synthetic worst
+  case: *the faithful mode documents the real partitioning*.
+* **`split`** additionally halves every sim archetype on the parity of
+  `sim::SpawnOrder`, a key the sim's own queries cannot see. It is
+  deliberately more aggressive than any real decorator: *the split mode is
+  the detector*.
+
+Measured, not assumed. Dough.io's reviewer reproduced a genuine,
+score-changing instance of this bug (18/18 recordings with the ECS order
+provably different), then deleted the two sorts that fixed it: the faithful
+mode passed all 18 by luck, the split mode failed 2 of 18 with
+`verify(decorated).matches=false`. A port that keeps only the faithful mode
+has a test that agrees with the bug.
+
+**Extend both modes to your game's real entities during the port** — as
 shipped it is a smoke test, since the template's sim queries one entity and
-one entity has no order to get wrong. It also does not *compile* unadapted in
-most games: the template's version references the template's own `Player`.
-(That is why `rollout-replay.sh --upgrade` refuses to create the file when a
-game does not already have one, and asks for it instead.) Two things matter
-when you adapt it:
+one entity has no order to get wrong (its one entity is `SpawnOrder(0)`, so
+even the split marker never lands there). It also does not *compile*
+unadapted in most games: the template's version references the template's own
+`Player`. (That is why `rollout-replay.sh --upgrade` refuses to create the
+file when a game does not already have one, and asks for it instead.) Three
+things matter when you adapt it:
 
-* **Reproduce the branching.** A decorator that attaches a different
-  component set to different entities (golden crumbs get a sparkle, rivals
-  get a mood) is what splits one archetype into several. Markers that are
-  identical for every entity cannot reproduce the bug.
+* **Reproduce the branching** in the faithful mode. A decorator that attaches
+  a different component set to different entities (golden crumbs get a
+  sparkle, rivals get a mood) is what splits one archetype into several.
+  Markers that are identical for every entity cannot reproduce the bug.
+* **Point the split mode at every kind of sim entity**, not just the ones the
+  faithful mode emphasises. It is the detector; give it everything.
 * **Keep the child spawn.** `ChildOf` puts `Children` on the *parent*, so a
   decorator that only spawns children still moves its parent's archetype.
 
-The file's own doc comment carries both, plus how to extend `trace_order` for
-the queries your order-sensitive sim systems iterate.
+The file's own doc comment carries all three, plus how to extend
+`trace_order` for the queries your order-sensitive sim systems iterate.
 
 **Before / after (the pilot's specific Update-vs-SimSet split)** — Cannonball
 Putt's ten chained `Update` systems split six/four. The six that moved into

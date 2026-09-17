@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use super::GameEntity;
 use super::scoring::GameData;
-use super::sim::Checksum;
+use super::sim::{Checksum, SpawnCounter};
 
 /// The player-controlled entity.
 #[derive(Component)]
@@ -13,13 +13,27 @@ const PLAYER_SPEED: f32 = 8.0;
 /// Spawns a simple procedural player mesh when entering `Playing`. Headless
 /// builds (the replay verifier) have no `Assets<Mesh>` / `Assets<StandardMaterial>`
 /// resources, so the mesh/material are only inserted when both are present.
+///
+/// Every sim entity is stamped with a [`SpawnOrder`](super::sim::SpawnOrder)
+/// as it is spawned — the stable key determinism rule 1's sorting clause asks
+/// order-sensitive sim systems to sort by. This template has exactly one sim
+/// entity, so nothing here has an order to get wrong yet; the stamp is here
+/// because a game grows its second sim entity long before anyone remembers
+/// to add the key, and `tests/archetype_order.rs` needs a key the sim owns to
+/// split archetypes on.
 pub fn spawn_player(
     mut commands: Commands,
+    mut spawn: ResMut<SpawnCounter>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
     let entity = commands
-        .spawn((Player, GameEntity, Transform::from_xyz(0.0, 0.0, 0.0)))
+        .spawn((
+            Player,
+            GameEntity,
+            spawn.stamp(),
+            Transform::from_xyz(0.0, 0.0, 0.0),
+        ))
         .id();
     if let (Some(mut meshes), Some(mut materials)) = (meshes, materials) {
         commands.entity(entity).insert((

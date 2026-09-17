@@ -197,6 +197,49 @@ pub fn seed_bytes(seed: u64) -> [u8; 32] {
     out
 }
 
+/// Monotonic spawn index: the canonical **stable per-entity key** determinism
+/// rule 1's sorting clause asks for. Stamp it on every sim entity whose
+/// iteration order could change an outcome, and sort by it instead of
+/// trusting the order a `Query` happens to yield.
+///
+/// It exists because query iteration order is archetype order, and an
+/// entity's archetype changes the moment a component is inserted on it. The
+/// windowed game decorates sim entities from `Update` (meshes, materials,
+/// sparkles, eye children); the headless verifier builds none of that, so
+/// the two apps hand the same entities to the same sim systems in different
+/// orders. `Entity` is no help — its value depends on allocation order,
+/// which is exactly what is in question. This key is assigned by the sim, in
+/// the order the sim spawns things, so both paths agree on it.
+///
+/// Query it **non-optionally**. An entity spawned without one then stops
+/// matching, which a playtest notices at once — far better than a `Default`
+/// of 0 on every un-stamped entity, which collides with every other default
+/// and hands the tie straight back to archetype order.
+///
+/// ```ignore
+/// let mut live: Vec<(Entity, &Crumb)> = crumbs.iter().collect();
+/// live.sort_unstable_by_key(|(e, _)| *order.get(*e).unwrap());
+/// ```
+#[derive(Component, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct SpawnOrder(pub u64);
+
+/// The counter behind [`SpawnOrder`]. Reset by [`begin_run`] before anything
+/// a run spawns exists, so the same seed stamps the same keys every time and
+/// a replay sorts its entities by the same numbers the recorded run did.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SpawnCounter(pub u64);
+
+impl SpawnCounter {
+    /// Takes the next key. Call it once per spawned sim entity, in the order
+    /// the sim decides to spawn them. (Named `stamp`, not `next`: clippy's
+    /// `should_implement_trait` reserves an inherent `next` for `Iterator`.)
+    pub fn stamp(&mut self) -> SpawnOrder {
+        let order = SpawnOrder(self.0);
+        self.0 += 1;
+        order
+    }
+}
+
 /// The one RNG the sim may use. Xoshiro256++ explicitly: `SmallRng` picks a
 /// different algorithm on wasm32, which would break native-vs-wasm replay.
 #[derive(Resource)]
@@ -234,9 +277,9 @@ impl Checksum {
 }
 
 /// `OnEnter(Playing)`: take the pending host seed (or draw a local one),
-/// reseed the RNG, zero the tick and checksum, and reset the tick-input
-/// press-edge tracker, and clear the [`RunOver`] latch the previous run may
-/// have left set. Without the tick-input reset, `collect_tick_input` would
+/// reseed the RNG, zero the tick, checksum and [`SpawnCounter`], reset the
+/// tick-input press-edge tracker, and clear the [`RunOver`] latch the
+/// previous run may have left set. Without the tick-input reset, `collect_tick_input` would
 /// derive tick 1's `just_pressed` against whatever was held in the menu
 /// (live play) or nothing at all (`verify()`'s fresh `App`) — two different
 /// starting points that would make the same first tick reproduce different
@@ -250,6 +293,7 @@ pub fn begin_run(
     mut frame: ResMut<TickFrame>,
     mut sim_prev: ResMut<SimPrev>,
     mut over: ResMut<RunOver>,
+    mut spawn: ResMut<SpawnCounter>,
 ) {
     *seed = match pending.0.take() {
         Some(bytes) => RunSeed {
@@ -264,6 +308,10 @@ pub fn begin_run(
     *frame = TickFrame::default();
     *sim_prev = SimPrev::default();
     *over = RunOver::default();
+    // Before anything this run spawns exists: `begin_run` is chained ahead
+    // of every OnEnter(Playing) spawn system, so the run's first stamped
+    // entity is always key 0.
+    *spawn = SpawnCounter::default();
 }
 
 /// First in `SimSet`.
@@ -363,6 +411,42 @@ mod tests {
     }
 
     #[test]
+    fn spawn_keys_are_monotonic_and_totally_ordered() {
+        // The key has to be a total order the sim owns: sorting by it must
+        // put entities back into spawn order regardless of what order they
+        // came out of a query in.
+        let mut c = SpawnCounter::default();
+        let a = c.stamp();
+        let b = c.stamp();
+        assert!(a < b);
+        assert_eq!(c.0, 2);
+        let mut v = vec![b, a];
+        v.sort_unstable();
+        assert_eq!(v, vec![a, b]);
+    }
+
+    #[test]
+    fn begin_run_rewinds_the_spawn_counter_so_every_run_stamps_the_same_keys() {
+        use bevy::ecs::system::RunSystemOnce;
+        // Whatever the previous run left behind, the next run's first spawn
+        // is key 0 again — otherwise a replay would sort its entities by
+        // different numbers than the run it is reproducing, which is exactly
+        // the desync the key exists to prevent.
+        let mut world = World::new();
+        world.init_resource::<PendingSeed>();
+        world.init_resource::<RunSeed>();
+        world.init_resource::<GameRng>();
+        world.init_resource::<SimTick>();
+        world.init_resource::<Checksum>();
+        world.init_resource::<TickFrame>();
+        world.init_resource::<SimPrev>();
+        world.init_resource::<RunOver>();
+        world.insert_resource(SpawnCounter(17));
+        world.run_system_once(begin_run).unwrap();
+        assert_eq!(world.resource_mut::<SpawnCounter>().stamp(), SpawnOrder(0));
+    }
+
+    #[test]
     fn tick_duration_is_sixty_hz() {
         assert_eq!(TICK_HZ, 60);
         assert_eq!(tick_duration().as_nanos(), 16_666_667);
@@ -396,6 +480,7 @@ mod tests {
             .init_resource::<Checksum>()
             .init_resource::<SimPrev>()
             .init_resource::<RunOver>()
+            .init_resource::<SpawnCounter>()
             .add_systems(
                 FixedPreUpdate,
                 collect_tick_input.in_set(TickInputSet::Collect),
