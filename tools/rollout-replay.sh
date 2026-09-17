@@ -118,10 +118,23 @@ fi
 # score at all) is a judgement call about polarity and units — golf strokes
 # are lower-is-better, a race time needs inverting — so that stays a HAND
 # EDIT. Guarded on the impl, so a second run is a no-op.
+#
+# The "is it already implemented" test spans all of src/ and tolerates a
+# qualified path: `impl scoring::LeaderboardScore for GameData` and
+# `impl crate::game::scoring::LeaderboardScore for GameData` are both real
+# shapes, and an impl does not have to live in scoring.rs. A `grep -q 'impl
+# LeaderboardScore'` on scoring.rs alone misses every one of those and
+# appends a duplicate, which is E0119 — a worse failure than the one this
+# automation exists to prevent.
 if [ ! -f "$GAME/src/game/scoring.rs" ]; then
   echo "HAND EDIT: src/game/scoring.rs: missing; replay/mod.rs needs an impl of LeaderboardScore for your GameData"
-elif grep -q 'impl LeaderboardScore' "$GAME/src/game/scoring.rs"; then
-  : # already implemented (a ported game, or one that hand-wrote it)
+elif grep -rqE 'impl\b[^{]*\bLeaderboardScore\b[^{]*\bfor\b' "$GAME/src" --include='*.rs'; then
+  : # already implemented, anywhere in src/ and under any path spelling
+elif grep -rq 'trait LeaderboardScore' "$GAME/src" --include='*.rs' \
+  && ! grep -q 'trait LeaderboardScore' "$GAME/src/game/scoring.rs"; then
+  # The trait exists but not in the file we would append to, so the impl
+  # would need a `use` whose path we would have to guess. Ask instead.
+  echo "HAND EDIT: src/game/scoring.rs: the LeaderboardScore trait is declared outside scoring.rs but never implemented for GameData; add 'impl LeaderboardScore for GameData { fn leaderboard_score(&self) -> u32 { .. } }' with the right 'use' by hand"
 elif grep -qE '^\s*pub score: u32,' "$GAME/src/game/scoring.rs" \
   && grep -q 'struct GameData' "$GAME/src/game/scoring.rs"; then
   # Decided BEFORE the append opens the file for writing: reading and writing
@@ -153,7 +166,14 @@ RUST
 else
   echo "HAND EDIT: src/game/scoring.rs: no 'pub score: u32' field on GameData to implement LeaderboardScore from; write 'impl LeaderboardScore for GameData { fn leaderboard_score(&self) -> u32 { .. } }' by hand (higher is better — invert a time, convert strokes to points), or the copied sim/replay/recorder/host code will not compile (it all uses the trait)"
 fi
-if grep -rn "ButtonInput<KeyCode>" "$GAME/src/game" --include="*.rs" 2>/dev/null | grep -v autopilot | grep -q .; then
+# Comment lines are stripped before the check: the template's own `input.rs`
+# mentions `ButtonInput<KeyCode>` in a doc comment explaining what NOT to do,
+# and firing on prose teaches people to skim the HAND EDIT list.
+if grep -rn "ButtonInput<KeyCode>" "$GAME/src/game" --include="*.rs" 2>/dev/null \
+  | grep -v autopilot \
+  | sed -E 's/^[^:]*:[0-9]+://' \
+  | grep -vE '^[[:space:]]*(//|\*|/\*)' \
+  | grep -q .; then
   echo "HAND EDIT: src/game: gameplay reads raw ButtonInput<KeyCode>; route through TickInput instead"
 fi
 if [ "$SUPPRESS_PORTED_NOISE" -eq 0 ] \
@@ -261,6 +281,9 @@ mkdir -p "$GAME/src/game/replay" "$GAME/src/bin" "$GAME/tests/fixtures" "$GAME/t
 # newline-joined string rather than an array: `"${a[@]}"` on an empty array
 # is an unbound-variable error under `set -u` in older bashes.
 REFRESHED=""
+# Set when --upgrade found no tests/archetype_order.rs and deliberately did
+# not create one (see the probe's block below); reported in the summary.
+MISSING_PROBE=0
 
 # The newest template commit whose version of $1 is byte-identical to the
 # file $2 — with the `gamebient_game::` -> `$SNAKE::` substitution applied
@@ -411,7 +434,6 @@ if [ "$UPGRADE" -eq 1 ] && [ -n "$PKG" ]; then
     fi
   }
   refresh_if_untouched src/game/replay/selftest.rs verbatim
-  refresh_if_untouched tests/archetype_order.rs rename
 fi
 
 chmod +x "$GAME/tools/build_verify.sh" 2>/dev/null || true
@@ -450,20 +472,58 @@ copy_with_crate_rename() {
 if [ -n "$PKG" ]; then
   copy_with_crate_rename src/bin/verify.rs
   copy_with_crate_rename tests/selftest.rs
-  # tests/archetype_order.rs is the differential probe for the archetype-order
-  # trap: it records the scripted run twice — once plain, once with Update
-  # systems decorating the sim's entities — and asserts the two agree and that
-  # the decorated recording still verifies in a bare app. Like
-  # replay/selftest.rs's script it is NOT usable as copied: the template's
-  # version queries the template's own sim entity (`Player`), which most games
-  # do not have, so it does not even compile until the port adapts it. Hence
-  # the HAND EDIT below, and the same narrowed --upgrade rule as selftest.rs.
-  if [ "$UPGRADE" -eq 0 ]; then
-    copy_with_crate_rename tests/archetype_order.rs
-    if [ ! -f "$GAME/src/game/player.rs" ] \
-      || ! grep -rq 'pub struct Player' "$GAME/src/game/player.rs" 2>/dev/null; then
-      echo "HAND EDIT: tests/archetype_order.rs: adapt it to this game before it compiles — the copied version queries the template's own \`Player\` sim entity. Replace the marker components and decorate_* systems with stand-ins for THIS game's Update decorators (reproduce their branching: different entities getting different component sets is what splits the archetype), and point trace_order at the queries your order-sensitive sim systems iterate. It is the only test that catches the archetype-order trap; the \"delete the system and re-run --selftest\" check cannot. See the file's doc comment and the port checklist, 'What may stay in Update'."
+
+  # ---- tests/archetype_order.rs -------------------------------------------
+  #
+  # The differential probe for the archetype-order trap. It has its own rule
+  # rather than going through copy_with_crate_rename, for one reason: the
+  # template's version hard-references the template's own sim entity
+  # (`game::player::Player`), which only a handful of games have. A copy of it
+  # does not compile anywhere else, so every path has to be deliberate about
+  # whether it is putting a red test into a game.
+  #
+  #   absent, first rollout  -> write it, and say it must be adapted. The port
+  #                             is happening now; a red test with a named hand
+  #                             edit beats no test at all.
+  #   absent, --upgrade      -> do NOT write it. The game compiles today, and
+  #                             materialising a file that references a `Player`
+  #                             it does not have would turn a green checkout
+  #                             red with nothing in the output to explain it.
+  #                             Ask for it instead, and name it in the summary.
+  #   present, byte-identical to the template's (after the crate rename)
+  #                          -> unadapted, whenever it got there. Say so.
+  #   present and different  -> adapted. Silent, always: that is the finished
+  #                             state, and it is never "exists and differs;
+  #                             move it aside and re-run".
+  #   present, matching an OLDER template version, --upgrade
+  #                          -> a stale unadapted copy: refresh it to current
+  #                             (and the identity check below then asks for it
+  #                             to be adapted, which it still needs).
+  PROBE_REL=tests/archetype_order.rs
+  PROBE_DST="$GAME/$PROBE_REL"
+  PROBE_EXPECTED="$(sed "s/gamebient_game::/${SNAKE}::/g" "$TEMPLATE/$PROBE_REL")"
+  if [ ! -e "$PROBE_DST" ]; then
+    if [ "$UPGRADE" -eq 1 ]; then
+      MISSING_PROBE=1
+      echo "HAND EDIT: $PROBE_REL: missing; copy it from the template and adapt the markers to your sim entities (see the port checklist, \"The two order traps\"). Not copied automatically: the template's version references its own \`Player\` entity, so dropping it in would turn this checkout's tests red with no explanation."
+    else
+      mkdir -p "$(dirname "$PROBE_DST")"
+      printf '%s\n' "$PROBE_EXPECTED" >"$PROBE_DST"
     fi
+  elif [ "$UPGRADE" -eq 1 ] && [ "$(cat "$PROBE_DST")" != "$PROBE_EXPECTED" ]; then
+    PROBE_STALE="$(template_sha_matching "$PROBE_REL" "$PROBE_DST" rename)"
+    if [ -n "$PROBE_STALE" ]; then
+      printf '%s\n' "$PROBE_EXPECTED" >"$PROBE_DST"
+      REFRESHED="${REFRESHED}${PROBE_REL} (was template ${PROBE_STALE:0:7})"$'\n'
+    fi
+  fi
+  # Byte-identity with the template's current version is the ONLY test for
+  # "unadapted" — not whether the game has a `Player`, which says nothing
+  # about whether the markers were ever replaced. On the template's own
+  # checkout ($SNAKE == gamebient_game) the file is its own, by definition.
+  if [ "$SNAKE" != gamebient_game ] && [ -e "$PROBE_DST" ] \
+    && [ "$(cat "$PROBE_DST")" = "$PROBE_EXPECTED" ]; then
+    echo "HAND EDIT: $PROBE_REL: still the template's copy — adapt it before it compiles. It references the template's own \`Player\` sim entity; replace the marker components and decorate_* systems with stand-ins for THIS game's Update decorators (reproduce their branching: different entities getting different component sets is what splits the archetype), and point trace_order at the queries your order-sensitive sim systems iterate. It is the only test that catches the archetype-order trap; the \"delete the system and re-run --selftest\" check provably cannot. See the file's doc comment and the port checklist, 'What may stay in Update'."
   fi
 fi
 
@@ -1006,6 +1066,9 @@ if [ "$UPGRADE" -eq 1 ]; then
     echo "rollout-replay --upgrade: nothing to refresh — every copied file is already the template's current version or locally modified (see the HAND EDIT lines above)"
   fi
   echo "rollout-replay --upgrade: src/game/replay/selftest.rs and tests/archetype_order.rs are refreshed only while they are still byte-identical to a committed template version; once the port has replaced them they are left alone, silently"
+  if [ "$MISSING_PROBE" -eq 1 ]; then
+    echo "rollout-replay --upgrade: tests/archetype_order.rs is ABSENT and was not created — copy it from $TEMPLATE/tests/archetype_order.rs and adapt its markers (see the HAND EDIT above). It is the only test that catches the archetype-order trap."
+  fi
 fi
 
 echo "rollout-replay: files in place for $GAME"

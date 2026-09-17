@@ -47,6 +47,11 @@
 #           script must still insert `bash tools/build_verify.sh` and its
 #           `cp ... dist/verify.zip`, and print no HAND EDIT about it. This
 #           is the bug that shipped games whose verify_url 404s.
+#   (i) tests/archetype_order.rs, which references the template's own
+#       `Player` and so cannot be dropped into an arbitrary game: --upgrade
+#       must NOT create it when absent (HAND EDIT + summary line instead), a
+#       first rollout must still write it, and an adapted copy must survive
+#       both modes untouched and unmentioned.
 #   (h) the --upgrade branch for .github/workflows/ci.yml: a template copy
 #       whose Node step is the OLD single-fixture shape (taken from the
 #       template's own history) -> --upgrade must replace it with the
@@ -610,6 +615,67 @@ IMPL_COUNT="$(grep -c 'impl LeaderboardScore for GameData' "$COPY_G/src/game/sco
   || fail "(g) a second run produced $IMPL_COUNT LeaderboardScore impls, not 1"
 pass "(g) a second run is a no-op on scoring.rs"
 
+# --- and the same guard against a QUALIFIED impl ---------------------------
+#
+# `impl scoring::LeaderboardScore for GameData` and
+# `impl crate::game::scoring::LeaderboardScore for GameData` are both real
+# shapes, and an impl need not live in scoring.rs at all. A guard of
+# `grep -q 'impl LeaderboardScore'` on scoring.rs misses every one of those
+# and appends a duplicate — E0119, a worse failure than the missing impl this
+# automation exists to prevent.
+COPY_G2="$SCRATCH_ROOT/template-copy-g2"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_G2"
+
+python3 - "$COPY_G2" <<'PYEOF'
+import sys
+
+root = sys.argv[1]
+path = root + "/src/game/scoring.rs"
+src = open(path).read()
+impl = (
+    "impl LeaderboardScore for GameData {\n"
+    "    fn leaderboard_score(&self) -> u32 {\n"
+    "        self.score\n"
+    "    }\n"
+    "}\n"
+)
+assert src.count(impl) == 1, "part (g2) setup: the template's impl is not in the shape this test expects"
+# Remove it from scoring.rs and re-add it, QUALIFIED, from another module.
+open(path, "w").write(src.replace(impl, "", 1))
+open(root + "/src/game/leaderboard_impl.rs", "w").write(
+    "//! The impl, deliberately spelled with a qualified path and out of\n"
+    "//! scoring.rs -- the shape the pre-flight used to miss.\n"
+    "\n"
+    "use super::scoring::GameData;\n"
+    "\n"
+    "impl crate::game::scoring::LeaderboardScore for GameData {\n"
+    "    fn leaderboard_score(&self) -> u32 {\n"
+    "        self.score\n"
+    "    }\n"
+    "}\n"
+)
+mod_path = root + "/src/game/mod.rs"
+mod_src = open(mod_path).read()
+assert "pub mod scoring;" in mod_src
+open(mod_path, "w").write(
+    mod_src.replace("pub mod scoring;", "pub mod leaderboard_impl;\npub mod scoring;", 1)
+)
+PYEOF
+
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_G2" >"$SCRATCH_ROOT/g2-output.txt" 2>&1
+cat "$SCRATCH_ROOT/g2-output.txt"
+
+G2_IMPLS="$(grep -rh 'LeaderboardScore for GameData' "$COPY_G2/src" --include='*.rs' | grep -c .)"
+[ "$G2_IMPLS" = "1" ] \
+  || fail "(g) a qualified impl elsewhere in src/ was not recognised: now $G2_IMPLS impls, expected 1 (a duplicate is E0119)"
+if grep -q "added 'impl LeaderboardScore for GameData'" "$SCRATCH_ROOT/g2-output.txt"; then
+  fail "(g) the script appended an impl over an existing qualified one"
+fi
+if grep -q "HAND EDIT.*LeaderboardScore" "$SCRATCH_ROOT/g2-output.txt"; then
+  fail "(g) the script asked for a LeaderboardScore impl that already exists, qualified"
+fi
+pass "(g) a qualified 'impl crate::game::scoring::LeaderboardScore' outside scoring.rs is recognised, not duplicated"
+
 # ---------------------------------------------------------------------------
 # (h) --upgrade's .github/workflows/ci.yml branch.
 #
@@ -671,5 +737,75 @@ grep -q "HAND EDIT.*ci.yml" "$SCRATCH_ROOT/h2-output.txt" \
 cmp -s "$SCRATCH_ROOT/h2-ci-before.yml" "$COPY_H2/.github/workflows/ci.yml" \
   || fail "(h) --upgrade edited a ci.yml whose Node step it does not recognize"
 pass "(h) an unrecognized Node step gets a HAND EDIT and the workflow file is left untouched"
+
+
+# ---------------------------------------------------------------------------
+# (i) tests/archetype_order.rs is not a file that can be dropped into an
+# arbitrary game: it hard-references the template's own
+# `game::player::Player`, which only a handful of games have. Three rules,
+# one part.
+#
+#   --upgrade + absent  -> do NOT create it. Writing it into a ported game
+#                          without a `Player` turns a green checkout red at
+#                          `cargo test` with nothing in the output to explain
+#                          where the file came from, and --upgrade's whole
+#                          promise is that it does not break a working game.
+#                          cannonball-putt (the pilot, and the first
+#                          --upgrade target) and grand-theft-auto-reply both
+#                          lack `Player`. Ask for it and say so in the
+#                          summary instead.
+#   first rollout       -> still write it: the port is happening now, and a
+#                          named hand edit beats no test at all.
+#   adapted             -> untouched and unmentioned, in both modes.
+# ---------------------------------------------------------------------------
+COPY_I="$SCRATCH_ROOT/template-copy-i"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_I"
+rm -f "$COPY_I/tests/archetype_order.rs"
+[ -e "$COPY_I/tests/archetype_order.rs" ] && fail "(i) setup: the probe is still there after deleting it"
+
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_I" >"$SCRATCH_ROOT/i-output.txt" 2>&1
+cat "$SCRATCH_ROOT/i-output.txt"
+
+if [ -e "$COPY_I/tests/archetype_order.rs" ]; then
+  fail "(i) --upgrade created tests/archetype_order.rs; on a game without a Player that is an unexplained red test"
+fi
+grep -q "HAND EDIT: tests/archetype_order.rs: missing" "$SCRATCH_ROOT/i-output.txt" \
+  || fail "(i) --upgrade left the probe absent but printed no HAND EDIT naming it"
+grep -q "rollout-replay --upgrade: tests/archetype_order.rs is ABSENT" "$SCRATCH_ROOT/i-output.txt" \
+  || fail "(i) the --upgrade summary does not name the absent probe"
+pass "(i) --upgrade asks for a missing tests/archetype_order.rs instead of materialising a red one"
+
+COPY_I2="$SCRATCH_ROOT/template-copy-i2"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_I2"
+rm -f "$COPY_I2/tests/archetype_order.rs"
+
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_I2" >"$SCRATCH_ROOT/i2-output.txt" 2>&1
+cat "$SCRATCH_ROOT/i2-output.txt"
+
+[ -f "$COPY_I2/tests/archetype_order.rs" ] \
+  || fail "(i) a first rollout did not write tests/archetype_order.rs"
+cmp -s "$TEMPLATE/tests/archetype_order.rs" "$COPY_I2/tests/archetype_order.rs" \
+  || fail "(i) the first-rollout copy of tests/archetype_order.rs is not the template's"
+pass "(i) a first rollout still writes the probe"
+
+COPY_I3="$SCRATCH_ROOT/template-copy-i3"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_I3"
+printf '\n// Adapted for this game: markers replaced.\n' >>"$COPY_I3/tests/archetype_order.rs"
+cp "$COPY_I3/tests/archetype_order.rs" "$SCRATCH_ROOT/i3-probe-before.rs"
+
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_I3" >"$SCRATCH_ROOT/i3-output.txt" 2>&1
+cat "$SCRATCH_ROOT/i3-output.txt"
+
+cmp -s "$SCRATCH_ROOT/i3-probe-before.rs" "$COPY_I3/tests/archetype_order.rs" \
+  || fail "(i) --upgrade overwrote an adapted tests/archetype_order.rs"
+# No HAND EDIT and no "refreshed"/"ABSENT" summary entry about it. The
+# standing policy line naming both never-refreshed files is not a nag about
+# THIS game and is expected on every --upgrade, so it is excluded here.
+if grep "archetype_order.rs" "$SCRATCH_ROOT/i3-output.txt" \
+  | grep -vq "are refreshed only while they are still byte-identical"; then
+  grep "archetype_order.rs" "$SCRATCH_ROOT/i3-output.txt" >&2
+  fail "(i) --upgrade nagged about an already-adapted tests/archetype_order.rs"
+fi
+pass "(i) an adapted probe survives --upgrade untouched and unmentioned"
 
 echo "test_rollout_replay: all checks passed"

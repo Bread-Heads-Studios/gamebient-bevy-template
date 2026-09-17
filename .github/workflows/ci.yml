@@ -78,7 +78,7 @@ jobs:
           key: rollout
 
       - name: shellcheck
-        run: shellcheck tools/*.sh
+        run: shellcheck tools/*.sh build_web.sh install.sh
 
       # --no-game skips part (b), the only part that needs a sibling
       # games/cannonball-putt checkout — a separate private repo this

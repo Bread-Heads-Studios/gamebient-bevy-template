@@ -235,6 +235,14 @@ bash ../../libs/gamebient-bevy-template/tools/rollout-replay.sh --upgrade .
   the port has replaced it, it is left alone and, unlike every other file,
   prints **no** HAND EDIT: it is supposed to differ, so a line about it would
   be noise on every upgrade of every game for ever.
+  `tests/archetype_order.rs` has one extra rule: if it is **absent**,
+  `--upgrade` does *not* create it. The template's version references the
+  template's own `Player` entity, which most games do not have, so
+  materialising it would turn a green checkout red at `cargo test` with
+  nothing in the output to explain where the file came from — and not
+  breaking a working game is the whole promise of `--upgrade`. You get a HAND
+  EDIT and a summary line asking for it instead; copy it from the template
+  and adapt it as step 4 describes.
 
 Under `--upgrade`, a game whose `src/game/mod.rs` already names
 `sim::SimSet` also stops getting the two HAND EDITs the script prints
@@ -278,10 +286,17 @@ Then, in this order:
    cargo check --locked --features verify   # must pass: the lock is self-consistent
    ```
    `--locked` is the proof, not a formality — it fails rather than silently
-   re-resolving, which is the whole question being asked. (`build_web.sh`
-   and `tools/build_verify.sh` both build `--locked` for the same reason:
-   `build_web.sh` is the Vercel build command and `Cargo.lock` is
-   committed, so a deploy must use the versions CI tested.)
+   re-resolving, which is the whole question being asked.
+
+   **Do this before the next deploy, not after.** `tools/build_verify.sh` is
+   copied verbatim into every game and refreshed by `--upgrade`, and it
+   builds `--locked`; `build_web.sh` (the Vercel build command, which also
+   builds `--locked`) invokes it. So from the moment a game is rolled out or
+   upgraded, a stale or drifted `Cargo.lock` **fails that game's Vercel
+   deploy** rather than quietly re-resolving to whatever is current. That is
+   the point — a silent re-resolve is how the pilot's wasm-bindgen drifted to
+   0.2.126 against a 0.2.108 CLI — but it means a drifted game's first red
+   build after an upgrade is this, and the recipe above is the fix.
 3. Rebuild the verifier and **regenerate `tests/fixtures/selftest-wasm.gxr`**
    (`bash tools/build_verify.sh` then
    `node tools/verify_fixture.mjs --record tests/fixtures/selftest-wasm.gxr`,

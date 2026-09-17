@@ -856,7 +856,11 @@ reorder can stay hidden.
 
 **Extend its markers to your game's real decorators during the port** — as
 shipped it is a smoke test, since the template's sim queries one entity and
-one entity has no order to get wrong. Two things matter when you do:
+one entity has no order to get wrong. It also does not *compile* unadapted in
+most games: the template's version references the template's own `Player`.
+(That is why `rollout-replay.sh --upgrade` refuses to create the file when a
+game does not already have one, and asks for it instead.) Two things matter
+when you adapt it:
 
 * **Reproduce the branching.** A decorator that attaches a different
   component set to different entities (golden crumbs get a sparkle, rivals
