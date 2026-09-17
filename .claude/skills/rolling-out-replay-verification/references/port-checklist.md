@@ -170,20 +170,28 @@ accumulator or not. That is rule 5's own advice; this clause is the rest of
 the sim.
 
 `tools/rollout-replay.sh` prints an **advisory** HAND EDIT for this, as
-`<file>:<Component>` pairs: a file outside `src/game/` that takes an entity
-out of a query and calls `.insert(`/`.remove::<`/`.despawn(` on it, naming a
-component declared *and* queried in `src/game/`. On Grand Theft Auto-Reply it
-names exactly the three real sites:
+`<file>:<Component>` pairs: any file under `src/` that takes an entity out of
+a query and calls `.insert(`/`.remove::<`/`.despawn(` on it, naming a
+component the game declares *and* queries in `src/game/`. Three filters keep
+it readable — only game-declared components (so `Transform` and `Sprite` never
+appear), not a file that spawns the component itself ("decorate what I just
+spawned" is benign: both paths do it), and minus whatever the same scan finds
+in the template (every game inherits the same cleanup/pause/audio
+boilerplate). On Grand Theft Auto-Reply:
 
 ```
-HAND EDIT (advisory): ... src/assets/projectiles.rs:Email
-src/assets/projectiles.rs:Projectile src/assets/inbox_view.rs:Email
+src/assets/inbox_view.rs:Email  src/assets/projectiles.rs:Email
+src/assets/projectiles.rs:Projectile  src/game/audio/mod.rs:RaidSiren
+src/game/combat.rs:Email  src/game/combat.rs:Projectile
+src/game/inbox.rs:Email
 ```
 
-It is a grep, not an analysis — expect false positives (the insert lands on a
-different entity that merely mentions the same type) and false negatives (an
-entity reached through a resource rather than a query). Treat it as "read
-these two files", not as a verdict either way.
+The first three are the real bug. The rest are sim code decorating its own
+entities from inside the chain, which is fine — both paths do it — and is
+what "advisory" means: it is a reading list, not a verdict. Expect false
+negatives too (an entity reached through a resource rather than a query, or a
+file that both spawns and decorates the same type). The thing that *answers*
+the question is `tests/archetype_order.rs`.
 
 ### What the headless app does not have
 

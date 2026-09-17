@@ -195,25 +195,58 @@ fi
 # own `player::spawn_player`), or a decorator already inside `SimSet`. Hence
 # "advisory": it says which files to read, never which are wrong. The test
 # that answers the question is `tests/archetype_order.rs`.
-if [ -d "$GAME/src/game" ]; then
-  GAME_COMPONENTS="$(grep -rhE -A4 '#\[derive\([^)]*\bComponent\b' "$GAME/src/game" --include='*.rs' 2>/dev/null \
+# Emits one `<path>:<Component>` line per (file, component) pair where that
+# file pulls an entity out of a query and inserts/removes/despawns on it,
+# naming a component declared and queried under $1/src/game. Two filters do
+# the discriminating: the component must be one the GAME declares (so
+# `Transform`, `Sprite` and friends, which are everywhere, never appear), and
+# the file must not itself spawn it ("decorate the entity I just spawned" is
+# benign — both paths do it, so no archetype diverges; decorating an entity
+# SOMEONE ELSE spawned is the shape that bites).
+archetype_insert_pairs() {
+  local root="$1" comps f comp
+  [ -d "$root/src/game" ] || return 0
+  comps="$(grep -rhE -A4 '#\[derive\([^)]*\bComponent\b' "$root/src/game" --include='*.rs' 2>/dev/null \
     | grep -oE '^(pub )?(struct|enum) [A-Z][A-Za-z0-9_]*' \
     | awk '{print $NF}' | sort -u)"
-  ADVISORY=""
   while read -r f; do
     [ -n "$f" ] || continue
     grep -q '\.entity(' "$f" || continue
     grep -qE '\.insert\(|\.remove::<|\.despawn\(' "$f" || continue
-    for comp in $GAME_COMPONENTS; do
-      # Named in this file's queries...
+    for comp in $comps; do
       grep -qE "(Query<[^>]*&(mut )?${comp}\b|With<${comp}>|Without<${comp}>|&(mut )?${comp}\b)" "$f" || continue
-      # ...and queried by the sim's own code.
-      grep -rqE "(Query<[^>]*&(mut )?${comp}\b|With<${comp}>|Without<${comp}>)" "$GAME/src/game" --include='*.rs' 2>/dev/null || continue
-      ADVISORY="${ADVISORY}${f#"$GAME/"}:${comp} "
+      grep -rqE "(Query<[^>]*&(mut )?${comp}\b|With<${comp}>|Without<${comp}>)" "$root/src/game" --include='*.rs' 2>/dev/null || continue
+      grep -qE "spawn\(\(?[^)]*\b${comp}\b" "$f" && continue
+      printf '%s:%s\n' "${f#"$root/"}" "$comp"
     done
-  done < <(find "$GAME/src" -name '*.rs' 2>/dev/null)
+  done < <(find "$root/src" -name '*.rs' 2>/dev/null)
+}
+
+# Advisory only, and deliberately a heuristic. A presentation system left in
+# `Update` that INSERTS a component onto an entity a SimSet system queries
+# changes that entity's archetype, and archetype order is the order Bevy
+# iterates a `Query` in. The verifier adds no render plugins, so it never
+# performs the insert and iterates a different order — a desync that every
+# fixture passes (nothing renders during a selftest) and only replays of
+# real, rendered runs expose. Grand Theft Auto-Reply hit exactly this:
+# `src/assets/projectiles.rs` and `inbox_view.rs` decorate the live
+# `Projectile` and `Email` entities that `combat::advance_projectiles` and
+# `inbox::tick_emails` iterate.
+#
+# Scans ALL of src/, `src/game/` included: Dough.io keeps its decorators in
+# `src/game/presentation.rs`, so excluding the sim's own directory would find
+# nothing for it. What IS subtracted is whatever the same scan finds in this
+# template — every game inherits the same `cleanup_game_entities`,
+# pause-overlay and audio-fade boilerplate, and flagging it in every game for
+# ever would bury the game-specific hits that matter. (Run against the
+# template itself the two sets are equal, so nothing prints.)
+if [ -d "$GAME/src/game" ]; then
+  TEMPLATE_PAIRS="$(archetype_insert_pairs "$TEMPLATE" | sort -u)"
+  GAME_PAIRS="$(archetype_insert_pairs "$GAME" | sort -u)"
+  ADVISORY="$(comm -13 <(printf '%s\n' "$TEMPLATE_PAIRS") <(printf '%s\n' "$GAME_PAIRS") | tr '\n' ' ')"
+  ADVISORY="${ADVISORY% }"
   if [ -n "$ADVISORY" ]; then
-    echo "HAND EDIT (advisory): these files change the archetype of entities src/game/ also queries — ${ADVISORY% }. Where the entity is one a SimSet system ITERATES and the insert happens from Update, it reorders that query, and the verifier (no render plugins, so no insert) never sees the same order. Put the presentation on a CHILD entity, move the insert into the sim chain, or sort the sim query by a stable per-entity key. Benign shapes are listed too (a spawn that decorates in the same system, a decorator already in SimSet) — this is a grep, so read the files, then extend tests/archetype_order.rs's markers to your real decorators and let that test answer it. See docs/replay-verification.md rule 1."
+    echo "HAND EDIT (advisory): these files change the archetype of entities src/game/ also queries — ${ADVISORY}. Where the entity is one a SimSet system ITERATES and the insert happens from Update, it reorders that query, and the verifier (no render plugins, so no insert) never sees the same order. Put the presentation on a CHILD entity, move the insert into the sim chain, or sort the sim query by a stable per-entity key. This is a grep: benign hits are expected (a decorator already inside SimSet is fine), so read the files, then extend tests/archetype_order.rs's markers to your real decorators and let that test answer it. See docs/replay-verification.md rule 1."
   fi
 fi
 

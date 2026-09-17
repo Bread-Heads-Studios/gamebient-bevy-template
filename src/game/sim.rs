@@ -185,11 +185,14 @@ pub struct PendingSeed(pub Option<[u8; 32]>);
 /// different afterwards.
 pub fn seed_bytes(seed: u64) -> [u8; 32] {
     let mut out = [0u8; 32];
-    for (lane, chunk) in out.chunks_exact_mut(8).enumerate() {
+    // Indexed rather than `chunks_exact_mut(8)`: newer clippy rejects a
+    // constant chunk size in favour of `as_chunks_mut`, which is not stable
+    // on every toolchain the fleet builds with. This compiles everywhere.
+    for lane in 0..4usize {
         let mixed = seed
             .wrapping_mul(0x9E37_79B9_7F4A_7C15)
             .wrapping_add(lane as u64);
-        chunk.copy_from_slice(&mixed.to_le_bytes());
+        out[lane * 8..lane * 8 + 8].copy_from_slice(&mixed.to_le_bytes());
     }
     out
 }
@@ -337,10 +340,10 @@ mod tests {
         // The four 8-byte lanes must differ, or the RNG is seeded with one
         // value repeated and loses entropy.
         let b = seed_bytes(7);
-        let lanes: Vec<&[u8]> = b.chunks_exact(8).collect();
-        for i in 0..lanes.len() {
-            for j in (i + 1)..lanes.len() {
-                assert_ne!(lanes[i], lanes[j], "lanes {i} and {j} are identical");
+        let lanes: Vec<&[u8]> = (0..4).map(|l| &b[l * 8..l * 8 + 8]).collect();
+        for (i, a) in lanes.iter().enumerate() {
+            for (j, other) in lanes.iter().enumerate().skip(i + 1) {
+                assert_ne!(a, other, "lanes {i} and {j} are identical");
             }
         }
         // Pinned: changing this expansion silently changes what every

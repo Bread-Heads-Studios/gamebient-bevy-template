@@ -77,12 +77,13 @@ attic-excavator, grand-theft-otto).
    (the script never rewires a game's own systems onto `sim::SimSet`).
 
    One line is labelled `HAND EDIT (advisory)` and lists
-   `<file>:<Component>` pairs: a file outside `src/game/` that pulls an
-   entity out of a query and inserts, removes or despawns on it, where that
-   component is also declared and queried in `src/game/`. That is the
-   archetype-order trap — see the checklist's "The two order traps". It is a
-   grep, so read the two files rather than treating it as a verdict either
-   way.
+   `<file>:<Component>` pairs: a file under `src/` that pulls an entity out
+   of a query and inserts, removes or despawns on it, where that component is
+   also declared and queried in `src/game/`. That is the archetype-order trap
+   — see the checklist's "The two order traps". It is a reading list, not a
+   verdict: sim code decorating its own entities from inside the chain shows
+   up too and is fine. Read the files, then let `tests/archetype_order.rs`
+   answer it.
 
 3. **Port the determinism rules.** Work through
    `references/port-checklist.md` rule by rule against the game's actual
