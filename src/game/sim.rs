@@ -1,5 +1,13 @@
 //! Determinism scaffolding: the fixed tick, the one RNG, the run seed and
 //! the checksum a replay must reproduce. See docs/replay-verification.md.
+//!
+//! `checksum_tick` (below) folds only the score and the tick — it is copied
+//! verbatim into every game by `tools/rollout-replay.sh` and must stay
+//! game-agnostic. Each game folds its own key run state (player/ball
+//! position, hole index, lives, ...) in a system of its own, placed right
+//! after `sim::checksum_tick` in the `SimSet` chain; `player::checksum_player`
+//! is this template's example. See docs/replay-verification.md, determinism
+//! rule 6.
 
 use std::time::Duration;
 
@@ -193,24 +201,18 @@ pub fn restore_tick_frame_while_paused(sim_prev: Res<SimPrev>, mut frame: ResMut
     frame.set_prev(sim_prev.0.difference(Buttons::PAUSE).union(live_pause));
 }
 
-/// Last in `SimSet` before the recorder: folds the state a replay must
-/// reproduce. The player transform is folded bit-exactly so the checksum
-/// is sensitive to inputs and to float behaviour, which is what the
-/// native-vs-wasm fixture check relies on. Games fold more via
-/// `Checksum::fold` from their own systems.
-pub fn checksum_tick(
-    data: Res<GameData>,
-    tick: Res<SimTick>,
-    player: Query<&Transform, With<super::player::Player>>,
-    mut sum: ResMut<Checksum>,
-) {
+/// Folds the two things every game has: the leaderboard score and the tick.
+/// Game-agnostic on purpose (see the module doc) — this is one of the files
+/// `tools/rollout-replay.sh` copies verbatim into every game, so it must
+/// compile and mean the same thing regardless of what a game's own run
+/// state looks like. Each game folds its own key state (player/ball
+/// position, hole index, lives, ...) in its own system placed right after
+/// this one in the `SimSet` chain, bit-exactly (`f32::to_bits`) so the
+/// checksum is sensitive to float behaviour, which is what the
+/// native-vs-wasm fixture check relies on.
+pub fn checksum_tick(data: Res<GameData>, tick: Res<SimTick>, mut sum: ResMut<Checksum>) {
     sum.fold(u64::from(data.leaderboard_score()));
-    sum.fold(u64::from(data.lives));
     sum.fold(u64::from(tick.0));
-    if let Ok(tf) = player.single() {
-        sum.fold(u64::from(tf.translation.x.to_bits()));
-        sum.fold(u64::from(tf.translation.y.to_bits()));
-    }
 }
 
 #[cfg(test)]

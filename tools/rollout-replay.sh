@@ -11,8 +11,9 @@
 # tests/selftest.rs — get only a mechanical `gamebient_game::` ->
 # `<snake>::` crate-path substitution; see the comment at that copy step).
 # game-specific behaviour (porting GamePlugin::build onto sim::SimSet,
-# adapting sim::checksum_tick's folds, writing the selftest script) is a
-# HAND EDIT for the skill's port-checklist, not this script.
+# adding this game's own checksum_<game> system after sim::checksum_tick,
+# writing the selftest script) is a HAND EDIT for the skill's
+# port-checklist, not this script.
 #
 # Usage: tools/rollout-replay.sh <game-dir>
 set -euo pipefail
@@ -281,8 +282,9 @@ sub spit {
 
         # Always surfaced: the build() body is game-specific free-form code
         # this script cannot safely touch (system ordering, what stays in
-        # Update vs moves into sim::SimSet, what checksum_tick folds).
-        hand_edit("src/game/mod.rs: port GamePlugin::build to run gameplay through sim::SimSet, gate scene/audio/dev-harness setup on !self.headless, and adapt sim::checksum_tick's GameData.lives / Player-transform folds to this game's own state (see the skill's port-checklist)");
+        # Update vs moves into sim::SimSet, what this game's own checksum
+        # system folds).
+        hand_edit('src/game/mod.rs: port GamePlugin::build to run gameplay through sim::SimSet, gate scene/audio/dev-harness setup on !self.headless, and add a checksum_<game> system after sim::checksum_tick folding your key run state (see docs/replay-verification.md rule 6)');
 
         spit($path, $c) if $c ne $orig;
     } else {

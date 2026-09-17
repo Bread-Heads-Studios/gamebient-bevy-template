@@ -61,15 +61,22 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
 5. **Fold extra state into `Checksum`** via `Checksum::fold(&mut self, u64)`
    whenever a score could be reached through different in-game states — the
    checksum is what catches a replay that reproduces the score by accident.
-6. **No `Instant`/`SystemTime`/frame count in sim logic.** Wall-clock and
+6. **`sim::checksum_tick` folds only the score and the tick.** It is one of
+   the files `tools/rollout-replay.sh` copies verbatim into every game, so
+   it must stay game-agnostic. Each game folds its own key run state
+   (player/ball position, hole index, lives, ...) in a system of its own,
+   registered in `SimSet` right after `sim::checksum_tick` — this
+   template's `player::checksum_player` is the example (folds `lives`, then
+   the player transform bit-exactly).
+7. **No `Instant`/`SystemTime`/frame count in sim logic.** Wall-clock and
    frame-count reads aren't reproducible by a headless re-simulation driven
    by `TimeUpdateStrategy::ManualDuration`.
-7. **Never read `pause_just_pressed` in a sim system.** The recorder masks
+8. **Never read `pause_just_pressed` in a sim system.** The recorder masks
    `Buttons::PAUSE` out of every recorded tick (a replayed pause would
    freeze the sim it is meant to reproduce), so it is the one bit a replay
    cannot carry. Pause belongs in `toggle_pause`, which runs before
    `SimSet`.
-8. **`LeaderboardScore`, not `GameData.score`, for the replay/host score.**
+9. **`LeaderboardScore`, not `GameData.score`, for the replay/host score.**
    games without `score` implement `LeaderboardScore`; the HUD, host `score`
    event and replay must agree.
 

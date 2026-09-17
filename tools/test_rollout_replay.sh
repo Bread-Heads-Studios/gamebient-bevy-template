@@ -7,10 +7,10 @@
 #   (b) a copy of games/cannonball-putt -> the one documented hand edit
 #       (rename its own test-only src/game/sim.rs) is applied first, then
 #       the script must leave `cargo check --features verify` passing after
-#       the still-required per-game hand edits are applied (see "known gaps"
-#       below), and its HAND EDIT output must name LeaderboardScore and the
-#       GamePlugin::build port, and nothing about sim.rs (it was renamed
-#       away before the script ran).
+#       the still-required per-game hand edits are applied (LeaderboardScore,
+#       plus the HostCommand::Seed match arm — see below), and its HAND EDIT
+#       output must name LeaderboardScore and the GamePlugin::build port, and
+#       nothing about sim.rs (it was renamed away before the script ran).
 #
 # Usage: tools/test_rollout_replay.sh
 set -euo pipefail
@@ -95,33 +95,8 @@ if grep -q "sim\.rs" "$SCRATCH_ROOT/b-output.txt"; then
 fi
 pass "(b) HAND EDIT output names LeaderboardScore and the GamePlugin::build port, nothing about sim.rs"
 
-# --- Known gaps beyond the documented LeaderboardScore hand edit -----------
+# --- A gap beyond the documented LeaderboardScore hand edit -----------------
 #
-# The freshly-copied src/game/sim.rs also won't compile as-is against a game
-# shaped like Cannonball Putt, for two reasons neither pre-flight check nor
-# HAND EDIT message currently names:
-#
-#   1. checksum_tick() folds `data.lives` — cannonball-putt's GameData is
-#      golf state (hole_index/strokes/results/best_total) with no `lives`.
-#   2. checksum_tick() queries `With<super::player::Player>` — cannonball-
-#      putt has no `player` module or `Player` component at all (it moves a
-#      `Ball`, not a generic Player entity).
-#
-# The design doc's determinism-port bullet 6 says checksum_tick must fold
-# "the game's own key state (ball position and hole index for golf)" — i.e.
-# this is real per-game porting work the skill's port-checklist (Task 3+)
-# is meant to cover, not something rollout-replay.sh can safely automate
-# (same reasoning as the GamePlugin::build HAND EDIT). Apply the minimal
-# golf-shaped version of that port here, the same way LeaderboardScore is
-# added below, so this test proves the script's mechanical output is
-# actually buildable once the *documented and discovered* per-game hand
-# edits are done — see task-2-report.md's Concerns section.
-perl -0pi -e '
-  s/player: Query<&Transform, With<super::player::Player>>/ball: Query<&Transform, With<super::ball::Ball>>/;
-  s/sum\.fold\(u64::from\(data\.lives\)\);/sum.fold(u64::from(data.hole_index as u64));/;
-  s/if let Ok\(tf\) = player\.single\(\) \{/if let Ok(tf) = ball.single() {/;
-' "$COPY_B/src/game/sim.rs"
-
 # The mandated gamebient-input v0.2.0 -> v0.3.0 bump (required by the plan's
 # Global Constraints) added HostCommand::Seed. cannonball-putt's own
 # pre-existing host.rs matches HostCommand without a wildcard arm, so this

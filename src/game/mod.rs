@@ -83,6 +83,7 @@ impl Plugin for GamePlugin {
                     player::move_player,
                     scoring::handle_score_events,
                     sim::checksum_tick,
+                    player::checksum_player,
                     replay::recorder::record_tick,
                     sim::remember_sim_prev,
                 )
