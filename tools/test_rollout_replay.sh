@@ -11,6 +11,10 @@
 #       plus the HostCommand::Seed match arm — see below), and its HAND EDIT
 #       output must name LeaderboardScore and the GamePlugin::build port, and
 #       nothing about sim.rs (it was renamed away before the script ran).
+#   (c) a second copy of the template with release.yml's upload artifact
+#       reverted to a pre-rollout shape but its `path:` line already
+#       drifted -> the script must print a HAND EDIT naming release.yml's
+#       upload path rather than silently leaving it broken.
 #
 # Usage: tools/test_rollout_replay.sh
 set -euo pipefail
@@ -139,5 +143,66 @@ if (cd "$COPY_B" && cargo check --features verify); then
 else
   fail "(b) cargo check --features verify failed"
 fi
+
+# ---------------------------------------------------------------------------
+# (c) release.yml upload-path HAND EDIT, on a fresh template copy.
+#
+# Regression test for a bug where the upload `path:` drift check read
+# `$c` (the release.yml content) *after* the "Package replay verifier"
+# step had already been spliced in — and that step's own `cp dist-
+# verify.zip build/<pkg>-verify.zip` line contains the literal substring
+# the check was looking for, so on a game whose "Zip web bundle" anchor
+# matched but whose `path:` line had drifted from the template's shape,
+# the upload silently never gained the verify zip and no HAND EDIT
+# printed. Reproduce that shape here: revert a fresh copy's release.yml
+# to not yet have the "Package replay verifier" step (so this run inserts
+# it fresh, exactly like a first-time rollout), but with the upload
+# `path:` line already drifted into something the script's exact-match
+# anchor won't recognize.
+# ---------------------------------------------------------------------------
+COPY_C="$SCRATCH_ROOT/template-copy-c"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_C"
+
+perl - "$COPY_C" <<'PERL_EOF'
+use strict;
+use warnings;
+my $path = "$ARGV[0]/.github/workflows/release.yml";
+open my $fh, '<', $path or die "read $path: $!";
+local $/;
+my $c = <$fh>;
+close $fh;
+
+my $package_step = "\n      # build.sh web -> build_web.sh already ran tools/build_verify.sh and\n"
+                  . "      # produced dist-verify.zip at the repo root; just place it under its\n"
+                  . "      # release asset name.\n"
+                  . "      - name: Package replay verifier\n"
+                  . "        if: matrix.target == 'web'\n"
+                  . "        run: |\n"
+                  . "          mkdir -p build\n"
+                  . "          cp dist-verify.zip build/gamebient-game-verify.zip\n";
+my $idx = index($c, $package_step);
+die "part (c) setup: 'Package replay verifier' step not found in the shape this test expects\n" if $idx < 0;
+substr($c, $idx, length($package_step)) = "";
+
+my $old_path_block = "          path: |\n"
+                    . "            build/gamebient-game-" . '${{ matrix.target }}.*' . "\n"
+                    . "            build/gamebient-game-verify.zip\n";
+my $idx2 = index($c, $old_path_block);
+die "part (c) setup: multi-line upload path block not found in the shape this test expects\n" if $idx2 < 0;
+substr($c, $idx2, length($old_path_block)) = "          path: build/gamebient-game-artifacts/\n";
+
+open my $ofh, '>', $path or die "write $path: $!";
+print $ofh $c;
+close $ofh;
+PERL_EOF
+
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_C" >"$SCRATCH_ROOT/c-output.txt" 2>&1
+cat "$SCRATCH_ROOT/c-output.txt"
+
+grep -q "release.yml" "$SCRATCH_ROOT/c-output.txt" \
+  || fail "(c) HAND EDIT output doesn't mention release.yml"
+grep "release.yml" "$SCRATCH_ROOT/c-output.txt" | grep -q "path" \
+  || fail "(c) HAND EDIT output mentions release.yml but not the upload 'path'"
+pass "(c) a drifted release.yml upload path prints a HAND EDIT instead of silently staying broken"
 
 echo "test_rollout_replay: all checks passed"

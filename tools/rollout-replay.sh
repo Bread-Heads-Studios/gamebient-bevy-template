@@ -21,6 +21,9 @@ TEMPLATE="$(cd "$(dirname "$0")/.." && pwd)"
 GAME="$(cd "${1:?usage: $0 <game-dir>}" && pwd)"
 PKG=$(grep -m1 '^name' "$GAME/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')
 SNAKE=${PKG//-/_}
+if [ -z "$PKG" ]; then
+  echo "HAND EDIT: $GAME/Cargo.toml: no 'name' under [package] (a workspace root?); skipping the Cargo.toml/lib.rs/main.rs wiring — point this script at the member crate's directory instead"
+fi
 
 # ---------------------------------------------------------------------------
 # Pre-flight HAND EDITs. Informational only — never stop the script.
@@ -34,7 +37,9 @@ fi
 if [ -e "$GAME/src/game/sim.rs" ] && ! cmp -s "$TEMPLATE/src/game/sim.rs" "$GAME/src/game/sim.rs"; then
   echo "HAND EDIT: src/game/sim.rs: already exists and isn't the template's sim.rs; rename your sim.rs (e.g. shot_sim.rs) and re-run"
 fi
-if [ -f "$GAME/src/game/scoring.rs" ] && ! grep -q 'pub score' "$GAME/src/game/scoring.rs"; then
+if [ ! -f "$GAME/src/game/scoring.rs" ]; then
+  echo "HAND EDIT: src/game/scoring.rs: missing; replay/mod.rs needs an impl of LeaderboardScore for your GameData"
+elif ! grep -q 'pub score' "$GAME/src/game/scoring.rs"; then
   echo "HAND EDIT: src/game/scoring.rs: no 'score' field on GameData; implement LeaderboardScore for it"
 fi
 if grep -rn "ButtonInput<KeyCode>" "$GAME/src/game" --include="*.rs" 2>/dev/null | grep -v autopilot | grep -q .; then
@@ -113,16 +118,23 @@ copy_with_crate_rename() {
     printf '%s\n' "$expected" >"$dst"
   fi
 }
-copy_with_crate_rename src/bin/verify.rs
-copy_with_crate_rename tests/selftest.rs
+# SNAKE is empty when PKG is (see the HAND EDIT above); an empty-prefix
+# substitution would produce invalid Rust ("use ::game::replay::..."), so
+# skip these too rather than write garbage.
+if [ -n "$PKG" ]; then
+  copy_with_crate_rename src/bin/verify.rs
+  copy_with_crate_rename tests/selftest.rs
+fi
 
 # ---------------------------------------------------------------------------
 # Wiring edits: Cargo.toml, src/lib.rs + src/main.rs, src/game/mod.rs,
 # build_web.sh, CI/release workflows, .gitignore, assets/info.json. One perl
 # pass so every anchor/guard lives in one place; each edit is guarded so a
 # second run is a no-op, and every miss prints a HAND EDIT instead of
-# guessing.
+# guessing. Skipped entirely when PKG is empty (HAND EDIT already printed
+# above) — every one of these edits keys off the package name in some way.
 # ---------------------------------------------------------------------------
+if [ -n "$PKG" ]; then
 perl - "$GAME" "$PKG" "$SNAKE" <<'PERL_EOF'
 use strict;
 use warnings;
@@ -211,7 +223,7 @@ sub spit {
         my @cfg; # [ "#[cfg(...)]\n", "modname" ]
 
         for my $line (@lines) {
-            if ($line =~ /^mod (\w+);\s*\n?$/) {
+            if ($line =~ /^(?:pub )?mod (\w+);\s*\n?$/) {
                 my $name = $1;
                 if (@out && $out[-1] =~ /^#\[cfg\([^)]*\)\]\s*\n?$/) {
                     my $attr = pop @out;
@@ -225,21 +237,31 @@ sub spit {
         }
 
         if (@plain || @cfg) {
-            unless (-e $lib_path) {
+            if (-e $lib_path) {
+                # lib.rs already exists but main.rs still has 'mod'
+                # declarations to remove: not the idempotent case (a prior
+                # successful run would have stripped them together with
+                # writing lib.rs), so this lib.rs's pub mod set can't be
+                # trusted to cover what main.rs is about to import. Leave
+                # both files' mod wiring alone rather than write a `use
+                # <snake>::{...}` that might not resolve.
+                hand_edit("src/lib.rs: already exists while src/main.rs still has mod declarations to remove; wire 'pub mod' in lib.rs and 'use ${snake}::{...}' in main.rs by hand instead of risking a mismatch");
+                @out = @lines;
+            } else {
                 my $lib_c = "#![allow(clippy::too_many_arguments, clippy::type_complexity)]\n\n";
                 $lib_c .= "pub mod $_;\n" for @plain;
                 $lib_c .= "$_->[0]pub mod $_->[1];\n" for @cfg;
                 spit($lib_path, $lib_c);
-            }
 
-            my $use_line = "use $snake" . "::{" . join(", ", @plain) . "};\n";
-            my @cfg_use = map { "$_->[0]" . "use $snake" . "::$_->[1];\n" } @cfg;
+                my $use_line = "use $snake" . "::{" . join(", ", @plain) . "};\n";
+                my @cfg_use = map { "$_->[0]" . "use $snake" . "::$_->[1];\n" } @cfg;
 
-            my $insert_at = 0;
-            for my $i (0 .. $#out) {
-                if ($out[$i] =~ /^use /) { $insert_at = $i; last; }
+                my $insert_at = 0;
+                for my $i (0 .. $#out) {
+                    if ($out[$i] =~ /^use /) { $insert_at = $i; last; }
+                }
+                splice(@out, $insert_at, 0, $use_line, @cfg_use);
             }
-            splice(@out, $insert_at, 0, $use_line, @cfg_use);
         }
 
         $main_c = join('', @out);
@@ -284,7 +306,7 @@ sub spit {
         # this script cannot safely touch (system ordering, what stays in
         # Update vs moves into sim::SimSet, what this game's own checksum
         # system folds).
-        hand_edit('src/game/mod.rs: port GamePlugin::build to run gameplay through sim::SimSet, gate scene/audio/dev-harness setup on !self.headless, and add a checksum_<game> system after sim::checksum_tick folding your key run state (see docs/replay-verification.md rule 6)');
+        hand_edit('src/game/mod.rs: port GamePlugin::build to run gameplay through sim::SimSet, gate scene/audio/dev-harness setup on !self.headless, and add a checksum_<game> system after sim::checksum_tick folding your key run state (see docs/replay-verification.md rule 6). CI\'s Node fixture step will fail until tests/fixtures/selftest.gxr is generated (skill step 4)');
 
         spit($path, $c) if $c ne $orig;
     } else {
@@ -381,6 +403,12 @@ sub spit {
     if (defined $c) {
         my $orig = $c;
         my $verify_zip = "$pkg-verify.zip";
+        # Captured before the package-step insertion below, which itself
+        # contains the literal text "build/$verify_zip" (its own `cp`
+        # line) — checking this after insertion would make the upload
+        # path's HAND EDIT unreachable whenever the 'Zip web bundle'
+        # anchor matched but the path: line had drifted.
+        my $had_zip = index($c, "build/$verify_zip") >= 0;
 
         if (index($c, "Package replay verifier") < 0) {
             my $anchor = "          (cd dist && zip -r ../build/$pkg-web.zip .)\n";
@@ -400,7 +428,7 @@ sub spit {
             }
         }
 
-        if (index($c, "build/$verify_zip") < 0 || index($c, "path: |") < 0) {
+        if (!$had_zip || index($c, "path: |") < 0) {
             my $old_path = "          path: build/$pkg-" . '${{ matrix.target }}.*' . "\n";
             my $new_path = "          path: |\n"
                           . "            build/$pkg-" . '${{ matrix.target }}.*' . "\n"
@@ -408,7 +436,7 @@ sub spit {
             my $idx = index($c, $old_path);
             if ($idx >= 0) {
                 substr($c, $idx, length($old_path)) = $new_path;
-            } elsif (index($c, "build/$verify_zip") < 0) {
+            } elsif (!$had_zip) {
                 hand_edit(".github/workflows/release.yml: upload artifact 'path:' line not found in the template's shape; add build/$verify_zip to it by hand");
             }
         }
@@ -459,6 +487,7 @@ sub spit {
 
 print "$_\n" for @hand_edits;
 PERL_EOF
+fi
 
 # The perl edits above write multi-line blocks with their own spacing (not
 # necessarily rustfmt's); format the game so CI stays green, same as
