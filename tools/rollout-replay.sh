@@ -19,7 +19,7 @@
 set -euo pipefail
 TEMPLATE="$(cd "$(dirname "$0")/.." && pwd)"
 GAME="$(cd "${1:?usage: $0 <game-dir>}" && pwd)"
-PKG=$(grep -m1 '^name' "$GAME/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')
+PKG=$(grep -m1 '^name' "$GAME/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/' || true)
 SNAKE=${PKG//-/_}
 if [ -z "$PKG" ]; then
   echo "HAND EDIT: $GAME/Cargo.toml: no 'name' under [package] (a workspace root?); skipping the Cargo.toml/lib.rs/main.rs wiring — point this script at the member crate's directory instead"

@@ -15,6 +15,10 @@
 #       reverted to a pre-rollout shape but its `path:` line already
 #       drifted -> the script must print a HAND EDIT naming release.yml's
 #       upload path rather than silently leaving it broken.
+#   (d) a scratch dir with only a [workspace] Cargo.toml (no [package]
+#       name, e.g. a workspace root like games/voidrunner-authoritative)
+#       -> the script must still exit 0 and print a HAND EDIT naming
+#       Cargo.toml, not silently exit 1 with no output under set -e.
 #
 # Usage: tools/test_rollout_replay.sh
 set -euo pipefail
@@ -204,5 +208,38 @@ grep -q "release.yml" "$SCRATCH_ROOT/c-output.txt" \
 grep "release.yml" "$SCRATCH_ROOT/c-output.txt" | grep -q "path" \
   || fail "(c) HAND EDIT output mentions release.yml but not the upload 'path'"
 pass "(c) a drifted release.yml upload path prints a HAND EDIT instead of silently staying broken"
+
+# ---------------------------------------------------------------------------
+# (d) Workspace-root Cargo.toml: no [package] name line at all, so PKG ends
+# up empty.
+#
+# Regression test: `PKG=$(grep -m1 '^name' "$GAME/Cargo.toml" | sed ...)`
+# under `set -euo pipefail` — with pipefail, that pipeline's exit status is
+# grep's (1, no match) even though sed itself succeeds, and under -e an
+# assignment command whose right-hand side fails aborts the whole script
+# right there, silently (status 1, no output) — before the empty-PKG HAND
+# EDIT this script prints ever runs. A [workspace]-only root with no
+# [package] name (e.g. games/voidrunner-authoritative) is exactly this
+# shape. Wrapped in `if`/`else` rather than run bare like (a)-(c): the
+# thing under test here is specifically whether the script's own exit
+# status is 0, and this test script itself runs under `set -e`, so it must
+# not rely on that being true to keep going.
+# ---------------------------------------------------------------------------
+COPY_D="$SCRATCH_ROOT/workspace-root"
+mkdir -p "$COPY_D/src"
+cat >"$COPY_D/Cargo.toml" <<'EOF'
+[workspace]
+members = ["a"]
+EOF
+
+if bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_D" >"$SCRATCH_ROOT/d-output.txt" 2>&1; then
+  cat "$SCRATCH_ROOT/d-output.txt"
+  grep -q "HAND EDIT.*Cargo.toml" "$SCRATCH_ROOT/d-output.txt" \
+    || fail "(d) HAND EDIT output doesn't name Cargo.toml"
+  pass "(d) a workspace-root Cargo.toml (no [package] name) exits 0 and prints a HAND EDIT naming Cargo.toml"
+else
+  cat "$SCRATCH_ROOT/d-output.txt"
+  fail "(d) rollout-replay.sh exited non-zero on a workspace-root Cargo.toml (should exit 0 with a HAND EDIT)"
+fi
 
 echo "test_rollout_replay: all checks passed"
