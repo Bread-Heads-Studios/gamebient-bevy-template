@@ -108,7 +108,7 @@ jobs:
       # wasm are not required to round sin/cos/powf identically, and an ulp
       # of drift snowballs over enough ticks — so for a game with
       # transcendentals this can go red without anything being wrong. See
-      # docs/replay-verification.md §Caveat.
+      # docs/replay-verification.md, "Two fixtures, and which one is the gate".
       - name: Cross-check the native fixture under Node (informational)
         continue-on-error: true
         run: node tools/verify_fixture.mjs tests/fixtures/selftest.gxr

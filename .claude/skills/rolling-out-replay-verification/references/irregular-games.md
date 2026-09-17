@@ -28,7 +28,15 @@ recorder (`src/record/`): `git mv src/game/sim.rs src/sim.rs` and
 `git mv src/game/replay src/replay`, fix the `use super::...`/`use
 crate::game::...` paths those files reference (`sim.rs` imports
 `super::scoring::{GameData, LeaderboardScore}` — becomes `crate::scoring`
-or wherever `GameData` ends up), then `rmdir src/game`.
+or wherever `GameData` ends up, and `super::states::GameState` likewise),
+then `rmdir src/game`.
+
+`sim.rs` also imports `crate::ui::transition::ScreenFade` for
+`sim::end_run` (rule 10). Hunted has no `src/ui/` module, so that becomes
+`crate::transition::ScreenFade` — confirm the module's actual name while
+checking the game-over path below; if the fade lives somewhere else again,
+point the `use` at wherever `ScreenFade` is declared. It is the one import
+in the whole verbatim-copied file that a flat-layout game must retarget.
 
 Declare `mod sim; mod replay;` in `main.rs` next to `mod run_timer;`. Wire
 `SimSet`/`begin_run`/`checksum_tick` directly into `main()`'s `app` — it's
