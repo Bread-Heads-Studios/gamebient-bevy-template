@@ -381,7 +381,17 @@ sub spit {
                           . "        with:\n"
                           . "          node-version: 22\n"
                           . "\n"
-                          . "      - name: Verify the committed fixture under Node\n"
+                          . "      # The gate: selftest-wasm.gxr was recorded by this same wasm\n"
+                          . "      # module, so both sides are wasm arithmetic - what actually\n"
+                          . "      # ships, and spec-deterministic. A failure here is real.\n"
+                          . "      - name: Verify the wasm-recorded fixture under Node\n"
+                          . "        run: node tools/verify_fixture.mjs tests/fixtures/selftest-wasm.gxr\n"
+                          . "\n"
+                          . "      # Informational: selftest.gxr was recorded natively, so this\n"
+                          . "      # compares native libm against wasm and can drift by an ulp on\n"
+                          . "      # a sim that calls sin/cos/powf. See docs/replay-verification.md.\n"
+                          . "      - name: Cross-check the native fixture under Node (informational)\n"
+                          . "        continue-on-error: true\n"
                           . "        run: node tools/verify_fixture.mjs tests/fixtures/selftest.gxr\n";
             my $idx = index($c, $anchor);
             if ($idx >= 0) {

@@ -2,7 +2,11 @@
 //! exits 0 (matches) / 1 (mismatch) / 2 (decode error);
 //! `verify --selftest [--write <file>]` records the scripted run, replays
 //! it, and optionally writes the fixture. wasm (`--target nodejs`):
-//! `verify(bytes)` returns the same JSON.
+//! `verify(bytes)` returns the same JSON, and `selftest_record()` returns
+//! the encoded bytes of the same scripted run recorded *by the wasm build*
+//! — that is what `node tools/verify_fixture.mjs --record <out.gxr>` writes
+//! as `tests/fixtures/selftest-wasm.gxr`, so CI's fixture gate is
+//! wasm-vs-wasm rather than native-vs-wasm. See docs/replay-verification.md.
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
@@ -58,4 +62,16 @@ pub fn verify(bytes: &[u8]) -> String {
         Ok(r) => verify(&r).to_json(),
         Err(e) => format!("{{\"error\":\"{e:?}\"}}"),
     }
+}
+
+/// Records the scripted selftest run inside this wasm module and returns the
+/// encoded `GXR1` bytes. Native code cannot produce this file: the whole
+/// point is that the recording side is the same wasm arithmetic the
+/// verifying side uses, so `verify(selftest_record())` compares like with
+/// like even for a sim that calls `sin`/`cos`/`powf`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn selftest_record() -> Vec<u8> {
+    use gamebient_game::game::replay::selftest::record_scripted_run;
+    record_scripted_run().encode()
 }

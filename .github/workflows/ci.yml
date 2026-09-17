@@ -94,7 +94,23 @@ jobs:
         with:
           node-version: 22
 
-      - name: Verify the committed fixture under Node
+      # The gate. tests/fixtures/selftest-wasm.gxr was RECORDED by this same
+      # wasm module (node tools/verify_fixture.mjs --record ...), so both
+      # sides of the comparison are wasm arithmetic — which is what actually
+      # ships (wasm-in-browser records, wasm-in-Node verifies) and is
+      # spec-deterministic. A failure here is a real determinism regression.
+      - name: Verify the wasm-recorded fixture under Node
+        run: node tools/verify_fixture.mjs tests/fixtures/selftest-wasm.gxr
+
+      # Informational only. tests/fixtures/selftest.gxr was recorded by the
+      # NATIVE build, so this step compares native arithmetic against wasm.
+      # They agree for a sim that sticks to add/sub/mul, but native libm and
+      # wasm are not required to round sin/cos/powf identically, and an ulp
+      # of drift snowballs over enough ticks — so for a game with
+      # transcendentals this can go red without anything being wrong. See
+      # docs/replay-verification.md §Caveat.
+      - name: Cross-check the native fixture under Node (informational)
+        continue-on-error: true
         run: node tools/verify_fixture.mjs tests/fixtures/selftest.gxr
 
       - name: Upload web bundle

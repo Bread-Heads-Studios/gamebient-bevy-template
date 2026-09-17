@@ -35,3 +35,31 @@ fn committed_fixture_still_verifies() {
         "sim changed: regenerate the fixture with --selftest --write (see docs/replay-verification.md)\n{v:?}"
     );
 }
+
+#[test]
+fn wasm_fixture_decodes_and_claims_the_selftest_tick_count_native_cannot_verify_it() {
+    // `tests/fixtures/selftest-wasm.gxr` is recorded *by the wasm verifier
+    // module* (`node tools/verify_fixture.mjs --record …` after
+    // `tools/build_verify.sh`), which is what makes CI's fixture gate
+    // wasm-vs-wasm. Native code deliberately does not re-simulate it: for a
+    // game whose sim calls sin/cos/powf the native checksum may differ from
+    // the wasm one by an ulp that snowballs, and asserting `matches` here
+    // would reintroduce exactly the native-vs-wasm comparison the wasm
+    // fixture exists to replace. What native CAN check is that the file is
+    // present, decodes as GXR1, and claims the tick count the current
+    // script produces -- which catches a stale or truncated fixture and a
+    // SELFTEST_TICKS change nobody regenerated for.
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/selftest-wasm.gxr"
+    ))
+    .expect(
+        "run `bash tools/build_verify.sh && node tools/verify_fixture.mjs \
+         --record tests/fixtures/selftest-wasm.gxr`",
+    );
+    let replay = Replay::decode(&bytes).expect("selftest-wasm.gxr decodes as GXR1");
+    assert_eq!(
+        replay.ticks, SELFTEST_TICKS,
+        "the wasm fixture is stale; regenerate it (see docs/replay-verification.md)"
+    );
+}

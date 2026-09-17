@@ -71,9 +71,10 @@ attic-excavator, grand-theft-otto).
    cargo check --features verify
    git add -A && git commit -m "feat(replay): port <game> onto sim::SimSet"
    ```
-   **CI's Node fixture step (`node tools/verify_fixture.mjs
-   tests/fixtures/selftest.gxr`) is red from this commit until step 4
-   generates the fixture — that's expected, not a regression to chase.**
+   **CI's Node fixture steps (`node tools/verify_fixture.mjs
+   tests/fixtures/selftest-wasm.gxr` and the informational native one) are
+   red from this commit until step 4 generates both fixtures — that's
+   expected, not a regression to chase.**
 
 4. **Write and run the selftest.** `src/game/replay/selftest.rs` was copied
    from the template verbatim; replace its `script` system with one that
@@ -82,13 +83,23 @@ attic-excavator, grand-theft-otto).
    template's own `script` (sweep right/left, tap A once a second) is the
    skeleton to start from. Nothing in it may touch `GameData` directly;
    only inputs, or a replay could not reproduce it.
+   Generate **both** fixtures. The native one is what `cargo test`
+   re-simulates; the wasm one is what CI blocks on, and only the wasm module
+   can record it (`selftest_record()`), so it needs a verifier build first:
    ```bash
    cargo run --features verify --bin verify -- --selftest --write tests/fixtures/selftest.gxr
+   bash tools/build_verify.sh
+   node tools/verify_fixture.mjs --record tests/fixtures/selftest-wasm.gxr
+   node tools/verify_fixture.mjs tests/fixtures/selftest-wasm.gxr   # matches: true
    cargo test --all-features
+   git add tests/fixtures/selftest.gxr tests/fixtures/selftest-wasm.gxr
    ```
    `cargo test` now runs `tests/selftest.rs`: the freshly recorded run
-   verifies, a tampered run does not, and the committed fixture still
-   verifies. That closes out the red CI step from step 3.
+   verifies, a tampered run does not, the native fixture still verifies, and
+   the wasm fixture decodes with the right tick count (native deliberately
+   does not re-simulate that one — see `docs/replay-verification.md`, "Two
+   fixtures, and which one is the gate"). That closes out the red CI step
+   from step 3.
 
 5. **Play a real run and verify it two ways.**
    ```bash

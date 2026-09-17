@@ -115,11 +115,14 @@ mechanically checkable and need review.
 ## Commands
 
 ```bash
-cargo test --all-features                                   # codec, selftest, fixture
+cargo test --all-features                                   # codec, selftest, fixtures
 cargo run --features verify --bin verify -- --selftest --write tests/fixtures/selftest.gxr   # regenerate after a sim change
+bash tools/build_verify.sh                                   # -> dist-verify/ (the wasm module)
+node tools/verify_fixture.mjs --record tests/fixtures/selftest-wasm.gxr   # regenerate the CI gate's fixture
+node tools/verify_fixture.mjs tests/fixtures/selftest-wasm.gxr
 GX_REPLAY_DIR=build/replays cargo run                        # play; each run writes build/replays/<ms>.gxr
 cargo run --features verify --bin verify -- build/replays/<ms>.gxr
-tools/build_verify.sh && node tools/verify_fixture.mjs tests/fixtures/selftest.gxr
+node tools/verify_fixture.mjs build/replays/<ms>.gxr
 ```
 
 ## Server contract
@@ -182,15 +185,37 @@ loading it is the expensive part, `verify()` itself is sub-second. The
 replay header's `build` field is what selects which release's
 `gamebient-game-verify.zip` to load.
 
-## Caveat
+## Two fixtures, and which one is the gate
 
-Native and wasm agree for the template because its sim uses only basic IEEE
-ops (add/sub/mul, no transcendental functions). A game whose sim code calls
-`sin`/`cos`/`powf` may see the native `--selftest` and the Node fixture check
-disagree by an ulp that snowballs over enough ticks — different platforms'
-libm implementations aren't required to round transcendental functions
-identically. This doesn't affect what's actually shipped: the real check is
-wasm-in-browser vs. wasm-in-Node, and wasm arithmetic is spec-deterministic
-for both. If a game hits this, mark the CI Node step
-(`node tools/verify_fixture.mjs …`) with `continue-on-error: true` and rely
-on `cargo test`'s native `--selftest` for regression coverage instead.
+`tests/fixtures/` holds two recordings of the same scripted selftest run:
+
+| File | Recorded by | Verified by | Role |
+|---|---|---|---|
+| `selftest-wasm.gxr` | the wasm verifier module | wasm, under Node (CI) | **the gate** |
+| `selftest.gxr` | the native build | native (`cargo test`), and informationally by Node | native regression check |
+
+`selftest-wasm.gxr` is the one CI blocks on, because both sides of that
+comparison are wasm arithmetic — which is exactly what ships: the browser
+records a run in a wasm build of this crate and Node re-simulates it in
+another wasm build of the same crate, and wasm arithmetic is
+spec-deterministic. It is produced by the module's own `selftest_record()`
+export; native code cannot write it, which is the point.
+
+`selftest.gxr` is recorded and verified natively by `cargo test`, so it stays
+the fast local regression check on the sim. CI *also* runs it through Node,
+but with `continue-on-error: true`: that step compares native arithmetic
+against wasm, and native libm and wasm are not required to round
+transcendental functions (`sin`, `cos`, `powf`) identically. A game whose sim
+calls them may see the two disagree by an ulp that snowballs over enough
+ticks — identical `score` and `ticks`, a different `checksum`. That is drift,
+not nondeterminism, and it does not affect what is shipped. Before accepting
+it as drift, prove it: the port checklist's "Native vs Node mismatch" section
+has the bisection procedure.
+
+```bash
+# regenerate both after a sim change
+cargo run --features verify --bin verify -- --selftest --write tests/fixtures/selftest.gxr
+bash tools/build_verify.sh
+node tools/verify_fixture.mjs --record tests/fixtures/selftest-wasm.gxr
+node tools/verify_fixture.mjs tests/fixtures/selftest-wasm.gxr   # must be matches: true
+```
