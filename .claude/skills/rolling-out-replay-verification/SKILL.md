@@ -23,10 +23,15 @@ dependents, so every game needs this ported in by hand.
 `tools/build_verify.sh`, `tools/verify_fixture.mjs` and
 `docs/replay-verification.md` from this template into the game verbatim,
 and wires `Cargo.toml`, `src/lib.rs`/`main.rs`, `src/game/mod.rs`'s
-`GamePlugin { headless }` shape, `build_web.sh`, the CI/release workflows,
-`.gitignore` and `assets/info.json`'s `verify_url`. It is idempotent and
-never overwrites a file it didn't create — anywhere it can't act safely it
-prints a `HAND EDIT:` line instead. This skill drives everything the script
+`GamePlugin { headless }` shape, `build_web.sh` (including the
+`tools/build_verify.sh` + `cp dist-verify.zip dist/verify.zip` step that
+produces what `verify_url` serves), the CI/release workflows, `.gitignore`
+and `assets/info.json`'s `verify_url`. It also writes the common
+`impl LeaderboardScore for GameData` when `GameData` has a `pub score: u32`
+and no impl, and reorders `drive_autopilot` before `accumulate_input`. It is
+idempotent and never overwrites a file it didn't create — anywhere it can't
+act safely it prints a `HAND EDIT:` line instead (some of them advisory, and
+labelled as such). This skill drives everything the script
 can't do: the per-game determinism port, the selftest script, a verified
 real run, the web build, shipping, and the production proof. The feature's
 contract lives in `docs/replay-verification.md` (rules 1–10); this skill's
@@ -62,11 +67,19 @@ attic-excavator, grand-theft-otto).
    Read every `HAND EDIT:` line the script prints and do each one before
    moving on — they cover things it refuses to guess at: an existing
    non-template `sim.rs` (rename it, e.g. `shot_sim.rs`, and re-run), a
-   `GameData` with no `score` field, gameplay reading raw
-   `ButtonInput<KeyCode>` instead of `TickInput`, an autopilot that writes
-   `GameData` fields directly (keep that path out of the selftest script),
-   and always the `GamePlugin::build` port itself (the script never rewires
-   a game's own systems onto `sim::SimSet`).
+   `GameData` whose leaderboard score isn't a plain `pub score: u32`,
+   gameplay reading raw `ButtonInput<KeyCode>` instead of `TickInput`, an
+   autopilot that writes `GameData` fields directly (keep that path out of
+   the selftest script), and always the `GamePlugin::build` port itself
+   (the script never rewires a game's own systems onto `sim::SimSet`).
+
+   One line is labelled `HAND EDIT (advisory)` and lists
+   `<file>:<Component>` pairs: a file outside `src/game/` that pulls an
+   entity out of a query and inserts, removes or despawns on it, where that
+   component is also declared and queried in `src/game/`. That is the
+   archetype-order trap — see the checklist's "The two order traps". It is a
+   grep, so read the two files rather than treating it as a verdict either
+   way.
 
 3. **Port the determinism rules.** Work through
    `references/port-checklist.md` rule by rule against the game's actual
@@ -132,6 +145,10 @@ attic-excavator, grand-theft-otto).
    ```bash
    cargo test --all-features && cargo clippy --all-targets --all-features -- -D warnings && cargo fmt --check
    ```
+   `cargo test` includes `tampered_inputs_do_not_verify`. Before trusting
+   it, confirm it fails for the right reason on this game — see the
+   checklist's "Verify the tamper test fails for the right reason"; a game
+   with an intro card can pass it vacuously.
    Open the PR, merge, and wait for the Vercel production deploy. Then:
    ```bash
    curl -s <game_url>/verify.zip | unzip -p - BUILD
@@ -185,8 +202,18 @@ bash ../../libs/gamebient-bevy-template/tools/rollout-replay.sh --upgrade .
    — read it and port them, keeping the game-specific parts (its
   `checksum_<game>` system, its `LeaderboardScore`, its `AUTOPILOT_*`
   constants).
-* **`src/game/replay/selftest.rs` is never touched.** After the port it is
-  the game's own script, not the template's.
+* **`src/game/replay/selftest.rs` is the narrow case.** It is refreshed
+  only while it is still byte-identical to a committed template version —
+  i.e. nobody ever replaced the skeleton, so there is nothing to lose. Once
+  it is this game's own script it is left alone and, unlike every other
+  file, prints **no** HAND EDIT: it is supposed to differ, so a line about
+  it would be noise on every upgrade of every game for ever.
+
+Under `--upgrade`, a game whose `src/game/mod.rs` already names
+`sim::SimSet` also stops getting the two HAND EDITs the script prints
+unconditionally on a first rollout (the `GamePlugin::build` port, and
+"autopilot writes GameData fields directly"). The work is demonstrably done;
+re-printing it devalues the rest of the list.
 
 `.github/workflows/ci.yml` gets the same treatment structurally: a game
 whose Node step still verifies only the native fixture has that step (and
@@ -202,23 +229,68 @@ Then, in this order:
    `GamePlugin::build`'s run condition uses `sim::run_not_over`, and
    `sim::begin_run` clears the latch so the game's own `reset_*` system
    should stop doing it).
-2. Re-pin `wasm-bindgen` to the fleet's version if the game drifted:
-   `install.sh`, both workflows, and `Cargo.lock`
-   (`cargo update -p wasm-bindgen --precise <version>`, plus `js-sys`,
-   `web-sys`, `wasm-bindgen-futures` and the three `wasm-bindgen-*` crates
-   as needed). A CLI/lib skew produces a bundle that fails to load, and the
-   fleet's CI installs one pinned CLI.
+2. Re-pin `wasm-bindgen` to the fleet's version (`0.2.108`) if the game
+   drifted. A CLI/lib skew produces a bundle that fails to load at runtime,
+   and the fleet's CI installs one pinned CLI, so this is a hard blocker.
+   Three places plus the lock:
+   `install.sh`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`
+   (all say `wasm-bindgen-cli@<version>`), and `Cargo.toml`, which the
+   rollout script pins as `wasm-bindgen = { version = "=0.2.108", optional
+   = true }` — the `=` is deliberate, so a later `cargo update` fails to
+   resolve rather than drifting silently.
+
+   **Do not reach for `cargo update -p wasm-bindgen --precise`.** It cannot
+   get there: `js-sys 0.3.103` requires `wasm-bindgen =0.2.126` and
+   `wasm-bindgen-futures 0.4.76` requires `js-sys =0.3.103`, so every
+   single-package downgrade is blocked by one of the others, in a cycle.
+   Take the lock from before the drift instead, and prove it:
+   ```bash
+   # the last commit whose Cargo.lock still had the fleet's version
+   git log --oneline -- Cargo.lock
+   git checkout <sha> -- Cargo.lock
+   cargo check --locked --features verify   # must pass: the lock is self-consistent
+   ```
+   `--locked` is the proof, not a formality — it fails rather than silently
+   re-resolving, which is the whole question being asked. (`build_web.sh`
+   and `tools/build_verify.sh` both build `--locked` for the same reason:
+   `build_web.sh` is the Vercel build command and `Cargo.lock` is
+   committed, so a deploy must use the versions CI tested.)
 3. Rebuild the verifier and **regenerate `tests/fixtures/selftest-wasm.gxr`**
    (`bash tools/build_verify.sh` then
    `node tools/verify_fixture.mjs --record tests/fixtures/selftest-wasm.gxr`,
    then verify it) — a refreshed `sim.rs` usually changes the checksum, and
    a wasm-bindgen change changes the module.
 4. Gates as in step 7 below, plus `bash build_web.sh` and one autopilot tour.
+   Confirm `dist/verify.zip` actually appeared — a game rolled out between
+   template commits `a9aa6ed` and the guard fix shipped **without** the
+   `bash tools/build_verify.sh` step in its `build_web.sh` and with no HAND
+   EDIT about it, so its `verify_url` 404s in production while everything
+   local looks fine:
+   ```bash
+   grep -n 'build_verify.sh' build_web.sh   # must show the `bash ...` line, not only the comment
+   ```
 
 The build id in the header of already-submitted replays changes, and that
 invalidates nothing: the site picks the verifier module by the replay's own
 `build` field, so old replays keep verifying against the release they were
 recorded against.
+
+## Changing the rollout script itself
+
+`tools/test_rollout_replay.sh` is the regression suite for
+`rollout-replay.sh`, and every part of it exists because something reached a
+game (or production) silently. Run it before and after any change:
+
+```bash
+bash tools/test_rollout_replay.sh              # locally: parts (a)-(h)
+bash tools/test_rollout_replay.sh --no-game    # what CI runs: skips (b)
+```
+
+`--no-game` skips part (b), the only part that needs a sibling
+`games/cannonball-putt` checkout at its pre-rollout commit — the template's
+own workflow has no token for that private repo. Part (b) is also the only
+end-to-end "an unported game compiles after the rollout" coverage there is,
+so run the suite **without** the flag before pushing a script change.
 
 ## When it fails
 

@@ -107,6 +107,76 @@ Grep: `grep -n 'add_systems(Update' src/game/mod.rs` — anything that
 mutates a resource `checksum_tick` or a later system reads should be in the
 list above, not here.
 
+### The two order traps
+
+Rule 1 is usually read as "does this system write sim state?". Two ways of
+breaking a replay pass that test and still desync, and both were found by
+reviewing a wave-1 port rather than by any fixture:
+
+**A system left in `Update` must not insert or remove components on, or
+spawn or despawn, any entity a `SimSet` system queries.** Inserting a
+presentation component onto a sim entity moves that entity to a different
+archetype, and archetype order is the order a `Query` iterates in. The
+windowed game performs the insert and iterates one order; the verifier adds
+no render plugins, never performs it, and iterates another. Nothing in the
+selftest catches this — nothing renders during a selftest — so the fixtures
+stay green and only replays of real, rendered runs diverge.
+
+Grand Theft Auto-Reply is the worked example. Its `src/assets/` visuals
+decorate live `Email` and `Projectile` entities — the same entities
+`inbox::tick_emails` and `combat::advance_projectiles` iterate inside
+`SimSet`. Three of six seeds diverged under a two-ticks-per-frame schedule
+while every fixture passed. The fixes, in order of preference:
+
+1. Put the presentation on a **child** entity the sim never queries.
+2. Move the insert into the chain, so both paths do it.
+3. Make the sim system's iteration order not depend on the archetype —
+   which is the second trap.
+
+**Sorting discipline: any sim system that iterates a `Query` and accumulates
+order-sensitively must sort by a stable per-entity key first.**
+Order-sensitive means a running multiplier, pushing into a `Vec` the sim
+later reads in order, a sequential float threshold, "the first entity within
+range wins" — anything where swapping two entities changes the result. The
+key must be something the *sim* assigns and both paths agree on: an inbox
+slot, a spawn sequence number, a grid index. **Not `Entity`** — its value
+depends on allocation order, which is exactly what is in question.
+
+```rust
+// before: order-sensitive over whatever order the archetype happens to give
+for (mut email, fuse) in &mut emails {
+    combo *= email.multiplier;
+}
+
+// after: a stable key the sim owns
+let mut live: Vec<_> = emails.iter_mut().collect();
+live.sort_by_key(|(email, _)| email.slot);
+for (mut email, fuse) in live {
+    combo *= email.multiplier;
+}
+```
+
+A system that only reads, or that accumulates commutatively (a sum, a max, a
+count, a bitwise OR), is safe as it is — including the per-entity folds in a
+`checksum_<game>` system, as long as *those* are sorted before folding
+(which is rule 5's own advice).
+
+`tools/rollout-replay.sh` prints an **advisory** HAND EDIT for this, as
+`<file>:<Component>` pairs: a file outside `src/game/` that takes an entity
+out of a query and calls `.insert(`/`.remove::<`/`.despawn(` on it, naming a
+component declared *and* queried in `src/game/`. On Grand Theft Auto-Reply it
+names exactly the three real sites:
+
+```
+HAND EDIT (advisory): ... src/assets/projectiles.rs:Email
+src/assets/projectiles.rs:Projectile src/assets/inbox_view.rs:Email
+```
+
+It is a grep, not an analysis — expect false positives (the insert lands on a
+different entity that merely mentions the same type) and false negatives (an
+entity reached through a resource rather than a query). Treat it as "read
+these two files", not as a verdict either way.
+
 ### What the headless app does not have
 
 `build_headless_app` is `MinimalPlugins` + `StatesPlugin` + `InputPlugin` and
@@ -334,8 +404,13 @@ registered `.before(sim::SimSet)`, not inside the chained tuple.
 
 ## Rule 9 — `LeaderboardScore`, not `GameData.score`
 
-Games without a plain `score` field (golf strokes, a race time, Hunted's
-survival timer) implement the trait instead of relying on the blanket impl:
+The trait and its impl live in each game's **own** `src/game/scoring.rs` —
+`rollout-replay.sh` does not copy that file — while `sim.rs`,
+`replay/mod.rs`, `replay/recorder.rs` and `host.rs` all `use` it. A game
+without one simply does not compile after the rollout.
+
+The common shape (`pub score: u32` on `GameData`, no impl) the script now
+writes for you, verbatim from the template:
 ```rust
 pub trait LeaderboardScore {
     fn leaderboard_score(&self) -> u32;
@@ -347,6 +422,12 @@ impl LeaderboardScore for GameData {
     }
 }
 ```
+Anything else is a HAND EDIT, because it is a judgement call about polarity
+and units rather than a copy — games without a plain `score` field (golf
+strokes, a race time, Hunted's survival timer) write their own, as in the
+before/after below.
+
+Once the impl exists, the plumbing is the same either way:
 `sim::checksum_tick` folds `data.leaderboard_score()`;
 `replay::recorder::seal_run` seals `u64::from(data.leaderboard_score())`;
 `host::report_score`/`report_game_over` report `leaderboard_score()` too —
@@ -605,6 +686,71 @@ hole_index 3 strokes 8 results [Some(2), Some(8), Some(8), Some(8), None, ...]
 ```
 A verdict that matches with `score: 0` and `hole_index: 0` is a bot that never
 scored, and a checksum that proves nothing.
+
+### Verify the tamper test fails for the right reason
+
+`tests/selftest.rs`'s `tampered_inputs_do_not_verify` is copied in, and a
+test that passes vacuously is worse than no test. The template's version
+tampers with the **back half** of the runs (strip every `latched` bit, flip
+the D-pad bits in `held`), asserts the untampered replay verifies first, and
+asserts the re-simulated **checksum differs** from the claimed one — not
+just `matches == false`, which a decode error or a score-only difference
+would also produce.
+
+The reason it is shaped that way: the original flipped one bit in
+`runs[0]`, which assumes tick-1 input moves the sim. Any game that opens on
+an intro card, a title plaque or a countdown ignores tick-1 input entirely,
+so the tampered replay reproduced the claimed checksum and the test reported
+"tampering detected" when it had detected nothing.
+
+After the port, prove it on this game:
+
+```bash
+cargo test --all-features tampered_inputs_do_not_verify -- --nocapture
+```
+then break it on purpose — narrow the tamper to `runs[0].held ^= 4` — and
+confirm it now **fails** for your game. If the one-bit version still passes,
+the back-half version is the one doing the work and you have just learned
+that your game's opening ticks are inert. If neither fails, the selftest
+script is not exercising anything the checksum folds; fix the script, not
+the test.
+
+## The autopilot and the accumulator
+
+Two facts about `VirtualInput` that only start to matter once the sim reads
+`TickInput`. Both cost a wave-1 port a debugging session.
+
+**Order the bot before `accumulate_input`, not before `collect_input`.**
+`gamebient-input` registers `accumulate_input.before(collect_input)`, so
+ordering a bot only against `collect_input` leaves the bot and the
+accumulator unordered relative to each other and Bevy's schedule builder
+picks. A tap written after the accumulator has run is folded into the
+per-frame `GameInput` and never reaches a fixed tick — so the bot presses
+buttons the sim, and therefore the replay, never sees. `rollout-replay.sh`
+rewrites this in a game's `src/game/autopilot.rs` automatically; check any
+other system that writes `VirtualInput` (a `--sim` harness bot, a demo
+attract mode) by hand:
+
+```rust
+// before — insufficient once the sim reads TickInput
+drive_autopilot.before(gamebient_input::input::collect_input)
+// after
+drive_autopilot.before(gamebient_input::input::accumulate_input)
+```
+
+**A one-frame direction hold can miss a tick entirely.**
+`TickInput.move_x`/`move_y` derive from the accumulator's *held* set, which
+`accumulate_input` **overwrites every frame**; only press edges ride the
+`latched` bits through to the next tick. So a bot that holds a direction for
+exactly one frame lands on a tick only when that frame happens to contain
+one — on a 120 Hz display roughly half its steps vanish, and the failure is
+silent and frame-rate-dependent. Grand Theft Auto-Reply's first autopilot
+tour after the port quietly lost its `06-mission-passed` beat to this.
+
+The pattern: re-emit the direction for at least two frames (a `MOVE_SECS`
+cooldown works, and still reads as a single step as long as it stays inside
+the 0.32 s auto-repeat delay). Taps are unaffected — that is what `latched`
+is for.
 
 ## What may stay in `Update`
 
