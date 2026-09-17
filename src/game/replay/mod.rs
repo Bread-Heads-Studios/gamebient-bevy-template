@@ -176,7 +176,7 @@ use bevy::time::TimeUpdateStrategy;
 use gamebient_input::TickInputSet;
 
 use super::GamePlugin;
-use super::scoring::GameData;
+use super::scoring::{GameData, LeaderboardScore};
 use super::sim::{Checksum, PendingSeed, RunSeed, SimTick, tick_duration};
 use super::states::GameState;
 use feeder::{ReplayFeeder, feed_tick};
@@ -291,7 +291,7 @@ pub fn run_verify_app(app: &mut App, replay: &Replay) -> Verdict {
         }
         app.update();
     };
-    let score = u64::from(app.world().resource::<GameData>().score);
+    let score = u64::from(app.world().resource::<GameData>().leaderboard_score());
     let checksum = app.world().resource::<Checksum>().0;
     let ticks = app.world().resource::<SimTick>().0;
     Verdict {
