@@ -20,8 +20,9 @@ dependents, so every game needs this ported in by hand.
 
 `tools/rollout-replay.sh <game-dir>` does the mechanical part: it copies
 `src/game/sim.rs`, `src/game/replay/`, `src/bin/verify.rs`, `build.rs`,
-`tools/build_verify.sh`, `tools/verify_fixture.mjs` and
-`docs/replay-verification.md` from this template into the game verbatim,
+`tools/build_verify.sh`, `tools/verify_fixture.mjs`,
+`docs/replay-verification.md` and `tests/archetype_order.rs` from this
+template into the game verbatim,
 and wires `Cargo.toml`, `src/lib.rs`/`main.rs`, `src/game/mod.rs`'s
 `GamePlugin { headless }` shape, `build_web.sh` (including the
 `tools/build_verify.sh` + `cp dist-verify.zip dist/verify.zip` step that
@@ -66,7 +67,9 @@ attic-excavator, grand-theft-otto).
    ```
    Read every `HAND EDIT:` line the script prints and do each one before
    moving on — they cover things it refuses to guess at: an existing
-   non-template `sim.rs` (rename it, e.g. `shot_sim.rs`, and re-run), a
+   non-template `sim.rs` (rename it, e.g. `shot_sim.rs`, and re-run),
+   `tests/archetype_order.rs` (the copied probe queries the template's own
+   `Player` entity, so it does not compile until step 4 adapts it), a
    `GameData` whose leaderboard score isn't a plain `pub score: u32`,
    gameplay reading raw `ButtonInput<KeyCode>` instead of `TickInput`, an
    autopilot that writes `GameData` fields directly (keep that path out of
@@ -118,6 +121,19 @@ attic-excavator, grand-theft-otto).
    fixtures, and which one is the gate"). That closes out the red CI step
    from step 3.
 
+   **Adapt `tests/archetype_order.rs` in the same pass** — it is not
+   optional, and it does not compile as copied: the template's version
+   queries the template's own `Player` sim entity. Replace its marker
+   components and `decorate_*` systems with stand-ins for this game's real
+   `Update` decorators, reproducing their *branching* (different entities
+   getting different component sets is what splits the archetype) and keeping
+   the child spawn, and point `trace_order` at the queries the game's
+   order-sensitive sim systems iterate. It is the only test that catches the
+   archetype-order trap — the "delete the system and re-run `--selftest`"
+   check provably cannot — so a run of it that passes with the template's
+   markers still in place has tested nothing. The file's doc comment and the
+   checklist's "What may stay in `Update`" have the detail.
+
 5. **Play a real run and verify it two ways.**
    ```bash
    GX_REPLAY_DIR=build/replays cargo run   # play to game over
@@ -127,9 +143,17 @@ attic-excavator, grand-theft-otto).
    Both must print `matches: true` with the same `checksum`. A mismatch
    here means nondeterminism, not cheating — re-play and check the
    checklist's usual suspects (a system still in `Update`, a stray
-   `rand::rng()`, a `HashMap` iteration, a transcendental function whose
-   native and wasm results disagree — see the checklist's last section and
-   the Caveat in `docs/replay-verification.md`).
+   `rand::rng()`, a `HashMap` iteration, an `Update` system decorating a sim
+   entity, a transcendental function whose native and wasm results disagree
+   — see the checklist's last section and the Caveat in
+   `docs/replay-verification.md`).
+
+   If the answer turns out to be native-vs-wasm ulp drift, write the
+   measurement into a **game-local `docs/replay-notes.md`**, never into
+   `docs/replay-verification.md`: that file is copied verbatim from the
+   template and `--upgrade` refreshes it only while it is byte-identical to a
+   committed template version, so appending to it costs the game every future
+   contract update.
 
 6. **Web build.** Note how long it takes; this is the number the spec's
    follow-up about Vercel build minutes needs.
@@ -202,12 +226,14 @@ bash ../../libs/gamebient-bevy-template/tools/rollout-replay.sh --upgrade .
    — read it and port them, keeping the game-specific parts (its
   `checksum_<game>` system, its `LeaderboardScore`, its `AUTOPILOT_*`
   constants).
-* **`src/game/replay/selftest.rs` is the narrow case.** It is refreshed
-  only while it is still byte-identical to a committed template version —
+* **`src/game/replay/selftest.rs` and `tests/archetype_order.rs` are the
+  narrow case** — both are files the port *replaces* rather than keeps. Each
+  is refreshed only while it is still byte-identical to a committed template
+  version —
   i.e. nobody ever replaced the skeleton, so there is nothing to lose. Once
-  it is this game's own script it is left alone and, unlike every other
-  file, prints **no** HAND EDIT: it is supposed to differ, so a line about
-  it would be noise on every upgrade of every game for ever.
+  the port has replaced it, it is left alone and, unlike every other file,
+  prints **no** HAND EDIT: it is supposed to differ, so a line about it would
+  be noise on every upgrade of every game for ever.
 
 Under `--upgrade`, a game whose `src/game/mod.rs` already names
 `sim::SimSet` also stops getting the two HAND EDITs the script prints

@@ -60,6 +60,12 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
    `src/assets/` decorated live `Email` and `Projectile` entities that
    `inbox::tick_emails` and `combat::advance_projectiles` iterate. Put the
    presentation on a child entity, or move the insert into the chain.
+   The "delete the system and re-run `--selftest`" check cannot detect this
+   — a headless run never decorates, so deleting the decorator changes
+   nothing. `tests/archetype_order.rs` is the test that can: it records the
+   scripted run with and without the decoration and asserts both that the
+   checksums agree and that the decorated recording still `verify()`s in a
+   bare app, across several seeds and tick-per-frame cadences.
 
    *Sorting discipline*, the same hazard from the other end: any sim system
    that iterates a `Query` and accumulates **order-sensitively** — a running
@@ -155,6 +161,14 @@ skeleton), and once it is the game's own script it is left alone with no
 regenerate both fixtures afterwards; the resulting build id change
 invalidates nothing, since the site selects a verifier module by each
 replay's own `build` field.
+
+**Keep game-specific notes out of this file.** It is copied verbatim into
+every game, and `--upgrade` refreshes it only while the game's copy is still
+byte-identical to a committed template version. A per-game addition — a
+native-vs-wasm drift measurement, a "this game ships only the wasm fixture"
+caveat — permanently marks it locally modified, so the game stops receiving
+fleet-wide contract changes and gets a HAND EDIT about it on every upgrade
+instead. Those belong in a game-local `docs/replay-notes.md`.
 
 ## Commands
 

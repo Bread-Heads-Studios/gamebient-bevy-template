@@ -206,6 +206,32 @@ you know the list. The three that bit the pilot:
 | `GlobalVolume` | `AudioPlugin` | `host::apply_host_commands` takes `Option<ResMut<GlobalVolume>>` (the template already does; games predating that change do not) |
 | the game's `GameAssets` | the game's `AssetsPlugin` | hole/level setup takes `Option<Res<GameAssets>>` and spawns only the entities the sim reads |
 | `ScreenFade` | `UiPlugin` | `Option<Res<…>>` / `Option<ResMut<…>>` in `toggle_pause` and the game-over site |
+| **messages**, not resources: `HostEvent`, `TickInput`, `TickFrame` | `GxInputPlugin` | see below — a harness that builds the sim plugin standalone must `add_message::<HostEvent>()` and init the tick-input resources, or use `build_headless_app` |
+
+That last row is a different failure with the same nameless error, and it
+bites test harnesses rather than the verifier. `replay::recorder::seal_run`
+takes a `MessageWriter<HostEvent>`, and `HostEvent`'s message queue is
+registered by `GxInputPlugin`. `build_headless_app` adds the whole
+`GamePlugin`, so the verifier is fine — but a game whose own test harness
+builds just its sim plugin (Dough.io's `SimCorePlugin`, a balance sweep, a
+playtest) has no `GxInputPlugin`, and the game-over path dies with Bevy's
+
+```
+Parameter `Enable the debug feature to see the name` failed validation:
+Message not initialized
+```
+
+`TickInput` and `TickFrame` are the same class: the sim reads them, the
+input crate inits them. Either add them in the sim plugin —
+
+```rust
+app.add_message::<gamebient_input::HostEvent>()
+    .init_resource::<gamebient_input::TickInput>()
+    .init_resource::<gamebient_input::TickFrame>();
+```
+
+— or build harness apps through `replay::build_headless_app` so they get the
+same shape the verifier does. Prefer the second where the harness can take it.
 
 The second one is the interesting one: a game that builds its level out of
 meshes has to split "spawn the thing the sim moves" from "spawn what it looks
@@ -294,10 +320,35 @@ from `RunSeed` or from a draw off `GameRng`, not from `rand::rng()` or
 `from_os_rng()` — see `references/irregular-games.md` for Attic Excavator's
 specific case.
 
+**The harness trap, and it is silent.** `sim::begin_run` **overwrites**
+`GameRng` on every `OnEnter(Playing)`, reseeding it from `RunSeed`. So an
+existing test harness or balance sweep that inserts its own seeded RNG
+resource before entering `Playing` — the normal pre-port way to make a
+playtest deterministic — has it thrown away, and the run proceeds on a
+locally drawn seed. Nothing errors; the harness simply stops being
+deterministic, and a CSV of "seeded" results quietly becomes noise. Dough.io
+hit this.
+
+Stage `sim::PendingSeed` instead and let `begin_run` do the reseeding,
+exactly as a host-issued seed does. `sim::seed_bytes(u64) -> [u8; 32]`
+(unit-tested in `sim.rs`) widens a harness/CLI `u64` seed to the 32 bytes the
+resource takes, so `--seed 7` means the same run in the harness, the sweep
+and the replay:
+
+```rust
+// before: undone by begin_run, silently
+app.insert_resource(SimRng::seeded(seed));
+
+// after
+app.world_mut().resource_mut::<sim::PendingSeed>().0 = Some(sim::seed_bytes(seed));
+```
+
 Grep: the forbidden-names test already fails the build on
 `rand::rng()`/`from_os_rng`/`thread_rng`/`SmallRng` inside `src/game/`
 (`cargo test sim::tests::no_forbidden_randomness_or_hashmaps_in_game_code`);
-run it after the port, don't just grep by hand.
+run it after the port, don't just grep by hand. It cannot catch the harness
+trap — that code is correct Rust doing the wrong thing — so check by hand
+that every harness entry point stages `PendingSeed`.
 
 ## Rule 4 — no `std::collections::HashMap` in sim state
 
@@ -769,12 +820,45 @@ system before trusting this: if it writes a component the sim also reads
 (e.g. a `Transform` the physics also moves) or a resource `checksum_tick`
 or the game's own checksum system folds, it must move into the chain.
 
-**The test that proves a system is safe to leave in `Update`:** remove it
-entirely (comment it out) and re-run
+**The test that proves a system is *value*-safe:** remove it entirely
+(comment it out) and re-run
 `cargo run --features verify --bin verify -- --selftest`. If the printed
 checksum is unchanged, the system's output isn't part of what the replay
-reproduces and it's safe where it is. If the checksum changes, the system
-was folding into game state after all and belongs in the chain.
+reproduces. If the checksum changes, the system was folding into game state
+after all and belongs in the chain.
+
+**That test proves value-safety only, and CANNOT detect the archetype
+trap.** Deleting a decorator changes nothing about a headless checksum,
+because there is no decoration in a headless run — the selftest never
+renders, so the system under test never ran in the first place. A decorator
+can pass this check perfectly and still desync every rendered run, by moving
+the entities it touches into a different archetype (see "The two order traps"
+above). It is exactly the check Grand Theft Auto-Reply's port passed.
+
+**The test that does detect it:** `tests/archetype_order.rs`, copied into
+every game by the rollout script. It records the selftest script twice — once
+in a plain headless app, once in a headless app that also runs `Update`
+systems inserting inert markers onto the entities the sim queries — and
+asserts the two agree on score, checksum and ticks, and that the decorated
+recording still `verify()`s in a plain app (which is the production question:
+the browser records decorated, Node verifies bare). Repeated over several
+seeds at 1, 2 and 3 sim ticks per frame, because at one tick per frame the
+`Update` decoration and the `FixedUpdate` sim interleave one-to-one and a
+reorder can stay hidden.
+
+**Extend its markers to your game's real decorators during the port** — as
+shipped it is a smoke test, since the template's sim queries one entity and
+one entity has no order to get wrong. Two things matter when you do:
+
+* **Reproduce the branching.** A decorator that attaches a different
+  component set to different entities (golden crumbs get a sparkle, rivals
+  get a mood) is what splits one archetype into several. Markers that are
+  identical for every entity cannot reproduce the bug.
+* **Keep the child spawn.** `ChildOf` puts `Children` on the *parent*, so a
+  decorator that only spawns children still moves its parent's archetype.
+
+The file's own doc comment carries both, plus how to extend `trace_order` for
+the queries your order-sensitive sim systems iterate.
 
 **Before / after (the pilot's specific Update-vs-SimSet split)** — Cannonball
 Putt's ten chained `Update` systems split six/four. The six that moved into
@@ -906,10 +990,23 @@ value moved and, usually, which call produced it.
 
 When the bisect confirms drift, no workflow change is needed — the
 native-vs-Node step (`Cross-check the native fixture under Node`) is already
-`continue-on-error: true` — but write the measurement down in the game's PR
-and in its `docs/replay-verification.md`: the two checksums, the agreeing
-`score` and `ticks`, and the first tick at which they part. The next person
-should not have to redo the bisect.
+`continue-on-error: true` — but write the measurement down: the two
+checksums, the agreeing `score` and `ticks`, the first tick at which they
+part, and the call site responsible. The next person should not have to redo
+the bisect.
+
+**Write it in the game's own `docs/replay-notes.md`, never in
+`docs/replay-verification.md`.** That second file is copied verbatim from the
+template into every game, and `--upgrade` refreshes it *only while it is
+still byte-identical to a committed template version*. Appending a per-game
+section to it permanently converts it to "locally modified": the game stops
+receiving fleet-wide contract changes automatically and gets a HAND EDIT
+about it on every future upgrade instead. Dough.io did exactly this and
+called it out in its own PR.
+
+So: `docs/replay-notes.md`, a new file the game owns outright, with a pointer
+to it from the PR body. One line in the game's README or its
+`docs/conventions.md` naming the file is enough for discoverability.
 
 What does **not** get an excuse is `Verify the wasm-recorded fixture under
 Node`. Both sides of that one are wasm arithmetic, which is

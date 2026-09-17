@@ -15,7 +15,9 @@
 #       port, and nothing about sim.rs (it was renamed away before the script
 #       ran). It must also have made the edits the pilot had to do by hand:
 #       `default-run`, host.rs's optional GlobalVolume and HostCommand::Seed
-#       arm, and build_web.sh's verify.wasm comment block.
+#       arm, and build_web.sh's verify.wasm comment block. tests/
+#       archetype_order.rs must arrive crate-renamed and flagged as needing
+#       adaptation (this game has no `Player`, so the copy would not compile).
 #   (c) a second copy of the template with release.yml's upload artifact
 #       reverted to a pre-rollout shape but its `path:` line already
 #       drifted -> the script must print a HAND EDIT naming release.yml's
@@ -146,6 +148,16 @@ if [ -n "$DIRTY_A" ]; then
 fi
 pass "(a) template copy: rollout-replay.sh is a no-op (git status clean except Cargo.lock)"
 
+# The probe is a copied file on the template's own checkout too (SNAKE ==
+# gamebient_game, so the rename is a no-op); the no-op assertion above covers
+# it, but say so explicitly since it is the newest copied file.
+cmp -s "$TEMPLATE/tests/archetype_order.rs" "$COPY_A/tests/archetype_order.rs" \
+  || fail "(a) tests/archetype_order.rs was modified on the template's own checkout"
+if grep -q "HAND EDIT: tests/archetype_order.rs" "$SCRATCH_ROOT/a-output.txt"; then
+  fail "(a) the template's own checkout was told to adapt tests/archetype_order.rs"
+fi
+pass "(a) tests/archetype_order.rs is untouched and unflagged on the template itself"
+
 # ---------------------------------------------------------------------------
 # (b) Cannonball Putt copy. Skipped under --no-game (CI): it is the only part
 # that needs a sibling games/ checkout.
@@ -250,6 +262,18 @@ grep -A1 -x "bash tools/build_verify.sh" "$COPY_B/build_web.sh" \
   | grep -qx "cp dist-verify.zip dist/verify.zip" \
   || fail "(b) build_web.sh's 'cp dist-verify.zip dist/verify.zip' does not follow 'bash tools/build_verify.sh'"
 pass "(b) build_web.sh gained BOTH the verify.wasm comment and the build_verify.sh + cp verify.zip step"
+
+# The archetype-order probe is copied in, crate-renamed, and — because the
+# template's version queries the template's own `Player` sim entity, which
+# this game does not have — announced as a HAND EDIT rather than left to be
+# discovered as a compile error at `cargo test` time.
+[ -f "$COPY_B/tests/archetype_order.rs" ] \
+  || fail "(b) tests/archetype_order.rs was not copied in"
+grep -q 'use cannonball_putt::' "$COPY_B/tests/archetype_order.rs" \
+  || fail "(b) tests/archetype_order.rs was copied without the gamebient_game:: -> cannonball_putt:: rename"
+grep -q "HAND EDIT: tests/archetype_order.rs" "$SCRATCH_ROOT/b-output.txt" \
+  || fail "(b) no HAND EDIT telling the porter to adapt tests/archetype_order.rs (the copy does not compile against a game with no Player)"
+pass "(b) tests/archetype_order.rs is copied, crate-renamed, and flagged as needing adaptation"
 
 # The documented hand edit: GameData has no `score` field, so LeaderboardScore
 # must be implemented for it (the trait itself doesn't exist yet either —

@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # Copies replay verification (deterministic sim, GXR1 replays, the wasm
 # verifier: src/game/sim.rs, src/game/replay/, src/bin/verify.rs, build.rs,
-# tools/build_verify.sh, tools/verify_fixture.mjs, docs/replay-verification.md)
+# tools/build_verify.sh, tools/verify_fixture.mjs, docs/replay-verification.md,
+# tests/archetype_order.rs)
 # from this template into a game checkout and wires it: Cargo.toml lib/bin
 # split + features + deps, src/lib.rs + src/main.rs, the `pub mod
 # replay`/`sim` + `GamePlugin { headless }` shape in src/game/mod.rs,
 # build_web.sh's verify.zip step, the CI/release workflow steps, .gitignore,
 # assets/info.json's verify_url, and src/game/host.rs's HostCommand::Seed arm
 # + optional GlobalVolume. Idempotent. The script never edits a
-# copied file's contents (the two exceptions — src/bin/verify.rs and
-# tests/selftest.rs — get only a mechanical `gamebient_game::` ->
-# `<snake>::` crate-path substitution; see the comment at that copy step).
+# copied file's contents (the three exceptions — src/bin/verify.rs,
+# tests/selftest.rs and tests/archetype_order.rs — get only a mechanical
+# `gamebient_game::` -> `<snake>::` crate-path substitution; see the comment
+# at that copy step).
 # game-specific behaviour (porting GamePlugin::build onto sim::SimSet,
 # adding this game's own checksum_<game> system after sim::checksum_tick,
 # writing the selftest script) is a HAND EDIT for the skill's
@@ -186,11 +188,13 @@ fi
 # `Projectile` and `Email` entities that `combat::advance_projectiles` and
 # `inbox::tick_emails` iterate.
 #
-# The shape to spot: a file outside `src/game/` that takes an entity out of a
-# query and calls `.insert(`/`.remove::<`/`.despawn(` on it, naming a
-# component type declared in `src/game/` and queried there. Restricting to
-# game-declared components is what keeps this quiet — `Transform`, `Sprite`
-# and friends are queried everywhere and mean nothing here.
+# Scans ALL of src/, `src/game/` included: Dough.io keeps its decorators in
+# `src/game/presentation.rs`, so excluding the sim's own directory would
+# print nothing for it. That means benign shapes are named too — a system
+# that spawns an entity and decorates it in the same breath (this template's
+# own `player::spawn_player`), or a decorator already inside `SimSet`. Hence
+# "advisory": it says which files to read, never which are wrong. The test
+# that answers the question is `tests/archetype_order.rs`.
 if [ -d "$GAME/src/game" ]; then
   GAME_COMPONENTS="$(grep -rhE -A4 '#\[derive\([^)]*\bComponent\b' "$GAME/src/game" --include='*.rs' 2>/dev/null \
     | grep -oE '^(pub )?(struct|enum) [A-Z][A-Za-z0-9_]*' \
@@ -207,9 +211,9 @@ if [ -d "$GAME/src/game" ]; then
       grep -rqE "(Query<[^>]*&(mut )?${comp}\b|With<${comp}>|Without<${comp}>)" "$GAME/src/game" --include='*.rs' 2>/dev/null || continue
       ADVISORY="${ADVISORY}${f#"$GAME/"}:${comp} "
     done
-  done < <(find "$GAME/src" -name '*.rs' -not -path "$GAME/src/game/*" 2>/dev/null)
+  done < <(find "$GAME/src" -name '*.rs' 2>/dev/null)
   if [ -n "$ADVISORY" ]; then
-    echo "HAND EDIT (advisory): code outside src/game/ changes the archetype of entities src/game/ also queries — ${ADVISORY% }. If any of those entities is iterated by a SimSet system, the insert reorders that query, and the verifier (no render plugins, so no insert) never sees the same order. Put the presentation on a CHILD entity, move the insert into the sim chain, or sort the sim query by a stable per-entity key. This is a grep, not an analysis: read the two files. See docs/replay-verification.md rule 1."
+    echo "HAND EDIT (advisory): these files change the archetype of entities src/game/ also queries — ${ADVISORY% }. Where the entity is one a SimSet system ITERATES and the insert happens from Update, it reorders that query, and the verifier (no render plugins, so no insert) never sees the same order. Put the presentation on a CHILD entity, move the insert into the sim chain, or sort the sim query by a stable per-entity key. Benign shapes are listed too (a spawn that decorates in the same system, a decorator already in SimSet) — this is a grep, so read the files, then extend tests/archetype_order.rs's markers to your real decorators and let that test answer it. See docs/replay-verification.md rule 1."
   fi
 fi
 
@@ -344,26 +348,37 @@ for rel in "${COPY_LIST[@]}"; do
   copy_or_hand_edit "$rel"
 done
 
-# src/game/replay/selftest.rs under --upgrade: narrower than "never touch
-# it". A copy that is byte-identical to SOME committed template version is
-# one nobody ever replaced — the port skipped it, or the template moved the
-# skeleton underneath it — and refreshing that throws nothing away, so do it
-# and name it in the summary like any other stale verbatim copy. A copy that
-# matches no template version is this game's own script: leave it, and say
-# nothing, because there is nothing for a human to act on.
-if [ "$UPGRADE" -eq 1 ]; then
-  SELFTEST_REL=src/game/replay/selftest.rs
-  SELFTEST_DST="$GAME/$SELFTEST_REL"
-  if [ ! -e "$SELFTEST_DST" ]; then
-    mkdir -p "$(dirname "$SELFTEST_DST")"
-    cp "$TEMPLATE/$SELFTEST_REL" "$SELFTEST_DST"
-  elif ! cmp -s "$TEMPLATE/$SELFTEST_REL" "$SELFTEST_DST"; then
-    SELFTEST_STALE="$(template_sha_matching "$SELFTEST_REL" "$SELFTEST_DST" verbatim)"
-    if [ -n "$SELFTEST_STALE" ]; then
-      cp "$TEMPLATE/$SELFTEST_REL" "$SELFTEST_DST"
-      REFRESHED="${REFRESHED}${SELFTEST_REL} (was template ${SELFTEST_STALE:0:7})"$'\n'
+# The two files the port REPLACES rather than keeps — replay/selftest.rs's
+# script and tests/archetype_order.rs's markers are this game's, not the
+# template's — get a narrower --upgrade rule than "never touch them". A copy
+# that is byte-identical to SOME committed template version is one nobody
+# ever replaced (the port skipped it, or the template moved the skeleton
+# underneath it), and refreshing that throws nothing away: do it, and name it
+# in the summary like any other stale verbatim copy. A copy that matches no
+# template version is the game's own: leave it, and say nothing, because
+# there is nothing for a human to act on.
+if [ "$UPGRADE" -eq 1 ] && [ -n "$PKG" ]; then
+  refresh_if_untouched() {
+    local rel="$1" mode="$2" dst="$GAME/$1" expected stale
+    if [ "$mode" = rename ]; then
+      expected="$(sed "s/gamebient_game::/${SNAKE}::/g" "$TEMPLATE/$rel")"
+    else
+      expected="$(cat "$TEMPLATE/$rel")"
     fi
-  fi
+    if [ ! -e "$dst" ]; then
+      mkdir -p "$(dirname "$dst")"
+      printf '%s\n' "$expected" >"$dst"
+      return 0
+    fi
+    [ "$(cat "$dst")" = "$expected" ] && return 0
+    stale="$(template_sha_matching "$rel" "$dst" "$mode")"
+    if [ -n "$stale" ]; then
+      printf '%s\n' "$expected" >"$dst"
+      REFRESHED="${REFRESHED}${rel} (was template ${stale:0:7})"$'\n'
+    fi
+  }
+  refresh_if_untouched src/game/replay/selftest.rs verbatim
+  refresh_if_untouched tests/archetype_order.rs rename
 fi
 
 chmod +x "$GAME/tools/build_verify.sh" 2>/dev/null || true
@@ -402,6 +417,21 @@ copy_with_crate_rename() {
 if [ -n "$PKG" ]; then
   copy_with_crate_rename src/bin/verify.rs
   copy_with_crate_rename tests/selftest.rs
+  # tests/archetype_order.rs is the differential probe for the archetype-order
+  # trap: it records the scripted run twice — once plain, once with Update
+  # systems decorating the sim's entities — and asserts the two agree and that
+  # the decorated recording still verifies in a bare app. Like
+  # replay/selftest.rs's script it is NOT usable as copied: the template's
+  # version queries the template's own sim entity (`Player`), which most games
+  # do not have, so it does not even compile until the port adapts it. Hence
+  # the HAND EDIT below, and the same narrowed --upgrade rule as selftest.rs.
+  if [ "$UPGRADE" -eq 0 ]; then
+    copy_with_crate_rename tests/archetype_order.rs
+    if [ ! -f "$GAME/src/game/player.rs" ] \
+      || ! grep -rq 'pub struct Player' "$GAME/src/game/player.rs" 2>/dev/null; then
+      echo "HAND EDIT: tests/archetype_order.rs: adapt it to this game before it compiles — the copied version queries the template's own \`Player\` sim entity. Replace the marker components and decorate_* systems with stand-ins for THIS game's Update decorators (reproduce their branching: different entities getting different component sets is what splits the archetype), and point trace_order at the queries your order-sensitive sim systems iterate. It is the only test that catches the archetype-order trap; the \"delete the system and re-run --selftest\" check cannot. See the file's doc comment and the port checklist, 'What may stay in Update'."
+    fi
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -942,7 +972,7 @@ if [ "$UPGRADE" -eq 1 ]; then
   else
     echo "rollout-replay --upgrade: nothing to refresh — every copied file is already the template's current version or locally modified (see the HAND EDIT lines above)"
   fi
-  echo "rollout-replay --upgrade: src/game/replay/selftest.rs is refreshed only while it is still byte-identical to a committed template version; once it is this game's own script it is left alone, silently"
+  echo "rollout-replay --upgrade: src/game/replay/selftest.rs and tests/archetype_order.rs are refreshed only while they are still byte-identical to a committed template version; once the port has replaced them they are left alone, silently"
 fi
 
 echo "rollout-replay: files in place for $GAME"
