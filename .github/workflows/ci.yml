@@ -22,6 +22,18 @@ jobs:
     # mirrors the warning-tolerant Vercel build.
     env:
       RUSTFLAGS: -D warnings
+      # Debug info, not code, is what fills a runner's disk here. Four Bevy
+      # test binaries (lib, playtest, selftest, archetype_order) carry it
+      # twice over — once in the rlib graph, once per binary — and the
+      # failure it produces is not an out-of-disk message but
+      #   collect2: fatal error: ld terminated with signal 7 [Bus error]
+      # in the middle of rust-lld, with the linker politely asking for an
+      # llvm-project bug report. Measured on Dough.io: the
+      # --all-targets --all-features target dir is 12 GB with debug info and
+      # 2.0 GB without, test binaries 140 MB against 50 MB, and the suite
+      # passes identically. Set here rather than in Cargo.toml so local
+      # debugging keeps its symbols.
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@v4
 

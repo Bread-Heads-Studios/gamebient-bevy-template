@@ -55,8 +55,21 @@
 #   (h) the --upgrade branch for .github/workflows/ci.yml: a template copy
 #       whose Node step is the OLD single-fixture shape (taken from the
 #       template's own history) -> --upgrade must replace it with the
-#       wasm-gate + informational-native pair; and the same copy with that
-#       step RENAMED -> a HAND EDIT, with the file left untouched.
+#       wasm-gate + informational-native pair, and must add
+#       CARGO_PROFILE_DEV_DEBUG: "0" to the check job's env exactly once
+#       (without it a fourth Bevy test binary's debug info exhausts the
+#       runner disk and CI dies inside rust-lld with "collect2: ld
+#       terminated with signal 7"); and the same copy with that step RENAMED
+#       -> a HAND EDIT, with nothing but the env line added.
+#   (k) sim.rs is a verbatim copy, so --upgrade hands an already-ported game
+#       a begin_run that takes ResMut<SpawnCounter>. A template copy with
+#       the .init_resource::<sim::SpawnCounter>() line deleted -> --upgrade
+#       must put it back (exactly once, and back in the builder chain), or
+#       OnEnter(Playing) dies with Bevy's nameless "Resource does not exist".
+#   (j) the workflow drift advisory: --upgrade on a copy whose ci.yml has one
+#       changed line must name the file, list the differing lines and print
+#       a reproducible diff command; on a copy whose workflows match the
+#       template's it must be silent.
 #
 # Usage: tools/test_rollout_replay.sh [--no-game]
 #
@@ -211,7 +224,9 @@ grep -q "GamePlugin::build" "$SCRATCH_ROOT/b-output.txt" \
 if grep -q "sim\.rs" "$SCRATCH_ROOT/b-output.txt"; then
   fail "(b) HAND EDIT output mentions sim.rs, but it was renamed away before the script ran"
 fi
-pass "(b) HAND EDIT output names LeaderboardScore and the GamePlugin::build port, nothing about sim.rs"
+grep -q "init_resource::<sim::SpawnCounter>" "$SCRATCH_ROOT/b-output.txt" \
+  || fail "(b) the GamePlugin::build HAND EDIT doesn't name .init_resource::<sim::SpawnCounter>(), which sim::begin_run now requires"
+pass "(b) HAND EDIT output names LeaderboardScore, the GamePlugin::build port and the SpawnCounter registration, nothing about sim.rs"
 
 # --- The edits the script now makes for us ---------------------------------
 #
@@ -714,10 +729,31 @@ grep -q 'Cross-check the native fixture under Node (informational)' "$COPY_H/.gi
 if grep -q 'Verify the committed fixture under Node' "$COPY_H/.github/workflows/ci.yml"; then
   fail "(h) --upgrade left the old single-fixture step behind alongside the new pair"
 fi
-if grep -q "HAND EDIT.*ci.yml" "$SCRATCH_ROOT/h-output.txt"; then
+# The drift advisory (part (j)) is expected here and is excluded: an old
+# ci.yml taken from the template's own history differs from HEAD's in far
+# more than the Node step, and saying so is the advisory's job. What must
+# not appear is a HAND EDIT asking a human to do what --upgrade just did.
+if grep "HAND EDIT.*ci.yml" "$SCRATCH_ROOT/h-output.txt" | grep -vq "(advisory)"; then
+  grep "HAND EDIT.*ci.yml" "$SCRATCH_ROOT/h-output.txt" >&2
   fail "(h) --upgrade replaced the step but still printed a HAND EDIT about ci.yml"
 fi
 pass "(h) --upgrade replaces the old single-fixture Node step with the wasm gate + informational pair"
+
+# ...and, on the same copy, the CI disk setting. A game whose ci.yml predates
+# tests/archetype_order.rs has four Bevy test binaries' worth of debug info
+# and no setting to stop it, and the failure that produces ("collect2: ld
+# terminated with signal 7" inside rust-lld) reads as a compiler bug rather
+# than as the out-of-disk it is. The rollout adds it, once.
+grep -q 'CARGO_PROFILE_DEV_DEBUG: "0"' "$COPY_H/.github/workflows/ci.yml" \
+  || fail "(h) the rollout did not add CARGO_PROFILE_DEV_DEBUG to the check job's env"
+DEBUG_ENV_N="$(grep -c 'CARGO_PROFILE_DEV_DEBUG' "$COPY_H/.github/workflows/ci.yml")"
+[ "$DEBUG_ENV_N" -eq 1 ] \
+  || fail "(h) CARGO_PROFILE_DEV_DEBUG appears $DEBUG_ENV_N times in ci.yml; the insertion is not idempotent"
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_H" >"$SCRATCH_ROOT/h-output-2.txt" 2>&1
+DEBUG_ENV_N2="$(grep -c 'CARGO_PROFILE_DEV_DEBUG' "$COPY_H/.github/workflows/ci.yml")"
+[ "$DEBUG_ENV_N2" -eq 1 ] \
+  || fail "(h) a second --upgrade added CARGO_PROFILE_DEV_DEBUG again ($DEBUG_ENV_N2 occurrences)"
+pass "(h) the rollout adds CARGO_PROFILE_DEV_DEBUG to a game's check job exactly once"
 
 # The refusal half: the same old ci.yml with the step RENAMED.
 COPY_H2="$SCRATCH_ROOT/template-copy-h2"
@@ -732,11 +768,25 @@ cp "$COPY_H2/.github/workflows/ci.yml" "$SCRATCH_ROOT/h2-ci-before.yml"
 bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_H2" >"$SCRATCH_ROOT/h2-output.txt" 2>&1
 cat "$SCRATCH_ROOT/h2-output.txt"
 
-grep -q "HAND EDIT.*ci.yml" "$SCRATCH_ROOT/h2-output.txt" \
-  || fail "(h) an unrecognized Node step shape printed no HAND EDIT about ci.yml"
-cmp -s "$SCRATCH_ROOT/h2-ci-before.yml" "$COPY_H2/.github/workflows/ci.yml" \
-  || fail "(h) --upgrade edited a ci.yml whose Node step it does not recognize"
-pass "(h) an unrecognized Node step gets a HAND EDIT and the workflow file is left untouched"
+# A real HAND EDIT, not just the drift advisory (which fires on any old
+# workflow and would mask a missing refusal).
+grep "HAND EDIT.*ci.yml" "$SCRATCH_ROOT/h2-output.txt" | grep -vq "(advisory)" \
+  || fail "(h) an unrecognized Node step printed no HAND EDIT about ci.yml beyond the drift advisory"
+# The CARGO_PROFILE_DEV_DEBUG insertion is a pure addition to `env:` and is
+# unrelated to the Node step it refuses to touch, so it still lands; the
+# refusal is about the step, not about the file.
+diff "$SCRATCH_ROOT/h2-ci-before.yml" "$COPY_H2/.github/workflows/ci.yml" \
+  >"$SCRATCH_ROOT/h2-ci-diff.txt" || true
+if grep -q '^<' "$SCRATCH_ROOT/h2-ci-diff.txt"; then
+  cat "$SCRATCH_ROOT/h2-ci-diff.txt" >&2
+  fail "(h) --upgrade removed or rewrote lines in a ci.yml whose Node step it does not recognize"
+fi
+if grep '^>' "$SCRATCH_ROOT/h2-ci-diff.txt" \
+  | grep -v 'CARGO_PROFILE_DEV_DEBUG' | grep -vq '^>[[:space:]]*#'; then
+  cat "$SCRATCH_ROOT/h2-ci-diff.txt" >&2
+  fail "(h) --upgrade added something other than the CARGO_PROFILE_DEV_DEBUG env line to a ci.yml whose Node step it does not recognize"
+fi
+pass "(h) an unrecognized Node step gets a HAND EDIT and the workflow file is otherwise left untouched"
 
 
 # ---------------------------------------------------------------------------
@@ -807,5 +857,93 @@ if grep "archetype_order.rs" "$SCRATCH_ROOT/i3-output.txt" \
   fail "(i) --upgrade nagged about an already-adapted tests/archetype_order.rs"
 fi
 pass "(i) an adapted probe survives --upgrade untouched and unmentioned"
+
+
+# ---------------------------------------------------------------------------
+# (j) The workflow drift advisory.
+#
+# --upgrade reconciles a fixed set of known shapes in ci.yml/release.yml and
+# is deliberately blind to everything else. That blindness is the right
+# default — rewriting a workflow a game has tuned is the guess this script
+# exists not to make — but silence about it is not: a pinned tool the
+# template has since bumped, a job that never got updated, an apt package
+# added by hand all sit there invisibly. So --upgrade diffs both workflows
+# against the template's with the naming substitutions applied and says how
+# far apart they are, as an advisory.
+#
+# Both halves matter: it must fire on a single changed line, and it must be
+# silent when the workflows match, or it becomes noise nobody reads.
+# ---------------------------------------------------------------------------
+COPY_J="$SCRATCH_ROOT/template-copy-j"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_J"
+# An inert one-line change the script itself has no opinion about, so what
+# the advisory reports is drift and nothing else.
+sed -i.bak 's/retention-days: 14/retention-days: 7/' "$COPY_J/.github/workflows/ci.yml"
+rm -f "$COPY_J/.github/workflows/ci.yml.bak"
+grep -q 'retention-days: 7' "$COPY_J/.github/workflows/ci.yml" \
+  || fail "(j) setup: the one-line ci.yml change did not take"
+
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_J" >"$SCRATCH_ROOT/j-output.txt" 2>&1
+cat "$SCRATCH_ROOT/j-output.txt"
+
+grep -q "HAND EDIT (advisory): .github/workflows/ci.yml differs from the template" \
+  "$SCRATCH_ROOT/j-output.txt" \
+  || fail "(j) a drifted ci.yml printed no drift advisory"
+grep -q "retention-days: 7" "$SCRATCH_ROOT/j-output.txt" \
+  || fail "(j) the advisory did not list the line that actually differs"
+grep -q "review with: diff" "$SCRATCH_ROOT/j-output.txt" \
+  || fail "(j) the advisory did not print a command to reproduce the diff"
+# release.yml was left alone, so it must not be named.
+if grep -q "HAND EDIT (advisory): .github/workflows/release.yml differs" "$SCRATCH_ROOT/j-output.txt"; then
+  fail "(j) an untouched release.yml got a drift advisory"
+fi
+pass "(j) a one-line workflow drift prints an advisory naming the file, the lines and the diff command"
+
+COPY_J2="$SCRATCH_ROOT/template-copy-j2"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_J2"
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_J2" >"$SCRATCH_ROOT/j2-output.txt" 2>&1
+cat "$SCRATCH_ROOT/j2-output.txt"
+
+if grep -q "differs from the template in" "$SCRATCH_ROOT/j2-output.txt"; then
+  grep "differs from the template in" "$SCRATCH_ROOT/j2-output.txt" >&2
+  fail "(j) workflows identical to the template's still got a drift advisory"
+fi
+pass "(j) workflows that match the template are silent"
+
+
+# ---------------------------------------------------------------------------
+# (k) .init_resource::<sim::SpawnCounter>() on an already-ported game.
+#
+# sim.rs is a verbatim copy, so --upgrade hands a game ported months ago a
+# `begin_run` that takes `ResMut<SpawnCounter>` — and an already-ported game
+# has the GamePlugin::build HAND EDIT suppressed, so nothing would otherwise
+# tell it to register the resource. The failure is Bevy's nameless
+# "Parameter ... failed validation: Resource does not exist" on
+# OnEnter(Playing): a green compile and a dead game. The script inserts the
+# line next to the RunOver registration every ported game already has.
+# ---------------------------------------------------------------------------
+COPY_K="$SCRATCH_ROOT/template-copy-k"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_K"
+grep -v 'init_resource::<sim::SpawnCounter>' "$COPY_K/src/game/mod.rs" >"$SCRATCH_ROOT/k-mod.rs"
+cp "$SCRATCH_ROOT/k-mod.rs" "$COPY_K/src/game/mod.rs"
+grep -q 'init_resource::<sim::SpawnCounter>' "$COPY_K/src/game/mod.rs" \
+  && fail "(k) setup: the SpawnCounter registration is still in mod.rs after deleting it"
+
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_K" >"$SCRATCH_ROOT/k-output.txt" 2>&1
+cat "$SCRATCH_ROOT/k-output.txt"
+
+grep -q 'init_resource::<sim::SpawnCounter>()' "$COPY_K/src/game/mod.rs" \
+  || fail "(k) --upgrade did not add .init_resource::<sim::SpawnCounter>() to GamePlugin::build"
+K_N="$(grep -c 'init_resource::<sim::SpawnCounter>' "$COPY_K/src/game/mod.rs")"
+[ "$K_N" -eq 1 ] || fail "(k) the SpawnCounter registration appears $K_N times; the insertion is not idempotent"
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_K" >"$SCRATCH_ROOT/k-output-2.txt" 2>&1
+K_N2="$(grep -c 'init_resource::<sim::SpawnCounter>' "$COPY_K/src/game/mod.rs")"
+[ "$K_N2" -eq 1 ] || fail "(k) a second --upgrade added the SpawnCounter registration again ($K_N2 occurrences)"
+# And the file is otherwise byte-identical to the template's, so the
+# insertion landed in the builder chain rather than somewhere that merely
+# greps right.
+cmp -s "$TEMPLATE/src/game/mod.rs" "$COPY_K/src/game/mod.rs" \
+  || fail "(k) mod.rs after the insertion is not byte-identical to the template's"
+pass "(k) --upgrade restores a missing .init_resource::<sim::SpawnCounter>(), exactly once"
 
 echo "test_rollout_replay: all checks passed"

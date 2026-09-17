@@ -27,7 +27,12 @@
 # the base to merge from. `src/game/replay/selftest.rs` is narrower: it is
 # refreshed while it is still byte-identical to a committed template version
 # (nobody replaced the skeleton), and once it is the game's own script it is
-# left alone with no HAND EDIT, since there is nothing to act on.
+# left alone with no HAND EDIT, since there is nothing to act on. --upgrade
+# also prints a drift ADVISORY for .github/workflows/ci.yml and release.yml:
+# the reconciliation above only knows a fixed set of shapes, so everything
+# else the game's workflows have drifted into is diffed against the
+# template's (with the naming substitutions applied) and summarised rather
+# than rewritten.
 #
 # Usage: tools/rollout-replay.sh [--upgrade] <game-dir>
 set -euo pipefail
@@ -505,7 +510,7 @@ if [ -n "$PKG" ]; then
   if [ ! -e "$PROBE_DST" ]; then
     if [ "$UPGRADE" -eq 1 ]; then
       MISSING_PROBE=1
-      echo "HAND EDIT: $PROBE_REL: missing; copy it from the template and adapt the markers to your sim entities (see the port checklist, \"The two order traps\"). Not copied automatically: the template's version references its own \`Player\` entity, so dropping it in would turn this checkout's tests red with no explanation."
+      echo "HAND EDIT: $PROBE_REL: missing; copy it from the template and adapt the markers to your sim entities, keeping BOTH Decoration modes (faithful documents the real partitioning; split is the detector — see the port checklist, \"The two order traps\"). Not copied automatically: the template's version references its own \`Player\` entity, so dropping it in would turn this checkout's tests red with no explanation."
     else
       mkdir -p "$(dirname "$PROBE_DST")"
       printf '%s\n' "$PROBE_EXPECTED" >"$PROBE_DST"
@@ -523,7 +528,7 @@ if [ -n "$PKG" ]; then
   # checkout ($SNAKE == gamebient_game) the file is its own, by definition.
   if [ "$SNAKE" != gamebient_game ] && [ -e "$PROBE_DST" ] \
     && [ "$(cat "$PROBE_DST")" = "$PROBE_EXPECTED" ]; then
-    echo "HAND EDIT: $PROBE_REL: still the template's copy — adapt it before it compiles. It references the template's own \`Player\` sim entity; replace the marker components and decorate_* systems with stand-ins for THIS game's Update decorators (reproduce their branching: different entities getting different component sets is what splits the archetype), and point trace_order at the queries your order-sensitive sim systems iterate. It is the only test that catches the archetype-order trap; the \"delete the system and re-run --selftest\" check provably cannot. See the file's doc comment and the port checklist, 'What may stay in Update'."
+    echo "HAND EDIT: $PROBE_REL: still the template's copy — adapt it before it compiles. It references the template's own \`Player\` sim entity; replace the marker components and decorate_* systems with stand-ins for THIS game's Update decorators, and point trace_order at the queries your order-sensitive sim systems iterate. KEEP BOTH Decoration modes: 'faithful' must reproduce your decorators' exact branching (different entities getting different component sets is what splits the archetype) and documents the real partitioning, while 'split' — which halves every sim archetype on sim::SpawnOrder parity, so point it at EVERY kind of sim entity you have — is the detector. Measured on Dough.io against a real instance of the bug: faithful passed 18/18 by luck, split failed 2/18. It is the only test that catches the archetype-order trap; the \"delete the system and re-run --selftest\" check provably cannot. See the file's doc comment and the port checklist, 'What may stay in Update'."
   fi
 fi
 
@@ -725,6 +730,34 @@ sub spit {
             }
         }
 
+        # ---- .init_resource::<sim::SpawnCounter>() ----
+        #
+        # `sim::begin_run` takes `ResMut<SpawnCounter>`, so a game that picks
+        # up the current sim.rs without registering the resource fails Bevy's
+        # parameter validation on OnEnter(Playing) with the nameless
+        # "Parameter ... failed validation: Resource does not exist". That is
+        # a real hazard for --upgrade specifically: an already-ported game
+        # has the GamePlugin::build HAND EDIT suppressed, so nothing else
+        # would mention it. Anchored on `.init_resource::<sim::RunOver>()`,
+        # which every ported game has (rule 10 requires it).
+        if ($c !~ /init_resource::<sim::SpawnCounter>/) {
+            my $anchor = ".init_resource::<sim::RunOver>()";
+            my $idx = index($c, $anchor);
+            if ($idx >= 0) {
+                # Reuse the anchor line's own indentation so the builder
+                # chain stays rustfmt-clean (cargo fmt runs at the end anyway).
+                my $line_start = rindex($c, "\n", $idx) + 1;
+                my $indent = substr($c, $line_start, $idx - $line_start);
+                substr($c, $idx + length($anchor), 0) = "\n$indent.init_resource::<sim::SpawnCounter>()";
+            } elsif ($upgrade && $suppress_ported_noise) {
+                # Only when the GamePlugin::build HAND EDIT below is
+                # suppressed. On a first rollout that one already carries
+                # the registration list, and two hand edits saying the same
+                # thing is how a list stops being read.
+                hand_edit("src/game/mod.rs: add .init_resource::<sim::SpawnCounter>() to GamePlugin::build (no .init_resource::<sim::RunOver>() line to hang it off). sim::begin_run takes ResMut<SpawnCounter>; without the registration OnEnter(Playing) dies with Bevy's nameless \"Parameter ... failed validation: Resource does not exist\". SpawnOrder/SpawnCounter is the stable sorting key determinism rule 1 asks order-sensitive sim systems to use.");
+            }
+        }
+
         # Always surfaced on a first rollout: the build() body is
         # game-specific free-form code this script cannot safely touch
         # (system ordering, what stays in Update vs moves into sim::SimSet,
@@ -732,7 +765,7 @@ sub spit {
         # game whose mod.rs already names sim::SimSet the work is demonstrably
         # done, and repeating it every time devalues the rest of the list.
         unless ($upgrade && $suppress_ported_noise) {
-            hand_edit('src/game/mod.rs: port GamePlugin::build to run gameplay through sim::SimSet, gate scene/audio/dev-harness setup on !self.headless, and add a checksum_<game> system after sim::checksum_tick folding your key run state (see docs/replay-verification.md rule 6). Three specifics that cost the pilot hours: (a) the set\'s run condition is THREE clauses -- sim::SimSet.run_if(in_state(GameState::Playing).and(states::not_paused).and(sim::run_not_over)) -- plus .init_resource::<sim::RunOver>(), or the game-over fade adds a frame-rate-dependent tail of ticks the verifier cannot reproduce (rule 10); (b) every system the headless app runs must take resources the headless app actually has -- assets in particular: GameAssets/Assets<Mesh>/Assets<StandardMaterial> are only inserted by the windowed build, so a spawn system needs Option<Res<GameAssets>> and an asset-free branch, or Bevy fails it with \"Parameter ... failed validation\" and no system name; (c) CI\'s Node fixture steps fail until tests/fixtures/selftest.gxr AND tests/fixtures/selftest-wasm.gxr are generated (skill step 4)');
+            hand_edit('src/game/mod.rs: port GamePlugin::build to run gameplay through sim::SimSet, gate scene/audio/dev-harness setup on !self.headless, and add a checksum_<game> system after sim::checksum_tick folding your key run state (see docs/replay-verification.md rule 6). Three specifics that cost the pilot hours: (a) the set\'s run condition is THREE clauses -- sim::SimSet.run_if(in_state(GameState::Playing).and(states::not_paused).and(sim::run_not_over)) -- plus .init_resource::<sim::RunOver>() and .init_resource::<sim::SpawnCounter>() (sim::begin_run takes both; a missing one fails Bevy\'s parameter validation with no system name), or the game-over fade adds a frame-rate-dependent tail of ticks the verifier cannot reproduce (rule 10); (b) every system the headless app runs must take resources the headless app actually has -- assets in particular: GameAssets/Assets<Mesh>/Assets<StandardMaterial> are only inserted by the windowed build, so a spawn system needs Option<Res<GameAssets>> and an asset-free branch, or Bevy fails it with \"Parameter ... failed validation\" and no system name; (c) CI\'s Node fixture steps fail until tests/fixtures/selftest.gxr AND tests/fixtures/selftest-wasm.gxr are generated (skill step 4)');
         }
 
         spit($path, $c) if $c ne $orig;
@@ -950,6 +983,37 @@ sub spit {
                 hand_edit(".github/workflows/ci.yml: the Node step still verifies the native fixture only; re-run with --upgrade to replace it with the wasm gate + informational native cross-check");
             }
         }
+
+        # ---- CARGO_PROFILE_DEV_DEBUG on the check job ----
+        #
+        # Adding tests/archetype_order.rs takes a game to four Bevy test
+        # binaries, and the debug info across them exhausts the runner's
+        # disk. It does not announce itself as an out-of-disk failure: the
+        # Test step dies inside rust-lld with
+        #   collect2: fatal error: ld terminated with signal 7 [Bus error]
+        # and a request to file an llvm-project bug. Measured on Dough.io,
+        # where it landed first: --all-targets --all-features is 12 GB of
+        # target dir with debug info and 2.0 GB without, with an identical
+        # test result. In the workflow rather than Cargo.toml so local
+        # debugging keeps its symbols. Idempotent, and applied on a plain
+        # rollout as well as --upgrade: it is a pure addition to an `env:`
+        # block, not a rewrite of anything the game may have tuned.
+        if ($c !~ /CARGO_PROFILE_DEV_DEBUG/) {
+            my $anchor = "      RUSTFLAGS: -D warnings\n";
+            my $addition = "      # Four Bevy test binaries' debug info exhausts the runner disk; the\n"
+                          . "      # failure reads as 'collect2: ld terminated with signal 7' inside\n"
+                          . "      # rust-lld, not as out-of-disk. Measured 12 GB -> 2.0 GB of target\n"
+                          . "      # dir with an identical test result. Here and not in Cargo.toml so\n"
+                          . "      # local debugging keeps its symbols.\n"
+                          . "      CARGO_PROFILE_DEV_DEBUG: \"0\"\n";
+            my $idx = index($c, $anchor);
+            if ($idx >= 0) {
+                substr($c, $idx + length($anchor), 0) = $addition;
+            } else {
+                hand_edit(".github/workflows/ci.yml: no 'RUSTFLAGS: -D warnings' line to hang CARGO_PROFILE_DEV_DEBUG: \"0\" off; add it to the check job's env: by hand, or the Test step will die linking the fourth test binary with 'collect2: ld terminated with signal 7' (runner disk, not a compiler bug)");
+            }
+        }
+
         spit($path, $c) if $c ne $orig;
     } else {
         hand_edit("no .github/workflows/ci.yml found");
@@ -1047,6 +1111,48 @@ sub spit {
 
 print "$_\n" for @hand_edits;
 PERL_EOF
+fi
+
+# ---------------------------------------------------------------------------
+# Workflow drift advisory (--upgrade only).
+#
+# The reconciliation above knows a fixed set of shapes: the Node fixture
+# steps, the verify.zip packaging step, the upload path, the disk setting.
+# Everything else a game's workflows have drifted into is invisible to it —
+# a pinned wasm-bindgen-cli the template has since bumped, an apt package
+# added by hand, a job that was never updated when the template's was. None
+# of that is safe for a script to rewrite, and all of it is worth a human's
+# eye on an upgrade, so: diff the game's workflows against the template's
+# with the naming substitutions applied and say how far apart they are.
+#
+# Advisory, like the archetype-insert scan: expect legitimate differences
+# (a game with no cutter has no "Cutter tests" step) and read it as a
+# reading list, not a verdict.
+# ---------------------------------------------------------------------------
+if [ "$UPGRADE" -eq 1 ] && [ -n "$PKG" ]; then
+  DRIFT_MAX_LINES=40
+  for wf in ci release; do
+    GAME_WF="$GAME/.github/workflows/$wf.yml"
+    TEMPLATE_WF="$TEMPLATE/.github/workflows/$wf.yml"
+    if [ ! -e "$GAME_WF" ] || [ ! -e "$TEMPLATE_WF" ]; then
+      continue
+    fi
+    # The template side with `gamebient-game` -> the game's crate name and
+    # `gamebient_game` -> its snake_case path, which is every substitution
+    # the rollout itself makes to a workflow. What survives is real drift.
+    DRIFT="$(diff \
+      <(sed -e "s/gamebient-game/${PKG}/g" -e "s/gamebient_game/${SNAKE}/g" "$TEMPLATE_WF") \
+      "$GAME_WF" | grep '^[<>]' || true)"
+    if [ -z "$DRIFT" ]; then
+      continue
+    fi
+    DRIFT_N="$(printf '%s\n' "$DRIFT" | wc -l | tr -d ' ')"
+    printf '%s\n' "$DRIFT" | head -n "$DRIFT_MAX_LINES" | sed 's/^/    /'
+    if [ "$DRIFT_N" -gt "$DRIFT_MAX_LINES" ]; then
+      echo "    ... ($DRIFT_MAX_LINES of $DRIFT_N lines shown)"
+    fi
+    echo "HAND EDIT (advisory): .github/workflows/$wf.yml differs from the template in $DRIFT_N lines; review with: diff <(sed -e 's/gamebient-game/${PKG}/g' -e 's/gamebient_game/${SNAKE}/g' $TEMPLATE_WF) $GAME_WF"
+  done
 fi
 
 # The perl edits above write multi-line blocks with their own spacing (not
