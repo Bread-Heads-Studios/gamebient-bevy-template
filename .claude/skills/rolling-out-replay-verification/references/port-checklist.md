@@ -887,8 +887,8 @@ has a test that agrees with the bug.
 
 **Extend both modes to your game's real entities during the port** — as
 shipped it is a smoke test, since the template's sim queries one entity and
-one entity has no order to get wrong (its one entity is `SpawnOrder(0)`, so
-even the split marker never lands there). It also does not *compile*
+one entity has no order to get wrong (its one entity is `SpawnOrder(0)`; the
+split marker lands on even keys, so the insert path does run, against nothing). It also does not *compile*
 unadapted in most games: the template's version references the template's own
 `Player`. (That is why `rollout-replay.sh --upgrade` refuses to create the
 file when a game does not already have one, and asks for it instead.) Three

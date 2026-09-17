@@ -56,10 +56,12 @@
 //! On this template the sim queries exactly one entity (`Player`), so the
 //! probe is a smoke test: with one entity there is no order to get wrong.
 //! The template's one sim entity is `SpawnOrder(0)`, so the split mode's
-//! marker never even lands here — the mode is carried, compiled and run so
-//! that a port inherits working machinery, not because it is proving
-//! anything on the template. What this file really proves *here* is that the
-//! inserts and the child spawn are value-safe and cadence-independent.
+//! marker lands on it (even keys get the marker, as in Dough.io) and the
+//! insert path runs end to end — but with nothing to reorder against it, the
+//! mode is carried, compiled and run so that a port inherits working
+//! machinery, not because it is proving anything on the template. What this
+//! file really proves *here* is that the inserts and the child spawn are
+//! value-safe and cadence-independent.
 //! **It only grows teeth once both modes reproduce your game's own
 //! decorators and your own sim entities**, so:
 //!
@@ -190,7 +192,7 @@ fn split_sim_archetypes(
     new: Query<(Entity, &SpawnOrder), (With<Player>, Without<FakeSplit>)>,
 ) {
     for (e, order) in &new {
-        if !order.0.is_multiple_of(2) {
+        if order.0.is_multiple_of(2) {
             commands.entity(e).insert(FakeSplit);
         }
     }
