@@ -23,6 +23,10 @@
 #       name, e.g. a workspace root like games/voidrunner-authoritative)
 #       -> the script must still exit 0 and print a HAND EDIT naming
 #       Cargo.toml, not silently exit 1 with no output under set -e.
+#   (e) a template copy whose src/game/sim.rs is an OLDER committed version
+#       of the template's own sim.rs (what an already-ported game looks like
+#       on a second rollout) -> the HAND EDIT must say "stale template copy"
+#       and must not tell you to rename the file.
 #
 # Usage: tools/test_rollout_replay.sh
 set -euo pipefail
@@ -288,5 +292,32 @@ else
   cat "$SCRATCH_ROOT/d-output.txt"
   fail "(d) rollout-replay.sh exited non-zero on a workspace-root Cargo.toml (should exit 0 with a HAND EDIT)"
 fi
+
+# ---------------------------------------------------------------------------
+# (e) Stale template sim.rs, on a fresh template copy.
+#
+# Re-running the rollout on a game that was ported months ago leaves it with
+# a sim.rs that is the template's -- just an older one. The pre-flight used
+# to lump that in with "your game has its own sim.rs called sim.rs" and tell
+# you to rename it, which would be actively wrong: the fix is to re-copy the
+# current one and re-apply the game's own wiring. Reproduce it by putting an
+# earlier committed version of the template's own sim.rs into the copy.
+# ---------------------------------------------------------------------------
+COPY_E="$SCRATCH_ROOT/template-copy-e"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_E"
+
+OLD_SIM_SHA="$(git -C "$TEMPLATE" log --format=%H -- src/game/sim.rs | sed -n 2p)"
+[ -n "$OLD_SIM_SHA" ] || fail "(e) setup: the template has only one commit touching src/game/sim.rs"
+git -C "$TEMPLATE" show "$OLD_SIM_SHA:src/game/sim.rs" >"$COPY_E/src/game/sim.rs"
+
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_E" >"$SCRATCH_ROOT/e-output.txt" 2>&1
+cat "$SCRATCH_ROOT/e-output.txt"
+
+grep -q "stale template copy" "$SCRATCH_ROOT/e-output.txt" \
+  || fail "(e) HAND EDIT output doesn't identify the sim.rs as a stale template copy"
+if grep "sim\.rs" "$SCRATCH_ROOT/e-output.txt" | grep -q "rename"; then
+  fail "(e) HAND EDIT output still tells you to rename a stale template sim.rs"
+fi
+pass "(e) an older committed template sim.rs is reported as a stale copy, not as a name clash"
 
 echo "test_rollout_replay: all checks passed"

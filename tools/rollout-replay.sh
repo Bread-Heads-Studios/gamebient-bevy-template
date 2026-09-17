@@ -35,8 +35,28 @@ fi
 if [ ! -d "$GAME/src/game/record" ]; then
   echo "HAND EDIT: src/game/record/ missing; run tools/rollout-record.sh first"
 fi
+# An existing sim.rs that isn't the template's current one is two very
+# different situations with two opposite fixes, so tell them apart: a game
+# whose own sim.rs happens to share the name (rename it), versus a copy of an
+# older template sim.rs left behind by an earlier rollout (re-copy it). The
+# latter is what a second rollout onto an already-ported game looks like, and
+# telling it to rename its sim.rs would be actively wrong.
 if [ -e "$GAME/src/game/sim.rs" ] && ! cmp -s "$TEMPLATE/src/game/sim.rs" "$GAME/src/game/sim.rs"; then
-  echo "HAND EDIT: src/game/sim.rs: already exists and isn't the template's sim.rs; rename your sim.rs (e.g. shot_sim.rs) and re-run"
+  STALE_AT=""
+  if git -C "$TEMPLATE" rev-parse --git-dir >/dev/null 2>&1; then
+    while read -r h; do
+      [ -n "$h" ] || continue
+      if git -C "$TEMPLATE" show "$h:src/game/sim.rs" 2>/dev/null | cmp -s - "$GAME/src/game/sim.rs"; then
+        STALE_AT="$h"
+        break
+      fi
+    done < <(git -C "$TEMPLATE" log --format=%H -- src/game/sim.rs 2>/dev/null)
+  fi
+  if [ -n "$STALE_AT" ]; then
+    echo "HAND EDIT: src/game/sim.rs: stale template copy (byte-identical to template commit ${STALE_AT:0:7}); re-copy from the template and re-apply your game's checksum/end_run wiring"
+  else
+    echo "HAND EDIT: src/game/sim.rs: already exists and isn't the template's sim.rs; rename your sim.rs (e.g. shot_sim.rs) and re-run"
+  fi
 fi
 if [ ! -f "$GAME/src/game/scoring.rs" ]; then
   echo "HAND EDIT: src/game/scoring.rs: missing; replay/mod.rs needs an impl of LeaderboardScore for your GameData"
