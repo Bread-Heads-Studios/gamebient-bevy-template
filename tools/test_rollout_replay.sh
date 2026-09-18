@@ -616,6 +616,16 @@ if grep -q "HAND EDIT.*LeaderboardScore" "$SCRATCH_ROOT/g-output.txt"; then
 fi
 pass "(g) a missing LeaderboardScore impl over a 'pub score: u32' field is written automatically"
 
+# The impl must land BEFORE a trailing `#[cfg(test)]` module, or clippy's
+# `items_after_test_module` fails the game's -D warnings CI (Attic Excavator).
+IMPL_LINE="$(grep -n 'impl LeaderboardScore for GameData' "$COPY_G/src/game/scoring.rs" | head -1 | cut -d: -f1)"
+TEST_LINE="$(grep -n '^#\[cfg(test)\]' "$COPY_G/src/game/scoring.rs" | head -1 | cut -d: -f1)"
+[ -n "$TEST_LINE" ] \
+  || fail "(g) the template's scoring.rs no longer ends with a #[cfg(test)] module, so this check no longer exercises the insert-before-tests path; give the copy one"
+[ "$IMPL_LINE" -lt "$TEST_LINE" ] \
+  || fail "(g) the impl was appended after #[cfg(test)] (line $IMPL_LINE vs $TEST_LINE); clippy items_after_test_module would fail the game's CI"
+pass "(g) the impl lands before the trailing #[cfg(test)] module"
+
 if (cd "$COPY_G" && cargo check --features verify >"$SCRATCH_ROOT/g-check.txt" 2>&1); then
   pass "(g) cargo check --features verify succeeds on the restored impl"
 else
