@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "Building Voidrunner for Web (WASM)..."
+echo "Building Gamebient Game for Web (WASM)..."
 
 # Ensure wasm target is installed
 rustup target add wasm32-unknown-unknown 2>/dev/null || true
