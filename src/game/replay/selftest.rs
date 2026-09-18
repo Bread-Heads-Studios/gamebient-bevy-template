@@ -16,7 +16,12 @@ pub const SELFTEST_TICKS: u32 = 600;
 /// Sweeps right for 2 s, left for 2 s, taps A every second. Written before
 /// the accumulator folds the virtual source. Nothing here may write score or
 /// state directly: only inputs, or the replay could not reproduce it.
-fn script(tick: Res<SimTick>, mut virt: ResMut<VirtualInput>) {
+///
+/// `pub` because `tests/windowed_shape.rs` records this same script in a
+/// differently *shaped* app (one carrying `ScreenFade` and the windowed
+/// build's `Update` systems). Keep it `pub` when you replace the body with
+/// your game's own script, or that probe stops compiling.
+pub fn script(tick: Res<SimTick>, mut virt: ResMut<VirtualInput>) {
     let t = tick.0;
     let held = if (t / 120).is_multiple_of(2) {
         Buttons::RIGHT

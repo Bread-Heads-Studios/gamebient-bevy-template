@@ -21,8 +21,8 @@ dependents, so every game needs this ported in by hand.
 `tools/rollout-replay.sh <game-dir>` does the mechanical part: it copies
 `src/game/sim.rs`, `src/game/replay/`, `src/bin/verify.rs`, `build.rs`,
 `tools/build_verify.sh`, `tools/verify_fixture.mjs`,
-`docs/replay-verification.md` and `tests/archetype_order.rs` from this
-template into the game verbatim,
+`docs/replay-verification.md`, `tests/archetype_order.rs` and
+`tests/windowed_shape.rs` from this template into the game verbatim,
 and wires `Cargo.toml`, `src/lib.rs`/`main.rs`, `src/game/mod.rs`'s
 `GamePlugin { headless }` shape, `build_web.sh` (including the
 `tools/build_verify.sh` + `cp dist-verify.zip dist/verify.zip` step that
@@ -132,7 +132,17 @@ attic-excavator, grand-theft-otto).
    order-sensitive sim systems iterate. It is the only test that catches the
    archetype-order trap — the "delete the system and re-run `--selftest`"
    check provably cannot — so a run of it that passes with the template's
-   markers still in place has tested nothing. The file's doc comment and the
+   markers still in place has tested nothing.
+
+   **`tests/windowed_shape.rs` is its resource-level sibling**, and unlike
+   the probe it compiles as copied: it records the scripted run in an app
+   carrying `ScreenFade::boot()` and verifies it in a bare one, which is the
+   production question (the browser records with the windowed shape present,
+   the site re-simulates with none of it). Extend `record_windowed` with this
+   game's own `!headless` `Update` systems and any `UiPlugin`/`AssetsPlugin`
+   resource a sim system might read. It exists because Sundae Shooter's
+   `fire_scoop`/`swap_queue` gated on the fade and no fixture could see it —
+   a browser recording claimed 195 points against 200 re-simulated. The file's doc comment and the
    checklist's "What may stay in `Update`" have the detail.
 
 5. **Play a real run and verify it two ways.**
@@ -243,6 +253,14 @@ bash ../../libs/gamebient-bevy-template/tools/rollout-replay.sh --upgrade .
   breaking a working game is the whole promise of `--upgrade`. You get a HAND
   EDIT and a summary line asking for it instead; copy it from the template
   and adapt it as step 4 describes.
+* **`tests/windowed_shape.rs` is the opposite case.** Everything it names is
+  template-owned, so the copy compiles in any ported game — it is therefore
+  written whenever it is absent, `--upgrade` included, and called out in the
+  summary. Expect it to be able to fail on a checkout that was green a
+  minute ago: that is a finding (a sim system is reading presentation state),
+  not a regression. It is skipped, with a HAND EDIT, only when the game's
+  `src/game/replay/selftest.rs` does not export `pub fn script` or its
+  `ScreenFade` has lost `boot()` — the two things the copy needs.
 
 Under `--upgrade`, a game whose `src/game/mod.rs` already names
 `sim::SimSet` also stops getting the two HAND EDITs the script prints
