@@ -70,6 +70,33 @@
 #       changed line must name the file, list the differing lines and print
 #       a reproducible diff command; on a copy whose workflows match the
 #       template's it must be silent.
+#   (l) the autopilot ordering rewrite is not pinned to the template's path:
+#       a copy whose autopilot lives at src/autopilot.rs (Pack The Ripper's
+#       layout, where the path-pinned version did nothing and said nothing)
+#       must be rewritten, and so must one at the old src/game/autopilot.rs.
+#       A third file that writes VirtualInput and is still ordered before
+#       collect_input must draw a HAND EDIT rather than a silent skip.
+#   (m) the src/main.rs module-block rewrite must never let a `#[cfg(...)]`
+#       from a `mod` line it removes attach itself to the generated import:
+#       a main.rs with `#[cfg(any(feature = .., feature = ..))] mod bot;`
+#       beside plain mods (the nested parens are what defeated the old
+#       classifier) must still `cargo check` in the default build, with the
+#       plain imports unconditional and `bot` on its own cfg-gated `use`.
+#   (n) .github/workflows/ci.yml's Test step becomes `cargo test
+#       --all-targets --all-features`, matching the template's own and the
+#       gate the checklist documents: on a first rollout, idempotently, and
+#       with a HAND EDIT when the step is not recognisable.
+#   (o) the fixed-timestep pin: a copy with no `Time::<Fixed>` insert in
+#       src/game/mod.rs or src/main.rs must draw a HAND EDIT (Bevy's default
+#       64 Hz is rejected by Replay::decode as BadTickRate), and a copy that
+#       keeps it in main.rs instead must stay silent.
+#   (p) tests/windowed_shape.rs: written when absent (and named in the
+#       summary, because it is a new test that can legitimately go red), but
+#       refused with a HAND EDIT when the game's selftest script is not
+#       `pub`, since the copy would not compile.
+#   (q) the presentation-resource advisory: a sim file reading a fade
+#       resource must be named, while sim::end_run's own callers,
+#       toggle_pause and the autopilot must not.
 #
 # Usage: tools/test_rollout_replay.sh [--no-game]
 #
@@ -955,5 +982,265 @@ K_N2="$(grep -c 'init_resource::<sim::SpawnCounter>' "$COPY_K/src/game/mod.rs")"
 cmp -s "$TEMPLATE/src/game/mod.rs" "$COPY_K/src/game/mod.rs" \
   || fail "(k) mod.rs after the insertion is not byte-identical to the template's"
 pass "(k) --upgrade restores a missing .init_resource::<sim::SpawnCounter>(), exactly once"
+
+
+# ---------------------------------------------------------------------------
+# (l) The autopilot ordering rewrite is not pinned to src/game/autopilot.rs.
+#
+# Pack The Ripper keeps its bot at src/autopilot.rs. The path-pinned version
+# of this rewrite skipped it in silence, so the port shipped with
+# `drive_autopilot.before(collect_input)` — which leaves the bot and
+# gamebient-input's `accumulate_input` unordered, so a tap written after the
+# accumulator ran never reaches a fixed tick and never reaches the replay.
+# Three cases: the new location, the old one, and a VirtualInput writer that
+# is not called autopilot.rs at all (advised, never rewritten).
+# ---------------------------------------------------------------------------
+revert_autopilot_ordering() {
+  perl -pi -e 's/before\(gamebient_input::input::accumulate_input\)/before(gamebient_input::input::collect_input)/g' "$1"
+  grep -q 'before(gamebient_input::input::collect_input)' "$1" \
+    || fail "(l) setup: $1 still has no collect_input ordering to rewrite"
+}
+
+COPY_L="$SCRATCH_ROOT/template-copy-l"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_L"
+mkdir -p "$COPY_L/src"
+git -C "$COPY_L" mv src/game/autopilot.rs src/autopilot.rs
+perl -pi -e 's/^pub mod autopilot;\n//' "$COPY_L/src/game/mod.rs"
+revert_autopilot_ordering "$COPY_L/src/autopilot.rs"
+# A second VirtualInput writer under a name no path search would guess.
+cat >"$COPY_L/src/demo_attractor.rs" <<'DEMO'
+use bevy::prelude::*;
+use gamebient_input::VirtualInput;
+
+fn drive_demo(mut _virt: ResMut<VirtualInput>) {}
+
+pub struct DemoPlugin;
+impl Plugin for DemoPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            PreUpdate,
+            drive_demo.before(gamebient_input::input::collect_input),
+        );
+    }
+}
+DEMO
+
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_L" >"$SCRATCH_ROOT/l-output.txt" 2>&1
+cat "$SCRATCH_ROOT/l-output.txt"
+
+grep -q 'before(gamebient_input::input::accumulate_input)' "$COPY_L/src/autopilot.rs" \
+  || fail "(l) src/autopilot.rs was not reordered before accumulate_input"
+if grep -q 'before(gamebient_input::input::collect_input)' "$COPY_L/src/autopilot.rs"; then
+  fail "(l) src/autopilot.rs still orders drive_autopilot before collect_input"
+fi
+grep -q "rollout-replay: src/autopilot.rs: reordered" "$SCRATCH_ROOT/l-output.txt" \
+  || fail "(l) the rewrite of src/autopilot.rs was not reported"
+grep -q "HAND EDIT: src/autopilot.rs: writes GameData fields directly" "$SCRATCH_ROOT/l-output.txt" \
+  || fail "(l) the GameData-writes HAND EDIT is still pinned to src/game/autopilot.rs"
+pass "(l) an autopilot at src/autopilot.rs is found, reordered and reported"
+
+# The advisory for the file the path search cannot find, and it must NOT have
+# been rewritten: outside an autopilot the script cannot know the system is
+# meant to feed the tick path.
+grep -q "HAND EDIT: src/demo_attractor.rs: writes VirtualInput but is still ordered" "$SCRATCH_ROOT/l-output.txt" \
+  || fail "(l) no HAND EDIT for the VirtualInput writer still ordered before collect_input"
+grep -q 'before(gamebient_input::input::collect_input)' "$COPY_L/src/demo_attractor.rs" \
+  || fail "(l) src/demo_attractor.rs was rewritten; only autopilot.rs files are rewritten automatically"
+pass "(l) a non-autopilot VirtualInput writer is advised, not silently rewritten"
+
+# The old location still works.
+COPY_L2="$SCRATCH_ROOT/template-copy-l2"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_L2"
+revert_autopilot_ordering "$COPY_L2/src/game/autopilot.rs"
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_L2" >"$SCRATCH_ROOT/l2-output.txt" 2>&1
+grep -q 'before(gamebient_input::input::accumulate_input)' "$COPY_L2/src/game/autopilot.rs" \
+  || fail "(l) src/game/autopilot.rs (the old location) was not reordered"
+grep -q "rollout-replay: src/game/autopilot.rs: reordered" "$SCRATCH_ROOT/l2-output.txt" \
+  || fail "(l) the rewrite of src/game/autopilot.rs was not reported"
+pass "(l) the template's own src/game/autopilot.rs location still works"
+
+# ---------------------------------------------------------------------------
+# (m) src/main.rs's module block: the generated import must never inherit a
+# `#[cfg(...)]` from a `mod` line the rewrite removed.
+#
+# Pack The Ripper's main.rs had `#[cfg(any(feature = "harness", feature =
+# "autopilot"))] mod bot;` next to plain `mod assets; mod game; mod ui;`. The
+# nested parens defeated the attribute classifier, so `bot` was treated as a
+# plain mod, the attribute was left behind, and it landed immediately above
+# the generated `use <snake>::{assets, bot, game, ui};` — feature-gating the
+# whole import, so the DEFAULT build stopped compiling. cargo check in the
+# default feature set is the assertion that matters here.
+# ---------------------------------------------------------------------------
+COPY_M="$SCRATCH_ROOT/template-copy-m"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_M"
+rm "$COPY_M/src/lib.rs"
+cat >"$COPY_M/src/bot.rs" <<'BOT'
+//! Stand-in for a game's feature-gated helper module.
+pub fn planned_taps() -> u32 {
+    0
+}
+BOT
+perl -0pi -e 's/^use bevy::prelude::\*;\nuse bevy::window::\{PresentMode, WindowResolution\};\nuse gamebient_game::\{assets, game, ui\};\n/mod assets;\n#[cfg(any(feature = "record", feature = "autopilot"))]\nmod bot;\nmod game;\nmod ui;\n\nuse bevy::prelude::*;\nuse bevy::window::{PresentMode, WindowResolution};\n/' "$COPY_M/src/main.rs"
+grep -q '^mod assets;$' "$COPY_M/src/main.rs" \
+  || fail "(m) setup: main.rs did not get its pre-port mod block back"
+grep -q '^#\[cfg(any(feature = "record", feature = "autopilot"))\]$' "$COPY_M/src/main.rs" \
+  || fail "(m) setup: main.rs did not get the nested-paren cfg line"
+
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_M" >"$SCRATCH_ROOT/m-output.txt" 2>&1
+cat "$SCRATCH_ROOT/m-output.txt"
+
+# The plain mods import unconditionally...
+grep -q '^use gamebient_game::{assets, game, ui};$' "$COPY_M/src/main.rs" \
+  || fail "(m) main.rs has no unconditional 'use gamebient_game::{assets, game, ui};'"
+# ...with no attribute anywhere above it before the next real item.
+perl -0ne 'exit 1 if /#\[cfg\([^\n]*\)\]\s*\n\s*use gamebient_game::\{assets, game, ui\};/' "$COPY_M/src/main.rs" \
+  || fail "(m) the unconditional import inherited a #[cfg] from a removed mod line"
+# ...and the cfg-gated mod becomes its own cfg-gated use.
+perl -0ne 'exit 1 unless /#\[cfg\(any\(feature = "record", feature = "autopilot"\)\)\]\nuse gamebient_game::bot;/' "$COPY_M/src/main.rs" \
+  || fail "(m) the cfg-gated mod did not become its own cfg-gated 'use gamebient_game::bot;'"
+grep -q '^#\[cfg(any(feature = "record", feature = "autopilot"))\]$' "$COPY_M/src/lib.rs" \
+  || fail "(m) lib.rs did not keep the cfg on 'pub mod bot;'"
+pass "(m) the generated imports are split: plain mods unconditional, cfg-gated mod on its own use line"
+
+(cd "$COPY_M" && cargo check --quiet) >"$SCRATCH_ROOT/m-check.txt" 2>&1 \
+  || {
+    tail -40 "$SCRATCH_ROOT/m-check.txt" >&2
+    fail "(m) the copy does not cargo check in the default feature set after the rollout"
+  }
+pass "(m) the rolled-out copy cargo checks in the default build (the cfg-inheritance bug would fail here)"
+
+# ---------------------------------------------------------------------------
+# (n) ci.yml's Test step gets --all-features.
+#
+# A template-derived game's Test step was `cargo test --all-targets` with no
+# features, so it never built src/bin/verify.rs (required-features =
+# ["verify"]) and compiled a different crate from the Clippy step two lines
+# above it, which has always passed --all-features. Dough.io, Pack The Ripper
+# and Sundae Shooter each fixed it by hand in their own port.
+# ---------------------------------------------------------------------------
+COPY_N="$SCRATCH_ROOT/template-copy-n"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_N"
+perl -0pi -e 's/^(      - name: Test\n        run: cargo test --all-targets) --all-features\n/$1\n/m' "$COPY_N/.github/workflows/ci.yml"
+grep -q '^        run: cargo test --all-targets$' "$COPY_N/.github/workflows/ci.yml" \
+  || fail "(n) setup: the Test step was not reverted to the featureless form"
+
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_N" >"$SCRATCH_ROOT/n-output.txt" 2>&1
+grep -q '^        run: cargo test --all-targets --all-features$' "$COPY_N/.github/workflows/ci.yml" \
+  || fail "(n) a first rollout did not widen the Test step to --all-features"
+N_COUNT="$(grep -c 'cargo test --all-targets --all-features' "$COPY_N/.github/workflows/ci.yml")"
+[ "$N_COUNT" -eq 1 ] || fail "(n) the Test step appears $N_COUNT times after the rewrite"
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_N" >"$SCRATCH_ROOT/n-output-2.txt" 2>&1
+cmp -s "$TEMPLATE/.github/workflows/ci.yml" "$COPY_N/.github/workflows/ci.yml" \
+  || fail "(n) ci.yml after the rewrite is not byte-identical to the template's (or a second run changed it again)"
+pass "(n) the Test step becomes 'cargo test --all-targets --all-features', idempotently"
+
+COPY_N2="$SCRATCH_ROOT/template-copy-n2"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_N2"
+perl -pi -e 's/^      - name: Test$/      - name: Run the suite/' "$COPY_N2/.github/workflows/ci.yml"
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_N2" >"$SCRATCH_ROOT/n2-output.txt" 2>&1
+grep -q "HAND EDIT: .github/workflows/ci.yml: no recognisable '- name: Test' step" "$SCRATCH_ROOT/n2-output.txt" \
+  || fail "(n) an unrecognisable Test step drew no HAND EDIT"
+grep -q '^        run: cargo test --all-targets --all-features$' "$COPY_N2/.github/workflows/ci.yml" \
+  || fail "(n) the renamed step's command was altered instead of being left alone"
+pass "(n) an unrecognisable Test step draws a HAND EDIT and is left alone"
+
+# ---------------------------------------------------------------------------
+# (o) The fixed-timestep pin.
+#
+# Bevy's default Time<Fixed> is 64 Hz, sim::tick_duration() is 60, and
+# Replay::decode rejects any other rate as BadTickRate — so a game missing
+# the insert records runs that no verifier can decode, and the failure
+# surfaces nowhere near the missing line. Grand Theft Auto-Reply and Pack The
+# Ripper both hit it as an undocumented hand edit.
+# ---------------------------------------------------------------------------
+COPY_O="$SCRATCH_ROOT/template-copy-o"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_O"
+grep -v 'Time::<Fixed>' "$COPY_O/src/game/mod.rs" >"$SCRATCH_ROOT/o-mod.rs"
+cp "$SCRATCH_ROOT/o-mod.rs" "$COPY_O/src/game/mod.rs"
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_O" >"$SCRATCH_ROOT/o-output.txt" 2>&1
+grep -q "HAND EDIT: src/game/mod.rs: pin the fixed timestep" "$SCRATCH_ROOT/o-output.txt" \
+  || fail "(o) a missing Time::<Fixed> insert drew no HAND EDIT"
+grep -q "BadTickRate" "$SCRATCH_ROOT/o-output.txt" \
+  || fail "(o) the HAND EDIT does not name the failure (BadTickRate) it prevents"
+pass "(o) a missing fixed-timestep pin draws a HAND EDIT naming BadTickRate"
+
+# A game that pins it in main.rs instead is equally correct and must be silent.
+COPY_O2="$SCRATCH_ROOT/template-copy-o2"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_O2"
+cp "$SCRATCH_ROOT/o-mod.rs" "$COPY_O2/src/game/mod.rs"
+perl -pi -e 's{^fn main\(\) \{$}{// Fixed timestep pinned here instead: Time::<Fixed>::from_duration(game::sim::tick_duration())\nfn main() \{}' "$COPY_O2/src/main.rs"
+grep -q 'Time::<Fixed>' "$COPY_O2/src/main.rs" || fail "(o) setup: main.rs did not get the pin"
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_O2" >"$SCRATCH_ROOT/o2-output.txt" 2>&1
+if grep -q "pin the fixed timestep" "$SCRATCH_ROOT/o2-output.txt"; then
+  fail "(o) a game pinning Time::<Fixed> in main.rs was still told to add it"
+fi
+pass "(o) the pin is accepted in main.rs as well as src/game/mod.rs"
+
+# ---------------------------------------------------------------------------
+# (p) tests/windowed_shape.rs.
+#
+# The resource-level sibling of tests/archetype_order.rs: record the selftest
+# script in an app carrying ScreenFade and the windowed Update systems,
+# verify it in a bare one. Unlike the archetype probe it is copyable as-is,
+# so it is written whenever absent — but only when the two things it names
+# are actually there, since a copy that does not compile would turn a green
+# checkout red with nothing in the output to explain it.
+# ---------------------------------------------------------------------------
+COPY_P="$SCRATCH_ROOT/template-copy-p"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_P"
+rm "$COPY_P/tests/windowed_shape.rs"
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_P" >"$SCRATCH_ROOT/p-output.txt" 2>&1
+cmp -s "$TEMPLATE/tests/windowed_shape.rs" "$COPY_P/tests/windowed_shape.rs" \
+  || fail "(p) tests/windowed_shape.rs was not written back"
+grep -q "tests/windowed_shape.rs is NEW in this checkout" "$SCRATCH_ROOT/p-output.txt" \
+  || fail "(p) writing a new tests/windowed_shape.rs was not called out in the summary"
+pass "(p) an absent tests/windowed_shape.rs is written and announced"
+
+COPY_P2="$SCRATCH_ROOT/template-copy-p2"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_P2"
+rm "$COPY_P2/tests/windowed_shape.rs"
+perl -pi -e 's/^pub fn script\(/fn script(/' "$COPY_P2/src/game/replay/selftest.rs"
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_P2" >"$SCRATCH_ROOT/p2-output.txt" 2>&1
+[ -e "$COPY_P2/tests/windowed_shape.rs" ] \
+  && fail "(p) tests/windowed_shape.rs was written into a copy whose selftest script is not pub"
+grep -q "HAND EDIT: tests/windowed_shape.rs: not created" "$SCRATCH_ROOT/p2-output.txt" \
+  || fail "(p) refusing to write tests/windowed_shape.rs drew no HAND EDIT"
+pass "(p) a game whose selftest script is not pub is asked rather than handed a file that cannot compile"
+
+# ---------------------------------------------------------------------------
+# (q) The presentation-resource advisory.
+#
+# Sundae Shooter's fire_scoop/swap_queue refused to act while ScreenFade was
+# mid-transition. The fade lives in UiPlugin (which the verifier never
+# builds), ticks on the FRAME delta, and is busy for the first ~24 ticks of
+# every run — so a browser-recorded run came back claiming 195 points against
+# 200 re-simulated. No fixture and no archetype probe can see it.
+# ---------------------------------------------------------------------------
+COPY_Q="$SCRATCH_ROOT/template-copy-q"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_Q"
+perl -0pi -e 's/(pub fn move_player\(\n)/$1    fade: Option<Res<crate::ui::transition::ScreenFade>>,\n/' "$COPY_Q/src/game/player.rs"
+grep -q 'fade: Option<Res<crate::ui::transition::ScreenFade>>' "$COPY_Q/src/game/player.rs" \
+  || fail "(q) setup: move_player did not get a fade parameter"
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_Q" >"$SCRATCH_ROOT/q-output.txt" 2>&1
+grep -q "src/game/player.rs:move_player" "$SCRATCH_ROOT/q-output.txt" \
+  || fail "(q) a sim system reading ScreenFade was not named by the advisory"
+pass "(q) a sim file reading a fade resource is named"
+
+# The sanctioned shapes must stay quiet, or the advisory fires on every
+# ported game for ever: sim::end_run's callers, rule 8's toggle_pause, and
+# the autopilot (a dev harness the game registers in Update).
+if grep -q "read a fade resource UiPlugin owns" "$SCRATCH_ROOT/a-output.txt"; then
+  fail "(q) the advisory fires on the template's own checkout (end_run/toggle_pause/autopilot are sanctioned)"
+fi
+COPY_Q2="$SCRATCH_ROOT/template-copy-q2"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_Q2"
+perl -0pi -e 's/(pub fn move_player\(\n)/$1    fade: Option<ResMut<crate::ui::transition::ScreenFade>>,\n/' "$COPY_Q2/src/game/player.rs"
+perl -0pi -e 's/(pub fn move_player\([^)]*\) \{\n)/$1    \/\/ hands the fade straight to the latch\n    let _ = \&fade;\n    if false { crate::game::sim::end_run(todo!(), fade, todo!()); }\n/' "$COPY_Q2/src/game/player.rs"
+grep -q 'end_run(' "$COPY_Q2/src/game/player.rs" || fail "(q) setup: move_player does not call end_run"
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_Q2" >"$SCRATCH_ROOT/q2-output.txt" 2>&1
+if grep -q "src/game/player.rs:move_player" "$SCRATCH_ROOT/q2-output.txt"; then
+  fail "(q) a fade handed to sim::end_run (rule 10's sanctioned touch) was still flagged"
+fi
+pass "(q) end_run's callers, toggle_pause and the autopilot are not flagged"
 
 echo "test_rollout_replay: all checks passed"
