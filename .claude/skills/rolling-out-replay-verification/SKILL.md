@@ -145,6 +145,21 @@ attic-excavator, grand-theft-otto).
    a browser recording claimed 195 points against 200 re-simulated. The file's doc comment and the
    checklist's "What may stay in `Update`" have the detail.
 
+   **Then measure that the probe's script actually reaches the mechanics
+   presentation could touch** — adding the systems is half the job, proving
+   the bot runs them is the other half. Add a counter resource per
+   windowed-only system (the file ships `FadeBusyFrames` as the pattern) and
+   look at the totals. **If the fixture bot is a careful router, write a
+   reckless second script and assert it reaches them (non-zero counter):**
+   the probe carries a two-row bot table (`enum Bot`) with `reckless_script`
+   in the second row as a documented placeholder, so this is a replacement,
+   not new scaffolding. Attic Excavator is why the step exists — under its
+   fixture bot `heavy::wobble_shake` fired zero times in 1800 ticks and
+   `cat::cat_touch` never connected, and two planted bugs passed the probe
+   until a heavy-seeking second bot went in. Checklist rule 1, "Then measure
+   that the probe's script actually reaches the mechanics", has the
+   measurement and the two constraints on the bot (pure input; no RNG).
+
 5. **Play a real run and verify it two ways.**
    ```bash
    GX_REPLAY_DIR=build/replays cargo run   # play to game over
@@ -258,7 +273,10 @@ bash ../../libs/gamebient-bevy-template/tools/rollout-replay.sh --upgrade .
   written whenever it is absent, `--upgrade` included, and called out in the
   summary. Expect it to be able to fail on a checkout that was green a
   minute ago: that is a finding (a sim system is reading presentation state),
-  not a regression. It is skipped, with a HAND EDIT, only when the game's
+  not a regression. A game that already adapted it keeps its copy and gets
+  the usual "locally modified" HAND EDIT; when you merge the template's
+  changes in, the second bot row is the part worth taking — step 4's
+  measurement paragraph says why. It is skipped, with a HAND EDIT, only when the game's
   `src/game/replay/selftest.rs` does not export `pub fn script` or its
   `ScreenFade` has lost `boot()` — the two things the copy needs.
 

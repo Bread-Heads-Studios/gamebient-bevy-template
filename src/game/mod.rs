@@ -203,6 +203,33 @@ fn cleanup_pause_overlay(mut commands: Commands, query: Query<Entity, With<Pause
 /// (gx:set) looks exactly the same. Runs in `FixedUpdate` before `SimSet` so
 /// a pause takes effect before that tick's gameplay systems run; headless
 /// builds have no `ScreenFade` (no UI), so it's read as optional.
+///
+/// # The `fade` read is tolerated, and here is exactly why
+///
+/// This is the one place in `src/game/` that reads a `UiPlugin`-owned
+/// resource and *branches* on it. Everywhere else that is the determinism
+/// bug `tests/windowed_shape.rs` hunts (see its module comment, and the port
+/// checklist's rule 1): the windowed build has a `ScreenFade` and the
+/// verifier has none, so the two disagree about what the player was allowed
+/// to do.
+///
+/// It is safe here only because of rule 8. `replay::recorder::push` masks
+/// `Buttons::PAUSE` out of `held` and `latched` before a tick is recorded,
+/// and `replay::feeder` masks it out again on the way back in — so under the
+/// verifier `input.pause_just_pressed` is false on *every* tick of *every*
+/// replay. The `!input.pause_just_pressed` clause alone is therefore enough
+/// to return early on every verified tick, whatever the fade would have
+/// said: the fade can only change the outcome on a tick where pause was
+/// actually pressed, and no replay carries one. The builds disagree about a
+/// branch no replay can take.
+///
+/// Three things hold that up, and all three must survive a port: this system
+/// runs **outside** `SimSet`; the pause edge alone is sufficient to make it
+/// a no-op (the fade only ever strengthens a guard the masked pause already
+/// forces — never a condition that could let something *through* headless);
+/// and pause stays masked at both ends. Move the read into a sim system, or
+/// make the fade decide anything on a non-pause tick, and it is the shipped
+/// Sundae Shooter bug again.
 fn toggle_pause(
     input: Res<gamebient_input::TickInput>,
     mut paused: ResMut<states::Paused>,
