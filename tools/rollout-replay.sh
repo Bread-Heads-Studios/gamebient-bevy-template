@@ -2,7 +2,7 @@
 # Copies replay verification (deterministic sim, GXR1 replays, the wasm
 # verifier: src/game/sim.rs, src/game/replay/, src/bin/verify.rs, build.rs,
 # tools/build_verify.sh, tools/verify_fixture.mjs, docs/replay-verification.md,
-# tests/archetype_order.rs)
+# tests/archetype_order.rs, tests/windowed_shape.rs)
 # from this template into a game checkout and wires it: Cargo.toml lib/bin
 # split + features + deps, src/lib.rs + src/main.rs, the `pub mod
 # replay`/`sim` + `GamePlugin { headless }` shape in src/game/mod.rs,
@@ -10,7 +10,8 @@
 # assets/info.json's verify_url, and src/game/host.rs's HostCommand::Seed arm
 # + optional GlobalVolume. Idempotent. The script never edits a
 # copied file's contents (the three exceptions — src/bin/verify.rs,
-# tests/selftest.rs and tests/archetype_order.rs — get only a mechanical
+# tests/selftest.rs, tests/archetype_order.rs and tests/windowed_shape.rs —
+# get only a mechanical
 # `gamebient_game::` -> `<snake>::` crate-path substitution; see the comment
 # at that copy step).
 # game-specific behaviour (porting GamePlugin::build onto sim::SimSet,
@@ -181,6 +182,21 @@ RUST
 else
   echo "HAND EDIT: src/game/scoring.rs: no 'pub score: u32' field on GameData to implement LeaderboardScore from; write 'impl LeaderboardScore for GameData { fn leaderboard_score(&self) -> u32 { .. } }' by hand (higher is better — invert a time, convert strokes to points), or the copied sim/replay/recorder/host code will not compile (it all uses the trait)"
 fi
+# The fixed timestep must be pinned to `sim::tick_duration()`. Bevy's default
+# `Time<Fixed>` is 64 Hz, `sim::tick_duration()` is 60, and `Replay::decode`
+# rejects a header whose tick rate is not the sim's with `BadTickRate` — so
+# every recording a game makes is unverifiable and the failure surfaces as a
+# decode error in the verifier rather than anywhere near the missing line.
+# Two-for-two on wave 2 (Grand Theft Auto-Reply, Pack The Ripper), and both
+# times as a hand edit found by debugging. The template puts the insert in
+# `GamePlugin::build`; some games put it in `main.rs`, which is equally fine,
+# so both are searched.
+if [ -f "$GAME/src/game/mod.rs" ] || [ -f "$GAME/src/main.rs" ]; then
+  if ! grep -qs 'Time::<Fixed>' "$GAME/src/game/mod.rs" "$GAME/src/main.rs"; then
+    echo "HAND EDIT: src/game/mod.rs: pin the fixed timestep — .insert_resource(Time::<Fixed>::from_duration(sim::tick_duration())) in GamePlugin::build (or in main.rs). Bevy's default is 64 Hz, the sim is 60, and Replay::decode rejects any other rate as BadTickRate, so without this line every run this game records fails to decode."
+  fi
+fi
+
 # Comment lines are stripped before the check: the template's own `input.rs`
 # mentions `ButtonInput<KeyCode>` in a doc comment explaining what NOT to do,
 # and firing on prose teaches people to skim the HAND EDIT list.
@@ -191,12 +207,6 @@ if grep -rn "ButtonInput<KeyCode>" "$GAME/src/game" --include="*.rs" 2>/dev/null
   | grep -q .; then
   echo "HAND EDIT: src/game: gameplay reads raw ButtonInput<KeyCode>; route through TickInput instead"
 fi
-if [ "$SUPPRESS_PORTED_NOISE" -eq 0 ] \
-  && [ -f "$GAME/src/game/autopilot.rs" ] \
-  && grep -n 'data\.\w* = ' "$GAME/src/game/autopilot.rs" | grep -q .; then
-  echo "HAND EDIT: src/game/autopilot.rs: writes GameData fields directly (dev-only; keep that path out of the selftest script)"
-fi
-
 # `drive_autopilot.before(collect_input)` was unambiguous while gameplay read
 # the per-frame `GameInput`. It is not once the sim reads `TickInput`:
 # gamebient-input registers `accumulate_input.before(collect_input)`, so
@@ -205,11 +215,40 @@ fi
 # accumulator has run is folded into `GameInput` for that frame and never
 # reaches a fixed tick — so the bot appears to press buttons the replay never
 # records. Order it before the accumulator instead.
-if [ -f "$GAME/src/game/autopilot.rs" ] \
-  && grep -q 'before(gamebient_input::input::collect_input)' "$GAME/src/game/autopilot.rs"; then
-  perl -pi -e 's/before\(gamebient_input::input::collect_input\)/before(gamebient_input::input::accumulate_input)/g' \
-    "$GAME/src/game/autopilot.rs"
-  echo "rollout-replay: src/game/autopilot.rs: reordered drive_autopilot before accumulate_input (collect_input is too late once the sim reads TickInput)"
+#
+# Searched across ALL of src/, not pinned to the template's own
+# `src/game/autopilot.rs`: Pack The Ripper keeps its bot at
+# `src/autopilot.rs`, where the path-pinned version of this rewrite did
+# nothing and said nothing, and the port shipped with `.before(collect_input)`
+# still in place.
+while IFS= read -r ap; do
+  [ -n "$ap" ] || continue
+  ap_rel="${ap#"$GAME/"}"
+  if [ "$SUPPRESS_PORTED_NOISE" -eq 0 ] && grep -qE 'data\.[A-Za-z_][A-Za-z0-9_]* = ' "$ap"; then
+    echo "HAND EDIT: $ap_rel: writes GameData fields directly (dev-only; keep that path out of the selftest script)"
+  fi
+  if grep -q 'before(gamebient_input::input::collect_input)' "$ap"; then
+    perl -pi -e 's/before\(gamebient_input::input::collect_input\)/before(gamebient_input::input::accumulate_input)/g' "$ap"
+    echo "rollout-replay: $ap_rel: reordered drive_autopilot before accumulate_input (collect_input is too late once the sim reads TickInput)"
+  fi
+done < <(find "$GAME/src" -name 'autopilot.rs' 2>/dev/null | sort)
+
+# The same defect, one level out: anything that WRITES `VirtualInput` and is
+# still ordered only against `collect_input` after the rewrite above. A
+# screenshot harness, a demo attractor, a second bot — the file does not have
+# to be called autopilot.rs, and the symptom is the same (presses the player
+# can see and the replay never recorded). Never rewritten automatically,
+# because outside an autopilot this script cannot know the system is meant to
+# feed the tick path at all.
+LATE_VIRTUAL=""
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  grep -q 'VirtualInput' "$f" || continue
+  grep -q 'before(gamebient_input::input::collect_input)' "$f" || continue
+  LATE_VIRTUAL="${LATE_VIRTUAL}${f#"$GAME/"} "
+done < <(find "$GAME/src" -name '*.rs' 2>/dev/null | sort)
+if [ -n "$LATE_VIRTUAL" ]; then
+  echo "HAND EDIT: ${LATE_VIRTUAL% }: writes VirtualInput but is still ordered .before(gamebient_input::input::collect_input); order it .before(gamebient_input::input::accumulate_input) instead. gamebient-input registers accumulate_input.before(collect_input), so ordering against collect_input alone leaves this system and the accumulator unordered: a press written after the accumulator ran is folded into GameInput for that frame and never reaches a fixed tick, so it never reaches the replay."
 fi
 
 # Advisory only, and deliberately a heuristic. A presentation system left in
@@ -285,6 +324,69 @@ if [ -d "$GAME/src/game" ]; then
   fi
 fi
 
+# Advisory, and the resource-level sibling of the archetype scan above: a sim
+# system may not READ anything `UiPlugin` owns. `ScreenFade` is the one that
+# has actually bitten — Sundae Shooter's `fire_scoop`/`swap_queue` refused to
+# act while the fade was busy, which is three bugs at once: the fade lives in
+# `UiPlugin`, which the verifier never builds, so it blocks nothing there; it
+# is ticked from `Update` on the FRAME delta, so how many sim ticks it covers
+# depends on the frame rate; and it is busy for the first ~24 ticks of every
+# run, because entering `Playing` goes through it. That game's browser-
+# recorded run came back claiming 195 points against 200 re-simulated.
+#
+# `Option<Res<ScreenFade>>` is a compile fix, not a determinism fix: the run
+# still forks on whether the resource was there. `sim::end_run`'s
+# `Option<ResMut<ScreenFade>>` is the one sanctioned touch (it writes a fade
+# request on the tick `sim::RunOver` has already frozen the set), and rule 8's
+# `toggle_pause` is the other. Both are excluded by name below, as is
+# `src/game/autopilot.rs`, a dev harness the game registers in `Update`.
+#
+# Reports `<file>:<fn>` pairs, and subtracts whatever the same scan finds in
+# this template so a game is never told about boilerplate it inherited. The
+# test that ANSWERS this question is `tests/windowed_shape.rs`.
+sim_fade_reads() {
+  local root="$1" f
+  [ -d "$root/src/game" ] || return 0
+  while read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in */autopilot.rs) continue ;; esac
+    awk -v rel="${f#"$root/"}" '
+      /^[[:space:]]*#\[cfg\(test\)\]/ { intest = 1 }
+      intest { next }
+      /^[[:space:]]*(\/\/|\*|\/\*)/ { next }
+      # Track the enclosing item so a fade in a `RunEnd`-style SystemParam
+      # bundle is attributed to the struct rather than to whatever function
+      # happened to be above it.
+      /^[[:space:]]*(pub(\([^)]*\))? )?(async )?fn [A-Za-z0-9_]+/ {
+        if (match($0, /fn [A-Za-z0-9_]+/)) item = substr($0, RSTART + 3, RLENGTH - 3)
+      }
+      /^[[:space:]]*(pub(\([^)]*\))? )?(struct|enum) [A-Za-z0-9_]+/ {
+        if (match($0, /(struct|enum) [A-Za-z0-9_]+/)) {
+          t = substr($0, RSTART, RLENGTH); sub(/^(struct|enum)[ ]+/, "", t); item = t
+        }
+      }
+      # The sanctioned shapes, recognised by what the item DOES rather than
+      # by name alone: rule 10 hands the fade to sim::end_run (directly or
+      # through a RunEnd SystemParam), which only writes a request on the
+      # tick sim::RunOver has already frozen SimSet.
+      /end_run\(|RunEnd/ { if (item != "") ok[item] = 1 }
+      /Res(Mut)?<[^>]*Fade>/ {
+        if (item != "" && item != "end_run" && item != "toggle_pause") cand[item] = 1
+      }
+      END { for (i in cand) if (!(i in ok)) print rel ":" i }
+    ' "$f"
+  done < <(find "$root/src/game" -name '*.rs' 2>/dev/null | sort)
+}
+if [ -d "$GAME/src/game" ]; then
+  FADE_ADVISORY="$(comm -13 \
+    <(sim_fade_reads "$TEMPLATE" | sort -u) \
+    <(sim_fade_reads "$GAME" | sort -u) | tr '\n' ' ')"
+  FADE_ADVISORY="${FADE_ADVISORY% }"
+  if [ -n "$FADE_ADVISORY" ]; then
+    echo "HAND EDIT (advisory): these read a fade resource UiPlugin owns — ${FADE_ADVISORY}. If any of them runs inside sim::SimSet, delete the read: ScreenFade is absent in the verifier, ticks on the frame delta, and is busy for the first ~24 ticks of every run, so the two builds disagree about what the player was allowed to do. sim::end_run's Option<ResMut<ScreenFade>> and rule 8's toggle_pause are the only sanctioned touches (both excluded here). Presentation systems in Update may read it freely — this is a grep, so read the registrations. tests/windowed_shape.rs is the test that answers it."
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # Copy the feature files verbatim. A file that already exists and isn't
 # byte-identical to the template's is left alone (HAND EDIT), never
@@ -299,6 +401,11 @@ REFRESHED=""
 # Set when --upgrade found no tests/archetype_order.rs and deliberately did
 # not create one (see the probe's block below); reported in the summary.
 MISSING_PROBE=0
+# Set when tests/windowed_shape.rs was written into a game that did not have
+# it; reported in the summary, because it is a new test that can legitimately
+# go red on an already-green checkout (that being the point of it).
+ADDED_SHAPE=0
+SHAPE_WHY=""
 
 # The newest template commit whose version of $1 is byte-identical to the
 # file $2 — with the `gamebient_game::` -> `$SNAKE::` substitution applied
@@ -540,6 +647,61 @@ if [ -n "$PKG" ]; then
     && [ "$(cat "$PROBE_DST")" = "$PROBE_EXPECTED" ]; then
     echo "HAND EDIT: $PROBE_REL: still the template's copy — adapt it before it compiles. It references the template's own \`Player\` sim entity; replace the marker components and decorate_* systems with stand-ins for THIS game's Update decorators, and point trace_order at the queries your order-sensitive sim systems iterate. KEEP BOTH Decoration modes: 'faithful' must reproduce your decorators' exact branching (different entities getting different component sets is what splits the archetype) and documents the real partitioning, while 'split' — which halves every sim archetype on sim::SpawnOrder parity, so point it at EVERY kind of sim entity you have — is the detector. Measured on Dough.io against a real instance of the bug: faithful passed 18/18 by luck, split failed 2/18. It is the only test that catches the archetype-order trap; the \"delete the system and re-run --selftest\" check provably cannot. See the file's doc comment and the port checklist, 'What may stay in Update'."
   fi
+
+  # ---- tests/windowed_shape.rs --------------------------------------------
+  #
+  # The resource-level sibling of the probe above: record the selftest script
+  # in an app carrying `ScreenFade` and the windowed build's `Update`
+  # systems, verify it in a bare one. Sundae Shooter's port found a real
+  # instance (`fire_scoop`/`swap_queue` gated on the fade; a browser-recorded
+  # run claimed 195 against 200 re-simulated), and nothing else in the kit
+  # can see that class of bug: the fixtures and `--selftest` all run in bare
+  # apps with no fade, and `archetype_order` adds components, not resources.
+  #
+  # Unlike `archetype_order.rs` this file is copyable as-is — everything it
+  # names is template-owned and present in every ported game — so it is
+  # written whenever it is absent, on --upgrade as well, and reported in the
+  # summary. The two things it needs that a long-ported game may not have
+  # are checked first, and asked for rather than guessed at:
+  #
+  #   * `selftest.rs` must export its `script` (the template's does; a port
+  #     that replaced the body may have dropped the `pub`);
+  #   * `ui::transition::ScreenFade` must exist and have `boot()`.
+  SHAPE_REL=tests/windowed_shape.rs
+  SHAPE_DST="$GAME/$SHAPE_REL"
+  SHAPE_EXPECTED="$(sed "s/gamebient_game::/${SNAKE}::/g" "$TEMPLATE/$SHAPE_REL")"
+  SHAPE_OK=1
+  if ! grep -qs 'pub fn script' "$GAME/src/game/replay/selftest.rs"; then
+    SHAPE_OK=0
+    SHAPE_WHY="src/game/replay/selftest.rs does not export 'pub fn script'"
+  elif ! grep -qs 'pub fn boot()' "$GAME/src/ui/transition.rs"; then
+    SHAPE_OK=0
+    SHAPE_WHY="src/ui/transition.rs has no 'pub fn boot()' on ScreenFade"
+  fi
+  if [ ! -e "$SHAPE_DST" ]; then
+    if [ "$SHAPE_OK" -eq 1 ]; then
+      mkdir -p "$(dirname "$SHAPE_DST")"
+      printf '%s\n' "$SHAPE_EXPECTED" >"$SHAPE_DST"
+      ADDED_SHAPE=1
+    else
+      echo "HAND EDIT: $SHAPE_REL: not created — $SHAPE_WHY, so the copy would not compile. Fix that (make the selftest script pub; keep ScreenFade::boot()), then copy it from $TEMPLATE/$SHAPE_REL with gamebient_game:: -> ${SNAKE}::. It is the only test that catches a sim system reading presentation state."
+    fi
+  elif [ "$UPGRADE" -eq 1 ] && [ "$(cat "$SHAPE_DST")" != "$SHAPE_EXPECTED" ]; then
+    SHAPE_STALE="$(template_sha_matching "$SHAPE_REL" "$SHAPE_DST" rename)"
+    if [ -n "$SHAPE_STALE" ]; then
+      printf '%s\n' "$SHAPE_EXPECTED" >"$SHAPE_DST"
+      REFRESHED="${REFRESHED}${SHAPE_REL} (was template ${SHAPE_STALE:0:7})"$'\n'
+    fi
+  fi
+  # Unadapted is a usable state here (the shipped file already covers
+  # ScreenFade, the trap that has actually bitten), so this is a nudge rather
+  # than the probe's "adapt it before it compiles" — and it is suppressed on
+  # an upgrade of an already-ported game, where repeating it forever would
+  # just crowd out the lines that need acting on.
+  if [ "$SUPPRESS_PORTED_NOISE" -eq 0 ] && [ "$SNAKE" != gamebient_game ] \
+    && [ -e "$SHAPE_DST" ] && [ "$(cat "$SHAPE_DST")" = "$SHAPE_EXPECTED" ]; then
+    echo "HAND EDIT (advisory): $SHAPE_REL: still the template's copy. As shipped it covers ScreenFade only; add this game's own !headless shape to record_windowed — every Update system GamePlugin::build registers behind !self.headless, and any UiPlugin/AssetsPlugin resource a sim system might read. Option<Res<T>> in a sim system is a compile fix, not a determinism fix."
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -660,10 +822,18 @@ sub spit {
         my @plain;
         my @cfg; # [ "#[cfg(...)]\n", "modname" ]
 
+        # The `cfg` match must balance nested parens. `[^)]*` did not, so
+        # `#[cfg(any(feature = "harness", feature = "autopilot"))] mod bot;`
+        # (Pack The Ripper) classified `bot` as a PLAIN mod and left the
+        # attribute behind in @out — where it landed immediately above the
+        # generated `use <snake>::{...}` and feature-gated the whole import,
+        # so the default build stopped compiling. A greedy `.+` anchored on
+        # `)]` at end of line is enough for a single-line attribute, which is
+        # the only shape rustfmt produces here.
         for my $line (@lines) {
             if ($line =~ /^(?:pub )?mod (\w+);\s*\n?$/) {
                 my $name = $1;
-                if (@out && $out[-1] =~ /^#\[cfg\([^)]*\)\]\s*\n?$/) {
+                if (@out && $out[-1] =~ /^#\[cfg\(.+\)\]\s*\n?$/) {
                     my $attr = pop @out;
                     push @cfg, [$attr, $name];
                 } else {
@@ -697,6 +867,25 @@ sub spit {
                 my $insert_at = 0;
                 for my $i (0 .. $#out) {
                     if ($out[$i] =~ /^use /) { $insert_at = $i; last; }
+                }
+                # Belt and braces for the same bug: whatever the classifier
+                # above did, the unconditional `use` must never land under an
+                # attribute. Back up over the run of blank/attribute lines
+                # immediately above the insertion point to the TOPMOST
+                # attribute in it -- an attribute applies to the next item
+                # even with blank lines in between, so anything left there
+                # (a `#[cfg]` orphaned by a removed `mod`, or one that
+                # genuinely belongs to the first `use`) would swallow the
+                # generated import. Inserting above the whole run is always
+                # safe: it steals nothing and gates nothing.
+                {
+                    my $k = $insert_at;
+                    my $top = $insert_at;
+                    while ($k > 0 && $out[$k - 1] =~ /^\s*(?:\#\[.*)?$/) {
+                        $k--;
+                        $top = $k if $out[$k] =~ /^\s*\#\[/;
+                    }
+                    $insert_at = $top;
                 }
                 splice(@out, $insert_at, 0, $use_line, @cfg_use);
             }
@@ -994,10 +1183,37 @@ sub spit {
             }
         }
 
+        # ---- the Test step's feature set ----
+        #
+        # A template-derived game's Test step is `cargo test --all-targets`
+        # with no features, so it never builds `src/bin/verify.rs` (it is
+        # `required-features = ["verify"]`) and never runs anything gated on
+        # a feature -- while the Clippy step two lines above it DOES pass
+        # --all-features, so the two steps compile different crates and CI's
+        # green tells you less than it looks. It is also the gate the rollout
+        # and the port checklist both document as `cargo test --all-features`.
+        # Dough.io, Pack The Ripper and Sundae Shooter each fixed this by
+        # hand in their own port; this makes the rollout do it.
+        #
+        # Applied on a first rollout as well as --upgrade, because the step
+        # is the template's own and this only widens it. Idempotent: a step
+        # that already says --all-features is left alone.
+        if ($c =~ /^([ \t]*)-\ name:\ Test\n([ \t]*)run:\ (cargo\ test[^\n]*)\n/m) {
+            my ($ind, $run_ind, $cmd) = ($1, $2, $3);
+            if ($cmd !~ /--all-features/) {
+                my $old = "$ind- name: Test\n$run_ind" . "run: $cmd\n";
+                my $new = "$ind- name: Test\n$run_ind" . "run: cargo test --all-targets --all-features\n";
+                my $idx = index($c, $old);
+                substr($c, $idx, length($old)) = $new if $idx >= 0;
+            }
+        } else {
+            hand_edit(".github/workflows/ci.yml: no recognisable '- name: Test' step running cargo test; make it 'cargo test --all-targets --all-features' by hand. Without --all-features the Test step never builds src/bin/verify.rs (required-features = [\"verify\"]) and compiles a different crate from the Clippy step next to it.");
+        }
+
         # ---- CARGO_PROFILE_DEV_DEBUG on the check job ----
         #
-        # Adding tests/archetype_order.rs takes a game to four Bevy test
-        # binaries, and the debug info across them exhausts the runner's
+        # Adding tests/archetype_order.rs and tests/windowed_shape.rs takes a
+        # game to five Bevy test binaries, and the debug info across them exhausts the runner's
         # disk. It does not announce itself as an out-of-disk failure: the
         # Test step dies inside rust-lld with
         #   collect2: fatal error: ld terminated with signal 7 [Bus error]
@@ -1185,6 +1401,10 @@ if [ "$UPGRADE" -eq 1 ]; then
   if [ "$MISSING_PROBE" -eq 1 ]; then
     echo "rollout-replay --upgrade: tests/archetype_order.rs is ABSENT and was not created — copy it from $TEMPLATE/tests/archetype_order.rs and adapt its markers (see the HAND EDIT above). It is the only test that catches the archetype-order trap."
   fi
+fi
+
+if [ "$ADDED_SHAPE" -eq 1 ]; then
+  echo "rollout-replay: tests/windowed_shape.rs is NEW in this checkout. It records the selftest script with ScreenFade present and verifies it without, so it can fail on a game that was green a minute ago — that is a finding, not a regression: some sim system is reading presentation state. See the file's module comment."
 fi
 
 echo "rollout-replay: files in place for $GAME"

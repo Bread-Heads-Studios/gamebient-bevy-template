@@ -73,6 +73,22 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
    score-changing instance of this bug: the faithful mode passed 18/18 by
    luck and the split mode failed 2/18.
 
+   And a `SimSet` system must not **read** anything `UiPlugin` (or
+   `AssetsPlugin`, or `AudioPlugin`) owns. `ScreenFade` is the one that has
+   bitten: it is absent in the verifier, it is ticked from `Update` on the
+   *frame* delta, and it is busy for the first ~24 ticks of every run because
+   entering `Playing` goes through it — so a sim system that waits for it to
+   be idle lets the player do one thing and the verifier another. Sundae
+   Shooter's `fire_scoop`/`swap_queue` did, and a browser-recorded run came
+   back claiming 195 points against 200 re-simulated. `Option<Res<T>>` makes
+   such a system *start* headless; it does not make the two builds agree, so
+   the read has to go. `sim::end_run`'s `Option<ResMut<ScreenFade>>` is the
+   one sanctioned touch (rule 10: it writes a fade request on the tick
+   `RunOver` has already frozen the set). `tests/windowed_shape.rs` is the
+   test for this one: it records the scripted run in an app carrying
+   `ScreenFade` and the windowed build's `Update` systems and `verify()`s it
+   in a bare one.
+
    *Sorting discipline*, the same hazard from the other end: any sim system
    that iterates a `Query` and accumulates **order-sensitively** — a running
    multiplier, pushing into a `Vec` the sim later reads in order, a

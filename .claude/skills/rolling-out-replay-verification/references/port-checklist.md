@@ -47,6 +47,20 @@ chained together in one `Update` block:
 .add_systems(OnExit(GameState::Playing), cleanup_game_entities)
 ```
 
+**First, pin the fixed timestep.** Bevy's default `Time<Fixed>` is 64 Hz,
+`sim::tick_duration()` is 60, and `Replay::decode` **rejects** a header whose
+tick rate is not the sim's — `ReplayError::BadTickRate`. A game that skips
+this line records runs that no verifier can decode, and the failure surfaces
+as a decode error in the verifier rather than anywhere near the missing line.
+It is one line in `GamePlugin::build`, next to the `init_resource` run:
+```rust
+.insert_resource(Time::<Fixed>::from_duration(sim::tick_duration()))
+```
+Two of wave 2's three ports (Grand Theft Auto-Reply, Pack The Ripper) lost
+time to this as an undiagnosed hand edit, so `tools/rollout-replay.sh` now
+prints a HAND EDIT when neither `src/game/mod.rs` nor `src/main.rs` mentions
+`Time::<Fixed>`.
+
 **After** — the template's own `GamePlugin::build` (`src/game/mod.rs`),
 the chain shape every game's own gameplay tuple gets folded into:
 ```rust
@@ -106,6 +120,23 @@ frame delta) if it needs one.
 Grep: `grep -n 'add_systems(Update' src/game/mod.rs` — anything that
 mutates a resource `checksum_tick` or a later system reads should be in the
 list above, not here.
+
+### Two Bevy limits a mid-sized game's chain will hit
+
+Both produce compiler errors that say nothing useful, so recognise them by
+shape rather than by reading the diagnostic.
+
+* **16 system parameters.** Rule 10 adds three to whichever system ends the
+  run (`ResMut<RunOver>`, `Option<ResMut<ScreenFade>>`,
+  `ResMut<NextState<GameState>>`), and that is often the system that was
+  already the busiest. Sundae Shooter's `tick_level` wanted 17. Bundle them
+  into a `#[derive(SystemParam)]` struct — theirs is called `RunEnd` — and
+  pass that.
+* **The `SimSet` tuple.** Bevy's tuple impls stop before 14 elements, and a
+  ported chain is `advance_tick` + the game's systems + `checksum_tick` +
+  `checksum_<game>` + `record_tick` + `remember_sim_prev`, so a game with
+  nine gameplay systems is already over. Nest: two `.chain()`ed tuples
+  inside one outer `.chain()`, which preserves the order exactly.
 
 ### The two order traps
 
@@ -205,6 +236,55 @@ what "advisory" means: it is a reading list, not a verdict. Expect false
 negatives too (an entity reached through a resource rather than a query, or a
 file that both spawns and decorates the same type). The thing that *answers*
 the question is `tests/archetype_order.rs`.
+
+### The third trap: a sim system may not read anything `UiPlugin` owns
+
+The two traps above are about *entities and components*. This one is about
+**resources**, and it is the one that shipped.
+
+Sundae Shooter's `launcher::fire_scoop` and `launcher::swap_queue` refused to
+act while `ui::transition::ScreenFade` was mid-transition — a reasonable
+"don't shoot during a wipe" gate, and three bugs at once:
+
+* the fade lives in `UiPlugin`, which the verifier never builds, so it blocks
+  nothing there;
+* it is ticked from `Update` on the **frame** delta, so how many sim ticks it
+  covers depends on the frame rate;
+* it is busy for the first ~24 ticks of **every** run, because entering
+  `Playing` goes through it.
+
+A run recorded in the browser came back claiming 195 points against 200
+re-simulated: the verifier took an opening shot the player's game had
+refused. Nothing local could see it — `--selftest` and both `.gxr` fixtures
+run in bare apps with no fade, so the selftest's verdict was byte-for-byte
+identical before and after the fix, and `tests/archetype_order.rs` adds
+components, not resources. Only a browser recording exposed it, and every
+template-derived game has `ScreenFade` in `UiPlugin` and reaches `Playing`
+through it.
+
+**`Option<Res<T>>` is a compile fix, not a determinism fix.** The table in the
+next section tells you to make `UiPlugin`/`AudioPlugin`/`AssetsPlugin`
+resources optional so parameter validation passes headless. That gets the
+verifier running; it does not make the two builds agree. If the sim *branches*
+on whether the resource was there, or on what it said, the run forks. Reading
+it optionally and ignoring it is fine; reading it and acting on it is the bug.
+
+The one sanctioned touch is `sim::end_run`'s `Option<ResMut<ScreenFade>>`
+(rule 10): it only *writes* a fade request, on the tick `sim::RunOver` has
+already frozen `SimSet`. Rule 8's `toggle_pause` is the other, and it is not
+in `SimSet`.
+
+**The test:** `tests/windowed_shape.rs`, copied into every game by the
+rollout script alongside `archetype_order.rs`. It records the selftest script
+in an app carrying `ScreenFade::boot()` and the windowed build's `Update`
+systems, then `verify()`s it in a bare one — the production question exactly
+(the browser records with all of this present, the site re-simulates with none
+of it). As shipped it covers `ScreenFade` only; **extend `record_windowed`
+during the port** with every `Update` system `GamePlugin::build` registers
+behind `!self.headless` and every `UiPlugin`/`AssetsPlugin` resource a sim
+system might read. The script also prints an advisory naming `src/game/`
+functions that take a fade resource and do not hand it to `sim::end_run`; like
+the archetype advisory it is a grep, not a verdict.
 
 ### What the headless app does not have
 
@@ -362,6 +442,25 @@ app.insert_resource(SimRng::seeded(seed));
 
 // after
 app.world_mut().resource_mut::<sim::PendingSeed>().0 = Some(sim::seed_bytes(seed));
+```
+
+**The scan is textual, and `#[cfg(test)]` is not spared.** It reads whole
+files, so a `rand::rng()` inside a test module fails it exactly as one in a
+system would — and the failure names the file, not the test module, which
+reads like a port mistake for a minute or two. That is deliberate (a scan that
+parsed cfgs would miss randomness behind a feature the verifier does build),
+so fix the tests rather than the scan: draw from `sim::GameRng`, or build a
+`Xoshiro256PlusPlus` from a fixed seed. Both Attic Excavator (one site) and
+Sundae Shooter (five) had to. A seeded test is better anyway; a test that
+called `rand::rng()` was only ever flaky on a slow day.
+
+```rust
+// before, in #[cfg(test)]: fails the forbidden-names scan
+let mut rng = rand::rng();
+
+// after
+use rand::SeedableRng;
+let mut rng = rand_xoshiro::Xoshiro256PlusPlus::seed_from_u64(7);
 ```
 
 Grep: the forbidden-names test already fails the build on
@@ -905,6 +1004,30 @@ things matter when you adapt it:
 
 The file's own doc comment carries all three, plus how to extend
 `trace_order` for the queries your order-sensitive sim systems iterate.
+
+**A green probe is not proof the sorts are unnecessary — measure what the
+recorded runs actually do.** The probe can only reorder interactions that
+happen. Attic Excavator's fixture bot routes *around* heavy junk and sleeping
+cats, so one to four cats and six to ten heavies on a 15x34 board never
+collided in 1800 ticks, and deleting either of the two `SpawnOrder` sorts
+still passed 24/24 in both modes. Pack The Ripper's sim never held more than
+two packs at once, so reordering two IEEE floats under a commutative op was
+exact and its float mutations only bit at three ticks per frame. After
+adapting the probe, check what the runs do (how many of each entity kind are
+live at once? do the multi-entity interactions occur at all?), and when they
+do not, write the dependency down as a targeted unit test instead — Attic's
+`a_burrowed_cell_changes_the_next_cats_route_cost` and
+`a_vacated_cell_changes_where_the_next_heavy_lands` are the pattern — and say
+so in `docs/replay-notes.md`, so nobody later reads the green probe as
+evidence the sorts can go.
+
+**`tests/windowed_shape.rs` is the other half of this test, and it asks the
+resource question.** `archetype_order` adds components; `windowed_shape`
+records the same script in an app carrying `ScreenFade` and the windowed
+build's `Update` systems and verifies it in a bare one. It is copied in by the
+rollout script and, unlike the archetype probe, compiles unadapted — but
+adapt it anyway with your `!headless` systems and your `UiPlugin`-owned
+resources. See "The third trap" under rule 1 for the bug it exists to catch.
 
 **Before / after (the pilot's specific Update-vs-SimSet split)** — Cannonball
 Putt's ten chained `Update` systems split six/four. The six that moved into

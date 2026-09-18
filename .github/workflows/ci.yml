@@ -22,10 +22,11 @@ jobs:
     # mirrors the warning-tolerant Vercel build.
     env:
       RUSTFLAGS: -D warnings
-      # Debug info, not code, is what fills a runner's disk here. Four Bevy
-      # test binaries (lib, playtest, selftest, archetype_order) carry it
-      # twice over — once in the rlib graph, once per binary — and the
-      # failure it produces is not an out-of-disk message but
+      # Debug info, not code, is what fills a runner's disk here. Five Bevy
+      # test binaries (lib, playtest, selftest, archetype_order,
+      # windowed_shape) carry it twice over — once in the rlib graph, once
+      # per binary — and the failure it produces is not an out-of-disk
+      # message but
       #   collect2: fatal error: ld terminated with signal 7 [Bus error]
       # in the middle of rust-lld, with the linker politely asking for an
       # llvm-project bug report. Measured on Dough.io: the
