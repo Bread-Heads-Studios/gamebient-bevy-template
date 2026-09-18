@@ -147,6 +147,7 @@ elif grep -qE '^\s*pub score: u32,' "$GAME/src/game/scoring.rs" \
   # happens to work out.
   NEED_TRAIT=0
   grep -q 'trait LeaderboardScore' "$GAME/src/game/scoring.rs" || NEED_TRAIT=1
+  IMPL_BLOCK="$(mktemp)"
   {
     printf '\n'
     if [ "$NEED_TRAIT" -eq 1 ]; then
@@ -166,7 +167,16 @@ impl LeaderboardScore for GameData {
     }
 }
 RUST
-  } >>"$GAME/src/game/scoring.rs"
+  } >"$IMPL_BLOCK"
+  # A file that ends with `#[cfg(test)] mod tests` must get the impl BEFORE
+  # that module: appending after it trips clippy's `items_after_test_module`
+  # under -D warnings (Attic Excavator's scoring.rs ends that way).
+  if grep -q '^#\[cfg(test)\]' "$GAME/src/game/scoring.rs"; then
+    IMPL_BLOCK="$IMPL_BLOCK" perl -0pi -e 'BEGIN { local $/; open my $f, "<", $ENV{IMPL_BLOCK} or die; $b = <$f>; close $f; $b =~ s/^\n//; $b .= "\n" } s/^#\[cfg\(test\)\]/$b#[cfg(test)]/m' "$GAME/src/game/scoring.rs"
+  else
+    cat "$IMPL_BLOCK" >>"$GAME/src/game/scoring.rs"
+  fi
+  rm -f "$IMPL_BLOCK"
   echo "rollout-replay: src/game/scoring.rs: added 'impl LeaderboardScore for GameData' over the existing 'pub score: u32' field"
 else
   echo "HAND EDIT: src/game/scoring.rs: no 'pub score: u32' field on GameData to implement LeaderboardScore from; write 'impl LeaderboardScore for GameData { fn leaderboard_score(&self) -> u32 { .. } }' by hand (higher is better — invert a time, convert strokes to points), or the copied sim/replay/recorder/host code will not compile (it all uses the trait)"
