@@ -336,10 +336,15 @@ fi
 #
 # `Option<Res<ScreenFade>>` is a compile fix, not a determinism fix: the run
 # still forks on whether the resource was there. `sim::end_run`'s
-# `Option<ResMut<ScreenFade>>` is the one sanctioned touch (it writes a fade
+# `Option<ResMut<ScreenFade>>` is one sanctioned touch (it writes a fade
 # request on the tick `sim::RunOver` has already frozen the set), and rule 8's
-# `toggle_pause` is the other. Both are excluded by name below, as is
-# `src/game/autopilot.rs`, a dev harness the game registers in `Update`.
+# pause toggler is the other — tolerated because the recorder and the feeder
+# both mask `Buttons::PAUSE`, so `pause_just_pressed` is false on every tick
+# of every replay and the fade never decides anything the verifier reaches.
+# Both are excluded below (the pause one by its `pause_just_pressed` edge
+# rather than by the template's `toggle_pause` name, since a game may call it
+# something else), as is `src/game/autopilot.rs`, a dev harness the game
+# registers in `Update`.
 #
 # Reports `<file>:<fn>` pairs, and subtracts whatever the same scan finds in
 # this template so a game is never told about boilerplate it inherited. The
@@ -370,6 +375,17 @@ sim_fade_reads() {
       # through a RunEnd SystemParam), which only writes a request on the
       # tick sim::RunOver has already frozen SimSet.
       /end_run\(|RunEnd/ { if (item != "") ok[item] = 1 }
+      # Rule 8s pause toggler is the other tolerated read, and by SHAPE
+      # rather than by the template name: a game may call it pause::toggle
+      # or handle_pause and it is the same system. What makes it safe is the
+      # pause edge it hangs off -- the recorder and the feeder both mask
+      # Buttons::PAUSE, so pause_just_pressed is false on every tick of
+      # every replay and the fade never decides anything the verifier can
+      # reach. Flagging it anyway made this advisory noise on every upgrade
+      # of every game (four of the six wave-2 upgrades carry the template
+      # shape verbatim). See port-checklist.md rule 1, "The two tolerated
+      # reads".
+      /pause_just_pressed/ { if (item != "") ok[item] = 1 }
       /Res(Mut)?<[^>]*Fade>/ {
         if (item != "" && item != "end_run" && item != "toggle_pause") cand[item] = 1
       }
@@ -383,7 +399,7 @@ if [ -d "$GAME/src/game" ]; then
     <(sim_fade_reads "$GAME" | sort -u) | tr '\n' ' ')"
   FADE_ADVISORY="${FADE_ADVISORY% }"
   if [ -n "$FADE_ADVISORY" ]; then
-    echo "HAND EDIT (advisory): these read a fade resource UiPlugin owns — ${FADE_ADVISORY}. If any of them runs inside sim::SimSet, delete the read: ScreenFade is absent in the verifier, ticks on the frame delta, and is busy for the first ~24 ticks of every run, so the two builds disagree about what the player was allowed to do. sim::end_run's Option<ResMut<ScreenFade>> and rule 8's toggle_pause are the only sanctioned touches (both excluded here). Presentation systems in Update may read it freely — this is a grep, so read the registrations. tests/windowed_shape.rs is the test that answers it."
+    echo "HAND EDIT (advisory): these read a fade resource UiPlugin owns — ${FADE_ADVISORY}. If any of them runs inside sim::SimSet, delete the read: ScreenFade is absent in the verifier, ticks on the frame delta, and is busy for the first ~24 ticks of every run, so the two builds disagree about what the player was allowed to do. Two reads are tolerated and excluded here: sim::end_run's Option<ResMut<ScreenFade>> (rule 10 — it only writes, after RunOver froze the set) and a pause toggler's Option<Res<ScreenFade>> (tolerated, see rule 8 — recognised by the pause_just_pressed edge it hangs off, whatever it is named, because the recorder and the feeder both mask Buttons::PAUSE so no replay can take that branch). Presentation systems in Update may read it freely — this is a grep, so read the registrations. tests/windowed_shape.rs is the test that answers it."
   fi
 fi
 
@@ -1208,6 +1224,34 @@ sub spit {
             }
         } else {
             hand_edit(".github/workflows/ci.yml: no recognisable '- name: Test' step running cargo test; make it 'cargo test --all-targets --all-features' by hand. Without --all-features the Test step never builds src/bin/verify.rs (required-features = [\"verify\"]) and compiles a different crate from the Clippy step next to it.");
+        }
+
+        # ---- the Cutter tests step ----
+        #
+        # tools/test_cut_clips.py ships in every game that has the recording
+        # harness, and the template's own ci.yml runs it -- but a game whose
+        # ci.yml predates that step has a few hundred lines of clip-cutter
+        # logic and a green CI that never touches them. Grand Theft
+        # Auto-Reply and Pack The Ripper each added the step by hand during
+        # their d806aa0 upgrade and the third game of that wave did not,
+        # which is the drift this closes.
+        #
+        # Guarded on the file actually being there (a game without the
+        # recorder would get a step that fails), idempotent on the step
+        # already existing, and applied on a first rollout as well as
+        # --upgrade: like the Test step's feature set, it only adds a runner
+        # for code the game already ships.
+        if (-e "$game/tools/test_cut_clips.py" && $c !~ /test_cut_clips/) {
+            if ($c =~ /^([ \t]*)-[ \t]name:[ \t]Test\n[ \t]*run:[ \t]cargo[ \t]test[^\n]*\n/m) {
+                my $ind = $1;
+                my $end = $+[0];
+                my $addition = "\n$ind- name: Cutter tests\n"
+                              . "$ind  working-directory: tools\n"
+                              . "$ind  run: python3 -m unittest test_cut_clips -v\n";
+                substr($c, $end, 0) = $addition;
+            } else {
+                hand_edit(".github/workflows/ci.yml: tools/test_cut_clips.py ships here but nothing runs it, and there is no recognisable '- name: Test' step to hang a 'Cutter tests' step off; add one by hand (working-directory: tools, run: python3 -m unittest test_cut_clips -v)");
+            }
         }
 
         # ---- CARGO_PROFILE_DEV_DEBUG on the check job ----

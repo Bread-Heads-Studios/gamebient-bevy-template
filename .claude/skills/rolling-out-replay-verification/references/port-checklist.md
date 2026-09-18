@@ -269,10 +269,59 @@ verifier running; it does not make the two builds agree. If the sim *branches*
 on whether the resource was there, or on what it said, the run forks. Reading
 it optionally and ignoring it is fine; reading it and acting on it is the bug.
 
-The one sanctioned touch is `sim::end_run`'s `Option<ResMut<ScreenFade>>`
-(rule 10): it only *writes* a fade request, on the tick `sim::RunOver` has
-already frozen `SimSet`. Rule 8's `toggle_pause` is the other, and it is not
-in `SimSet`.
+#### The two tolerated reads, and why they are tolerated
+
+Everything else that reads the fade from `src/game/` is a bug. These two are
+not, and the rollout script's advisory excludes both by name so it stops
+being noise on every upgrade.
+
+**`sim::end_run`'s `Option<ResMut<ScreenFade>>`** (rule 10). It only *writes*
+a fade request, on the tick `sim::RunOver` has already frozen `SimSet`.
+Nothing the sim does afterwards depends on what the fade said, because the
+sim does nothing afterwards.
+
+**`game::toggle_pause`'s `Option<Res<ScreenFade>>`** (rule 8). This one is a
+genuine *read* that a genuine *branch* hangs off — the template's own shape,
+shared verbatim by four ported games:
+
+```rust
+// FixedUpdate, .before(sim::SimSet), registered in BOTH modes
+fn toggle_pause(
+    input: Res<gamebient_input::TickInput>,
+    mut paused: ResMut<states::Paused>,
+    fade: Option<Res<crate::ui::transition::ScreenFade>>,
+    ...
+) {
+    if fade.as_ref().is_some_and(|f| !f.is_idle()) || !input.pause_just_pressed {
+        return;
+    }
+    paused.0 = !paused.0;
+```
+
+The windowed build has a fade and refuses the pause while it is busy; the
+verifier has none and would accept it. That is exactly the Sundae Shooter
+shape, and it is harmless for one reason only: **rule 8 keeps pause off the
+replay entirely.** `replay::recorder::push` masks `Buttons::PAUSE` out of
+`held` and `latched` before a tick is recorded, and `replay::feeder` masks it
+again out of what it writes back into the accumulator. So in the verifier
+`input.pause_just_pressed` is false on every tick of every replay, and the
+`!input.pause_just_pressed` clause on its own returns early on all of them —
+whatever the fade would have said. The fade can only change the outcome on a
+tick where pause was really pressed, and no replay carries one. The two
+builds disagree about a branch neither run can take.
+
+Read that as the narrow licence it is. It holds while all three remain true:
+
+1. the system runs **outside** `SimSet`;
+2. the pause edge alone is sufficient to make it a no-op — the fade only
+   ever strengthens a guard the masked pause already forces, never a
+   condition that could let something *through* headless;
+3. pause stays masked at both ends (recorder and feeder).
+
+Move the read into a sim system, or let the fade decide anything on a
+non-pause tick, and it is the shipped bug again. Cannonball Putt is where
+this got written down; `tests/windowed_shape.rs` watches it, since inserting
+`ScreenFade` is what makes the two apps disagree in the first place.
 
 **The test:** `tests/windowed_shape.rs`, copied into every game by the
 rollout script alongside `archetype_order.rs`. It records the selftest script
@@ -283,8 +332,41 @@ of it). As shipped it covers `ScreenFade` only; **extend `record_windowed`
 during the port** with every `Update` system `GamePlugin::build` registers
 behind `!self.headless` and every `UiPlugin`/`AssetsPlugin` resource a sim
 system might read. The script also prints an advisory naming `src/game/`
-functions that take a fade resource and do not hand it to `sim::end_run`; like
-the archetype advisory it is a grep, not a verdict.
+functions that take a fade resource and do not hand it to `sim::end_run` or
+gate it behind `pause_just_pressed`; like the archetype advisory it is a grep,
+not a verdict.
+
+**Then measure that the probe's script actually reaches the mechanics
+presentation could touch.** Adding the systems is half the job; the other
+half is proving the bot runs them. Count the frames on which each
+windowed-only system had a live entity to write — a `#[derive(Resource)]`
+counter and a one-line `Update` system beside the ones you just added is the
+whole technique — and print or assert the totals before trusting a green
+probe. **If the fixture bot is a careful router, write a reckless second
+script and assert it reaches them (non-zero counter).** The probe ships a
+two-row bot table (`enum Bot`) for exactly this, with `reckless_script` as a
+documented placeholder in the second row.
+
+Attic Excavator is the worked example, and the measurement is why this
+paragraph exists: over the selftest script's full 1800 ticks
+`heavy::wobble_shake` fired **zero** times and `cat::cat_touch` never
+connected — the fixture's router costs +60 for a cell under heavy junk and
++25 near an awake cat, so it avoids by construction the two
+windowed-vs-headless divergences worth probing (and `archetype_order`'s
+reckless staircase does no better there: it sinks a narrow shaft that misses
+all six heavies). Its replacement bot seeks the shallowest idle heavy, digs
+down beside it and steps underneath: 66 frames of teetering, 50 of falling
+junk, a death — and the test asserts the wobble count is non-zero so the row
+cannot decay into a duplicate of the first. Two planted bugs prove the point:
+a *sim* system filtering its query `With<Visibility>`, and the checksum
+folding the `translation.x` that only `wobble_shake` writes. Both **passed**
+under the fixture bot and **failed** under the reckless one.
+
+Two constraints on whatever you write: it may read the world but may only
+write `VirtualInput` (a recording that is not pure input cannot be replayed),
+and it may not draw from any RNG — not `rand::rng()`, which makes the run
+differ every time, and not `sim::GameRng`, which desynchronises every later
+draw in the sim's own stream. Hash the tick index instead.
 
 ### What the headless app does not have
 
@@ -306,7 +388,7 @@ you know the list. The three that bit the pilot:
 |---|---|---|
 | `GlobalVolume` | `AudioPlugin` | `host::apply_host_commands` takes `Option<ResMut<GlobalVolume>>` (the template already does; games predating that change do not) |
 | the game's `GameAssets` | the game's `AssetsPlugin` | hole/level setup takes `Option<Res<GameAssets>>` and spawns only the entities the sim reads |
-| `ScreenFade` | `UiPlugin` | `Option<Res<…>>` / `Option<ResMut<…>>` in `toggle_pause` and the game-over site |
+| `ScreenFade` | `UiPlugin` | `Option<Res<…>>` / `Option<ResMut<…>>` in `toggle_pause` and the game-over site — the two tolerated reads, see rule 1 |
 | **messages**, not resources: `HostEvent`, `TickInput`, `TickFrame` | `GxInputPlugin` | see below — a harness that builds the sim plugin standalone must `add_message::<HostEvent>()` and init the tick-input resources, or use `build_headless_app` |
 
 That last row is a different failure with the same nameless error, and it
@@ -580,6 +662,13 @@ fn toggle_pause(
 }
 ```
 registered `.before(sim::SimSet)`, not inside the chained tuple.
+
+That `fade` parameter is the one *tolerated* read of a `UiPlugin` resource
+from `src/game/` — the masking above is precisely what makes it safe, since
+`pause_just_pressed` is false on every tick of every replay and the fade's
+answer is therefore never reached in the verifier. Rule 1's "The two
+tolerated reads, and why they are tolerated" spells out the three conditions
+it depends on; keep all three when you port this system.
 
 ## Rule 9 — `LeaderboardScore`, not `GameData.score`
 

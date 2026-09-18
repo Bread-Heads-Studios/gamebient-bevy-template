@@ -96,7 +96,13 @@
 #       `pub`, since the copy would not compile.
 #   (q) the presentation-resource advisory: a sim file reading a fade
 #       resource must be named, while sim::end_run's own callers,
-#       toggle_pause and the autopilot must not.
+#       toggle_pause and the autopilot must not — and the pause toggler is
+#       recognised by its pause_just_pressed edge, so a game that renamed it
+#       is still silent.
+#   (r) the Cutter tests step: a game that ships tools/test_cut_clips.py but
+#       whose ci.yml never runs it gets the step inserted after the Test
+#       step (first rollout and --upgrade, idempotent), while a game without
+#       the cutter file must not be handed a step that would fail.
 #
 # Usage: tools/test_rollout_replay.sh [--no-game]
 #
@@ -1242,5 +1248,67 @@ if grep -q "src/game/player.rs:move_player" "$SCRATCH_ROOT/q2-output.txt"; then
   fail "(q) a fade handed to sim::end_run (rule 10's sanctioned touch) was still flagged"
 fi
 pass "(q) end_run's callers, toggle_pause and the autopilot are not flagged"
+
+# A game that calls its pause toggler something else is the same system, and
+# the advisory must recognise it by the pause edge rather than by the
+# template's name — otherwise it fires on that game for ever.
+COPY_Q3="$SCRATCH_ROOT/template-copy-q3"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_Q3"
+perl -pi -e 's/\bfn toggle_pause\(/fn handle_pause_input(/; s/^                toggle_pause$/                handle_pause_input/' "$COPY_Q3/src/game/mod.rs"
+grep -q 'fn handle_pause_input(' "$COPY_Q3/src/game/mod.rs" \
+  || fail "(q) setup: toggle_pause was not renamed"
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_Q3" >"$SCRATCH_ROOT/q3-output.txt" 2>&1
+if grep -q "handle_pause_input" "$SCRATCH_ROOT/q3-output.txt"; then
+  fail "(q) a renamed rule-8 pause toggler was flagged; the advisory is matching the name, not the pause_just_pressed edge"
+fi
+pass "(q) a pause toggler under a different name is still recognised as the rule-8 tolerated read"
+
+# ---------------------------------------------------------------------------
+# (r) the Cutter tests step.
+#
+# tools/test_cut_clips.py ships in every game with the recording harness, and
+# the template's own ci.yml runs it — but a game whose ci.yml predates that
+# step has the cutter's logic and a green CI that never touches it. Two of
+# the six wave-2 upgrades added the step by hand and the rest did not, which
+# is exactly the drift the rollout script exists to stop.
+# ---------------------------------------------------------------------------
+cutter_steps() { grep -c 'name: Cutter tests' "$1" || true; }
+
+COPY_R="$SCRATCH_ROOT/template-copy-r"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_R"
+perl -0pi -e 's/\n      - name: Cutter tests\n        working-directory: tools\n        run: python3 -m unittest test_cut_clips -v\n//' \
+  "$COPY_R/.github/workflows/ci.yml"
+if grep -q 'test_cut_clips' "$COPY_R/.github/workflows/ci.yml"; then
+  fail "(r) setup: the Cutter tests step was not removed from the copy"
+fi
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_R" >"$SCRATCH_ROOT/r-output.txt" 2>&1
+[ "$(cutter_steps "$COPY_R/.github/workflows/ci.yml")" = "1" ] \
+  || fail "(r) a first rollout did not add the Cutter tests step for a game that ships tools/test_cut_clips.py"
+grep -q 'run: python3 -m unittest test_cut_clips -v' "$COPY_R/.github/workflows/ci.yml" \
+  || fail "(r) the Cutter tests step was added without its run: line"
+cmp -s "$TEMPLATE/.github/workflows/ci.yml" "$COPY_R/.github/workflows/ci.yml" \
+  || fail "(r) the rebuilt ci.yml is not byte-identical to the template's (wrong place or wrong indentation)"
+pass "(r) a missing Cutter tests step is inserted after the Test step, byte-identical to the template's"
+
+# Idempotent: the step is already there now, so a second run must add nothing.
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_R" >"$SCRATCH_ROOT/r2-output.txt" 2>&1
+[ "$(cutter_steps "$COPY_R/.github/workflows/ci.yml")" = "1" ] \
+  || fail "(r) a second rollout duplicated the Cutter tests step"
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_R" >"$SCRATCH_ROOT/r3-output.txt" 2>&1
+[ "$(cutter_steps "$COPY_R/.github/workflows/ci.yml")" = "1" ] \
+  || fail "(r) --upgrade duplicated the Cutter tests step"
+pass "(r) the insertion is idempotent under a re-run and under --upgrade"
+
+# A game without the cutter must NOT get a step that would fail: the guard is
+# the file, not the workflow.
+COPY_R4="$SCRATCH_ROOT/template-copy-r4"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_R4"
+perl -0pi -e 's/\n      - name: Cutter tests\n        working-directory: tools\n        run: python3 -m unittest test_cut_clips -v\n//' \
+  "$COPY_R4/.github/workflows/ci.yml"
+rm -f "$COPY_R4/tools/test_cut_clips.py"
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_R4" >"$SCRATCH_ROOT/r4-output.txt" 2>&1
+[ "$(cutter_steps "$COPY_R4/.github/workflows/ci.yml")" = "0" ] \
+  || fail "(r) a game with no tools/test_cut_clips.py was given a Cutter tests step that would fail"
+pass "(r) a game without the cutter is left alone"
 
 echo "test_rollout_replay: all checks passed"

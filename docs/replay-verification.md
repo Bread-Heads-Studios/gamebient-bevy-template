@@ -234,7 +234,11 @@ drift.
    is for structural failures only (bad seed, bad build, decode error);
    a score mismatch is `unverified`.
 4. **Versioning.** The module for a `build` is immutable. A game release
-   publishes `gamebient-game-verify.zip` as a release asset. The replay's
+   publishes `<package>-verify.zip` as a release asset — the release asset
+   named after the crate, so it is `<name>-verify.zip` for whatever
+   `Cargo.toml`'s `name` is in that game (`.github/workflows/release.yml`'s
+   "Package replay verifier" step is the definition; this document is copied
+   verbatim into every game and so cannot name one). The replay's
    `build` field is `<version>+<short sha>`, so the site maps that sha to
    the release whose asset it must load; replays from a build the site has
    no module for are `unverified`. Games publish their verifier at
@@ -273,7 +277,7 @@ are doubles in JavaScript — parsing it as a number would round it. Compare
 it verbatim, or as a `BigInt`. Cache the required module at module scope —
 loading it is the expensive part, `verify()` itself is sub-second. The
 replay header's `build` field is what selects which release's
-`gamebient-game-verify.zip` to load.
+`<package>-verify.zip` to load.
 
 `ended` says why the re-simulation stopped, and is diagnostic — `matches` is
 the verdict. A run the sim ended itself (rule 10: `sim::end_run` latches

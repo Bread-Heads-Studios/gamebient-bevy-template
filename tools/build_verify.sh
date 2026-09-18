@@ -52,7 +52,11 @@ ls -la dist-verify
 
 # Zip dist-verify/ so build_web.sh can publish it as dist/verify.zip (what the
 # site fetches at properties.verify_url) and release.yml can attach it as
-# gamebient-game-verify.zip without re-zipping the directory itself.
+# `<package>-verify.zip` — the release asset named after this crate — without
+# re-zipping the directory itself. This file is copied verbatim into every
+# game, so the asset name is deliberately not spelled out here: it is
+# whatever that game's Cargo.toml `name` is, and release.yml is the file
+# that has it.
 rm -f dist-verify.zip
 (cd dist-verify && zip -qr ../dist-verify.zip .)
 ls -la dist-verify.zip
