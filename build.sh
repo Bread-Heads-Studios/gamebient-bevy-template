@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build Voidrunner for a single target.
+# Build Gamebient Game for a single target.
 #   ./build.sh pi    -> aarch64-unknown-linux-gnu (Raspberry Pi), via cross
 #   ./build.sh x86   -> x86_64-unknown-linux-gnu, native on Linux else via cross
 #   ./build.sh web   -> wasm32 bundle (delegates to build_web.sh / Vercel path)
@@ -21,17 +21,17 @@ case "$TARGET" in
         ;;
     pi)
         require_cross
-        echo "Building Voidrunner for Raspberry Pi (aarch64-unknown-linux-gnu)..."
+        echo "Building Gamebient Game for Raspberry Pi (aarch64-unknown-linux-gnu)..."
         cross build --release --target aarch64-unknown-linux-gnu
         ;;
     x86)
         if [ "$(uname -s)" = "Linux" ]; then
-            echo "Building Voidrunner for x86_64-unknown-linux-gnu (native)..."
+            echo "Building Gamebient Game for x86_64-unknown-linux-gnu (native)..."
             rustup target add x86_64-unknown-linux-gnu 2>/dev/null || true
             cargo build --release --target x86_64-unknown-linux-gnu
         else
             require_cross
-            echo "Building Voidrunner for x86_64-unknown-linux-gnu (via cross)..."
+            echo "Building Gamebient Game for x86_64-unknown-linux-gnu (via cross)..."
             cross build --release --target x86_64-unknown-linux-gnu
         fi
         ;;
