@@ -93,7 +93,8 @@
 #   (p) tests/windowed_shape.rs: written when absent (and named in the
 #       summary, because it is a new test that can legitimately go red), but
 #       refused with a HAND EDIT when the game's selftest script is not
-#       `pub`, since the copy would not compile.
+#       `pub`, or when the game has no assets::AssetsPlugin for the copy to
+#       build — either way the copy would not compile.
 #   (q) the presentation-resource advisory: a sim file reading a fade
 #       resource must be named, while sim::end_run's own callers,
 #       toggle_pause and the autopilot must not — and the pause toggler is
@@ -103,6 +104,11 @@
 #       whose ci.yml never runs it gets the step inserted after the Test
 #       step (first rollout and --upgrade, idempotent), while a game without
 #       the cutter file must not be handed a step that would fail.
+#   (s) the transcendental advisory: a sim file calling sin/cos/exp/powf/
+#       atan2 must be named (Gulper folded an atan2 and got three checksums
+#       for one fixture from three libms), while the audio synth palette
+#       every game inherits from the template must not, or the advisory is
+#       noise on every game for ever.
 #
 # Usage: tools/test_rollout_replay.sh [--no-game]
 #
@@ -1213,6 +1219,25 @@ grep -q "HAND EDIT: tests/windowed_shape.rs: not created" "$SCRATCH_ROOT/p2-outp
   || fail "(p) refusing to write tests/windowed_shape.rs drew no HAND EDIT"
 pass "(p) a game whose selftest script is not pub is asked rather than handed a file that cannot compile"
 
+# The copy also builds the game's own AssetsPlugin (Dive Rise's desync came
+# in through a component value an AssetsPlugin Update system writes), so a
+# game without one must be asked rather than handed a file that cannot
+# compile. Hunted is the fleet's one such game.
+COPY_P3="$SCRATCH_ROOT/template-copy-p3"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_P3"
+rm "$COPY_P3/tests/windowed_shape.rs"
+perl -pi -e 's/^pub struct AssetsPlugin;/pub struct ArtPlugin;/' "$COPY_P3/src/assets/mod.rs"
+perl -pi -e 's/\bAssetsPlugin\b/ArtPlugin/g' "$COPY_P3/src/main.rs"
+if grep -q 'pub struct AssetsPlugin' "$COPY_P3/src/assets/mod.rs"; then
+  fail "(p) setup: AssetsPlugin was not renamed in the copy"
+fi
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_P3" >"$SCRATCH_ROOT/p3-output.txt" 2>&1
+[ -e "$COPY_P3/tests/windowed_shape.rs" ] \
+  && fail "(p) tests/windowed_shape.rs was written into a copy with no assets::AssetsPlugin"
+grep -q "HAND EDIT: tests/windowed_shape.rs: not created" "$SCRATCH_ROOT/p3-output.txt" \
+  || fail "(p) refusing to write tests/windowed_shape.rs over a missing AssetsPlugin drew no HAND EDIT"
+pass "(p) a game with no assets::AssetsPlugin is asked rather than handed a file that cannot compile"
+
 # ---------------------------------------------------------------------------
 # (q) The presentation-resource advisory.
 #
@@ -1310,5 +1335,38 @@ bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_R4" >"$SCRATCH_ROOT/r4
 [ "$(cutter_steps "$COPY_R4/.github/workflows/ci.yml")" = "0" ] \
   || fail "(r) a game with no tools/test_cut_clips.py was given a Cutter tests step that would fail"
 pass "(r) a game without the cutter is left alone"
+
+# ---------------------------------------------------------------------------
+# (s) The transcendental advisory.
+#
+# libm is not required to round sin/cos/exp/powf/atan2 the same way on macOS,
+# on the Linux CI runner and in wasm. Gulper folded `head.facing` (an atan2)
+# into its checksum and one 5400-tick fixture gave three verifiers three
+# answers with identical score and tick count — which turned `cargo test`
+# itself red on CI, because the committed NATIVE fixture is re-simulated
+# natively. See port-checklist.md rule 5, "The transcendental rule".
+# ---------------------------------------------------------------------------
+COPY_S="$SCRATCH_ROOT/template-copy-s"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_S"
+perl -pi -e 's/let dir = Vec2::new\(input\.move_x, input\.move_y\);/let dir = Vec2::new(input.move_x, (input.move_y * 2.0).sin());/' \
+  "$COPY_S/src/game/player.rs"
+grep -q '\.sin()' "$COPY_S/src/game/player.rs" \
+  || fail "(s) setup: move_player did not get a transcendental call"
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_S" >"$SCRATCH_ROOT/s-output.txt" 2>&1
+grep -q "src/game/player.rs:.sin()" "$SCRATCH_ROOT/s-output.txt" \
+  || fail "(s) a sim file calling sin() was not named by the advisory"
+grep -q "The transcendental rule" "$SCRATCH_ROOT/s-output.txt" \
+  || fail "(s) the advisory does not point at the rule it is about"
+pass "(s) a sim file calling a transcendental is named, with a pointer to the rule"
+
+# The synth palette ships in every game from this template and is
+# presentation that folds nothing; naming it would make the advisory noise on
+# every game for ever. (a)'s output is the template against itself.
+if grep -q "sim code calls libm" "$SCRATCH_ROOT/a-output.txt"; then
+  fail "(s) the advisory fires on the template's own checkout (the inherited audio synth must be subtracted)"
+fi
+grep -q "src/game/audio/synth.rs" "$SCRATCH_ROOT/s-output.txt" \
+  && fail "(s) the inherited audio synth palette was named alongside the planted call"
+pass "(s) the inherited audio synth palette is not named"
 
 echo "test_rollout_replay: all checks passed"

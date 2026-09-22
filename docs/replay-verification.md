@@ -86,8 +86,19 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
    one sanctioned touch (rule 10: it writes a fade request on the tick
    `RunOver` has already frozen the set). `tests/windowed_shape.rs` is the
    test for this one: it records the scripted run in an app carrying
-   `ScreenFade` and the windowed build's `Update` systems and `verify()`s it
-   in a bare one.
+   `ScreenFade`, the windowed build's `Update` systems and the game's own
+   `AssetsPlugin` and `verify()`s it in a bare one.
+
+   Resources are not the only way that state reaches the sim. The rule is
+   **a sim system may not read anything the windowed build writes and the
+   verifier does not**, and that includes a *field of a component* on an
+   entity the sim owns: Dive Rise's dash fell back on
+   `Transform.scale.x.signum()` to decide which way it was facing, and that
+   sign is written by an `AssetsPlugin` system mirroring the sprite — `+1`
+   for ever in the verifier, so a dash from a standstill while facing left
+   went opposite ways in the two builds. Latch such a thing from
+   `TickInput` into a sim-owned component or resource and let presentation
+   *paint* it, one-directionally.
 
    *Sorting discipline*, the same hazard from the other end: any sim system
    that iterates a `Query` and accumulates **order-sensitively** — a running
@@ -123,6 +134,29 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
 5. **Fold extra state into `Checksum`** via `Checksum::fold(&mut self, u64)`
    whenever a score could be reached through different in-game states — the
    checksum is what catches a replay that reproduces the score by accident.
+
+   *The transcendental rule*, the one exception to "fold floats with
+   `to_bits()`": **never fold a value a libm function produced.** `sin`,
+   `cos`, `exp`, `powf` and `atan2` are library calls, and macOS, the Linux
+   CI runner and wasm are not required to round them identically — so a
+   single such value in the fold makes the checksum a referendum on whose
+   libm ran the sim rather than on the run. Fold what arithmetic produces
+   (`+ - * /` and `sqrt` are pinned exactly by IEEE-754) and leave the libm
+   result out; it is almost always a pure function of something already
+   folded beside it. Gulper folded `head.facing` (`velocity.y.atan2(...)`)
+   and got three checksums for one 5400-tick run from three verifiers —
+   same score, same ticks — which turned its own committed native fixture
+   red on CI. And **a transcendental whose argument is constant under the
+   fixed tick must be a literal**, not a call: `(-K * dt).exp()` with a
+   fixed `K` and the fixed 60 Hz `dt` is one number computed sixty times a
+   second on a per-platform libm, and its result usually lands straight in
+   a folded velocity. Pin each literal with a unit test against the tick
+   length and a tolerance (`1e-6`), never a bit-exact assertion — a
+   bit-exact one would pin *this* machine's libm, which is the dependency
+   the literal exists to remove; what the test catches is a stale literal
+   after a tick-rate or constant change. Transcendentals with genuinely
+   varying arguments stay, and they are the residual caveat in "Two
+   fixtures, and which one is the gate" below.
 6. **`sim::checksum_tick` folds only the score and the tick.** It is one of
    the files `tools/rollout-replay.sh` copies verbatim into every game, so
    it must stay game-agnostic. Each game folds its own key run state
@@ -324,6 +358,27 @@ ticks — identical `score` and `ticks`, a different `checksum`. That is drift,
 not nondeterminism, and it does not affect what is shipped. Before accepting
 it as drift, prove it: the port checklist's "Native vs Node mismatch" section
 has the bisection procedure.
+
+Note what that leaves guaranteed and what it does not. **Only a
+wasm-recorded run is guaranteed to verify**, and that is the shipping path:
+the browser records in a wasm build of the game's crate and the site
+re-simulates in another, and wasm arithmetic is spec-deterministic. A run
+recorded **natively** — a cabinet run, or a local `GX_REPLAY_DIR` recording
+— reproduces natively on the same machine, but the *site* re-simulates it
+in wasm, so it crosses the libm boundary and a long enough run may fail to
+reproduce through no fault of the sim. Rule 5's
+transcendental rule removes the systematic half of this (a folded libm
+result, a per-tick `exp`); what remains is a varying-argument
+transcendental laundered into a folded number by some in-game event, and it
+is a matter of whether a particular run happens to hit one. Measured: Dive
+Rise's two same-length rendered runs landed on opposite sides of it, one
+reproducing bit-for-bit under both runtimes and the other parting at tick
+44 083 — about **twelve sim-minutes** — three ticks after a hunter bite
+folded a `sin`/`cos`-driven hunter position into the player's knockback;
+Sundae Shooter's parts at tick **1056**. So: do not read a native-vs-Node
+mismatch on a long native recording as a port defect without the bisect,
+and know that **verified leaderboards accepting cabinet submissions is an
+open question**, not a solved one.
 
 ```bash
 # regenerate both after a sim change

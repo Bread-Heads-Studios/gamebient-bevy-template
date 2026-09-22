@@ -138,6 +138,100 @@ shape rather than by reading the diagnostic.
   nine gameplay systems is already over. Nest: two `.chain()`ed tuples
   inside one outer `.chain()`, which preserves the order exactly.
 
+### A run may not leave `Playing`: phases are resources, not states
+
+A `GameState` variant the run passes *through* — an intermission, a shop, a
+between-waves tuning screen — looks like good state-machine hygiene and
+breaks recording and verification at once. `SimSet` is gated on
+`in_state(Playing)`, `replay::recorder::begin_recording` runs on
+`OnEnter(Playing)` and `seal_run` on `OnExit(Playing)`, so a run that
+bounces `Playing → Shop → Playing` seals a replay per leg, re-seeds per
+leg, and the verifier stops at the first one. Gulper did exactly this with
+a per-band `Digest` state: `begin_run`, `begin_recording` and `seal_run`
+all fired once per band, and the verifier stopped at the first chasm.
+
+Worse, the screen the state existed for is usually where the run is
+decided. Gulper's tuning screen — the biggest single influence on the rest
+of a run — was an `Update` system reading the per-frame `GameInput`, so
+none of its purchases were recorded at all. Dive Rise's opening draft was
+the same shape: cursor and card moved in `Update` on `GameInput`, and
+since the verifier builds no `UiPlugin`, a draft opened there would never
+close and the run would stall behind the cards for ever.
+
+**The fix in both games:** delete the state, make the phase a **sim
+resource**, and drive it from `TickInput` inside `SimSet`.
+
+* Gulper: `GameState::Digest` removed; `run::RunPhase::{Hunt, Tune}` is a
+  resource, `digest::tune_input` runs in the chain off `TickInput`, and
+  `band::advance_band` (chained straight after it) sweeps the old band and
+  builds the next one in the same tick and the same command queue.
+  `src/ui/tune.rs` keeps only the painting.
+* Dive Rise: `levelup::open_draft` at the head of the chain, so the cards
+  are up on tick 1; the gameplay group is gated on `levelup::draft_closed`,
+  so the world is frozen while they are — **but the ticks keep running and
+  recording**, which is exactly what makes the choice replayable. The offer
+  comes from `sim::GameRng` (the seed), the picks come from `TickInput`
+  (the replay), and between them they determine the run.
+
+**A resource, not a `SubStates`.** `NextState` applies once per *frame*,
+and a phase change decided inside `FixedUpdate` may need to take effect on
+the next *tick*; at two or three ticks per frame the two disagree, and that
+disagreement is frame-rate dependent, which is the whole thing the port is
+removing.
+
+**Count the presentation cost honestly, because it is real.** A `ScreenFade`
+wipe drives *state* changes (`fade.request(GameState::X)`), so a phase that
+is no longer a state no longer gets one: Gulper's hunt → tuning transition
+is a hard cut after the port where it used to wipe. That is a behaviour
+change to flag for the owner, not a refactor to slip in — and the remedy is
+cheap and belongs on the presentation side: react to the phase change from
+`Update` (a fade-in on the screen's root node, a cosmetic overlay), never by
+routing the phase back through `GameState`.
+
+### Attract mode: systems that run in `Menu` as well as `Playing`
+
+A title screen over a living world (Grand Theft Otto's city keeps driving
+behind the menu) puts the same systems in two jobs, and a port that only
+looks at `Playing` gets it wrong in both directions: move them wholesale
+into `SimSet` and the attract mode dies; leave them in `Update` and the
+run's own city is frame-rate dependent.
+
+Classify each one by what it *writes*, exactly as rule 1 asks — and expect
+the answer to be "run state". All four of Grand Theft Otto's were:
+`tick_ampel` writes the traffic-light clock a red-light infraction is
+charged against; `walk_pedestrians` and `drive_cars` move entities the sim
+reads **and draw from `GameRng`**, which alone makes every later draw in
+the run frame-rate dependent; `drive_tram` moves what `ride_tram` reads.
+
+**The fix is to register the same functions twice**, which is legal and
+cheap:
+
+```rust
+// The run: inside the chain, on the fixed tick.
+.add_systems(FixedUpdate, (.., tick_ampel, walk_pedestrians, drive_cars,
+                           drive_tram, ..).chain().in_set(sim::SimSet))
+// Attract mode: the same functions, frame-delta, Menu only.
+.add_systems(Update, (tick_ampel, walk_pedestrians, drive_cars, drive_tram)
+    .run_if(in_state(GameState::Menu)))
+```
+
+Gate the `Update` copy on `Menu` **alone** — never `Menu.or(Playing)`,
+which is the custom run-condition (`scene_live`, `gameplay_live`) this
+replaces and the reason the systems were ambiguous in the first place.
+
+Two things make that safe, and both need checking rather than assuming:
+
+* **RNG.** Attract-mode draws are harmless *because* `sim::begin_run`
+  reseeds `GameRng` from `RunSeed` and rewinds `SpawnCounter` on
+  `OnEnter(Playing)`. Confirm your game's `begin_run` is chained ahead of
+  its own `OnEnter(Playing)` setup; if anything seeds or spawns before it,
+  the menu's draws leak into the run.
+* **Entities.** Whatever attract mode spawned must be cleaned up on
+  `OnExit(Menu)`, or the run starts with a world the verifier never built —
+  the same desync as a leaked RNG draw, through entities instead. A
+  `GameEntity`-style marker on the attract spawns and one despawn system is
+  the whole fix.
+
 ### The two order traps
 
 Rule 1 is usually read as "does this system write sim state?". Two ways of
@@ -237,10 +331,15 @@ negatives too (an entity reached through a resource rather than a query, or a
 file that both spawns and decorates the same type). The thing that *answers*
 the question is `tests/archetype_order.rs`.
 
-### The third trap: a sim system may not read anything `UiPlugin` owns
+### The third trap: a sim system may not read what only the windowed build writes
 
-The two traps above are about *entities and components*. This one is about
-**resources**, and it is the one that shipped.
+The two traps above are about which *entities* exist and what *components*
+they carry. This one is about the **values** the windowed build writes and
+the verifier never does — first as a resource (Sundae Shooter's
+`ScreenFade`, the one that shipped), and then, in "The component half of
+the same trap" below, as a field of a component on a sim entity (Dive
+Rise's sprite mirror, which is the same bug through a hole in the earlier
+wording).
 
 Sundae Shooter's `launcher::fire_scoop` and `launcher::swap_queue` refused to
 act while `ui::transition::ScreenFade` was mid-transition — a reasonable
@@ -323,15 +422,118 @@ non-pause tick, and it is the shipped bug again. Cannonball Putt is where
 this got written down; `tests/windowed_shape.rs` watches it, since inserting
 `ScreenFade` is what makes the two apps disagree in the first place.
 
+#### The component half of the same trap: the sprite mirror
+
+The rule above says *resources*, and Dive Rise found the hole in that
+wording by desyncing through a **component field** instead.
+
+`behaviors::swim_burst::dash` has a fallback: a dash thrown with the stick
+at zero has no direction of its own, so it dashes the way you face — and
+the way it read the facing was
+
+```rust
+Vec2::new(tf.scale.x.signum(), 0.0)   // the bug
+```
+
+`tf` is the **player's own** `Transform`, and its `scale.x` is written by
+`assets::creature_visuals::face_movement`: an `Update` system, inside
+`AssetsPlugin`, that mirrors the sprite when the player swims left. The
+verifier builds no `AssetsPlugin`, so nothing ever writes that field there
+and it reads `+1.0` from `spawn_player` to the end of the run. A dash
+thrown from a standstill while facing left went **left in the browser and
+right in the verifier** — 0.4667 m, one tick at dash speed — and the run
+never re-converged. It fired several times a run in practice, because
+taking a draft card *is* A-with-no-stick.
+
+Every existing probe was green, each for its own reason: the fixtures run
+in bare apps, so `scale.x` is `+1` on both sides and the fallback agrees by
+accident; `archetype_order` adds components and children but never writes
+an existing component's **value**; and `windowed_shape` carried the
+resources and deliberately left `AssetsPlugin` out.
+
+**So the rule is wider than it was written.** Not "a sim system may not
+read a resource `UiPlugin` owns" but:
+
+> A sim system may not read **any state the windowed build writes and the
+> verifier does not** — a resource, or a field of a component on an entity
+> the sim itself owns.
+
+In practice that means `Transform.scale`, `Transform.rotation`,
+`Visibility`, and any component a decorator in `src/assets/` or `src/ui/`
+writes on a sim entity. **Latch it from input into sim-owned state
+instead**: Dive Rise's fix is a `player::Facing` resource holding `±1.0`,
+latched by `move_player` from `TickInput.move_x` (so a replay carries it
+like everything else), reset per run, and read by `dash`; `face_movement`
+now *paints* `facing.0` rather than deciding it, so presentation follows
+the sim and the two can no longer drift apart. Keep the write on the
+presentation side one-directional and the whole class goes away.
+
+The audit that closes it out is two greps: the mutable `Transform` queries
+in `src/assets/` and `src/ui/` that can match a sim entity, and then
+`grep -rn 'scale\|rotation' src/game/` for reads of them. Survivors are
+fine as long as nothing in `src/game/` reads them back.
+
+**And carry the real `AssetsPlugin` in the probe**, on hand-made asset
+stores, so the decorators run for real:
+
+```rust
+app.add_plugins(bevy::asset::AssetPlugin::default());   // the AssetServer
+app.init_asset::<Shader>();                             // + Mesh / ColorMaterial /
+app.init_asset::<Mesh>();                               //   StandardMaterial — whichever
+app.init_asset::<ColorMaterial>();                      //   stores the plugin bakes from
+app.add_plugins(AssetsPlugin);
+```
+
+`build_headless_app` is `MinimalPlugins`, so none of that is present by
+default — that is why the earlier fleet-upgrade note reached for
+`insert_resource(Assets::<Mesh>::default())`. Adding `AssetPlugin` itself
+is the stronger version and the one to prefer: it brings an `AssetServer`,
+which a plugin that loads anything (Dive Rise's `ShaderKitPlugin` loads two
+internal WGSL assets) needs in order to build at all. Insert any resource
+the plugin expects but does not create — `main.rs` usually inserts one or
+two — and delete whatever hand-written stand-in the probe was carrying
+instead. Then **mutation-check it**: re-plant the read (`tf.scale.x.signum()`
+in the movement system) and confirm a test now fails. If none does, the
+plugin is in but inert, and the next paragraph is why.
+
+**Carrying the plugin is not enough on its own** — Dive Rise's passed with
+`AssetsPlugin` in and two bots, because the forager was facing right on
+every one of its six blind dashes and the diver held `DOWN` every tick so
+its stick was never zero. Each bot reached one half of the bug. What
+reaches both is a bot that **releases the stick**, and the reason neither
+shipped row does is structural rather than particular to that game: the
+fixture script and `reckless_script` both hold a direction on *every* tick,
+so between them they never produce an idle-stick tick, and a
+"do it the way you're facing" fallback fires on exactly those.
+
+So the template's probe now ships a third row, `coaster_script` — hold LEFT
+for 90 ticks, release for 30, tap A in the middle of the release — and a
+port should keep it and point it at whatever its own direction-less action
+is (a dash, a swing, a drop, a fire button with no aim). Measured on the
+template itself while adopting it: a planted `tf.scale.x.signum()` fallback
+in `move_player` passes all three rows on its own (nothing writes that
+field — the template's `AssetsPlugin` is a stub), and fails **the coaster
+row, and only it**, as soon as that plugin is given the `face_movement`
+system every real game has. That pair of mutations is the check to re-run
+in a game after adapting the file.
+
+Counters are what turn this from guesswork into a measurement. Dive Rise's
+are the pattern: `facing_flip_frames`, asserted non-zero for *every* bot so
+the asset layer can never go inert unnoticed, and `left_facing_dash_starts`,
+asserted non-zero for the new row so it cannot decay into a copy of
+another.
+
 **The test:** `tests/windowed_shape.rs`, copied into every game by the
 rollout script alongside `archetype_order.rs`. It records the selftest script
 in an app carrying `ScreenFade::boot()` and the windowed build's `Update`
 systems, then `verify()`s it in a bare one — the production question exactly
 (the browser records with all of this present, the site re-simulates with none
-of it). As shipped it covers `ScreenFade` only; **extend `record_windowed`
-during the port** with every `Update` system `GamePlugin::build` registers
-behind `!self.headless` and every `UiPlugin`/`AssetsPlugin` resource a sim
-system might read. The script also prints an advisory naming `src/game/`
+of it). As shipped it covers `ScreenFade` and the asset-store lines above;
+**extend `record_windowed` during the port** with every `Update` system
+`GamePlugin::build` registers behind `!self.headless`, every
+`UiPlugin`/`AssetsPlugin` resource a sim system might read, and the game's
+own `AssetsPlugin` so its decorators write real component values. The script
+also prints an advisory naming `src/game/`
 functions that take a fade resource and do not hand it to `sim::end_run` or
 gate it behind `pause_just_pressed`; like the archetype advisory it is a grep,
 not a verdict.
@@ -344,8 +546,10 @@ counter and a one-line `Update` system beside the ones you just added is the
 whole technique — and print or assert the totals before trusting a green
 probe. **If the fixture bot is a careful router, write a reckless second
 script and assert it reaches them (non-zero counter).** The probe ships a
-two-row bot table (`enum Bot`) for exactly this, with `reckless_script` as a
-documented placeholder in the second row.
+three-row bot table (`enum Bot`) for exactly this: `reckless_script` as a
+documented placeholder in the second row, and `coaster_script` — which
+releases the stick, the one thing neither other row ever does — in the
+third.
 
 Attic Excavator is the worked example, and the measurement is why this
 paragraph exists: over the selftest script's full 1800 ticks
@@ -473,6 +677,63 @@ Never read `input.pause_just_pressed` from a sim system (rule 8 below).
 
 Grep: `grep -rn 'GameInput' src/game/*.rs | grep -v input.rs` — every hit
 outside menu/pause code is a candidate to move to `TickInput`.
+
+### Input the canon cannot express: bridge it, do not read it
+
+`TickInput` carries the canon alphabet and nothing else, because that is
+all a `.gxr` records: four directions, A, B, START, SELECT, PAUSE and the
+stick. **A sim system that reads any other input source is unreplayable**,
+however legitimate the device.
+
+Ladder Legend is the case. Its `input::read_input` probed
+`Query<&Gamepad>` for the four *face* buttons directly and ORed them into
+the lane mask, because the canon folds South/North into `A` and West/East
+into `B` and cannot express a dance-mat panel. So a run played on a mat —
+the platform's *canonical* controller for that game — recorded lane steps
+no verifier could reconstruct.
+
+The fix is a bridge, not an extension of the format. A `PreUpdate` system
+ordered `.before(gamebient_input::input::accumulate_input)` latches the
+extra device's state onto `VirtualInput` as ordinary canon bits:
+
+```rust
+// PreUpdate, .before(accumulate_input): the mat's four panels become
+// ordinary direction bits, so GameInput and TickInput both see a normal
+// edge and the sim reads no raw input at all.
+fn mat_panel_bridge(pads: Query<&Gamepad>, mut virt: ResMut<VirtualInput>) {
+    // ... virt.latched |= Buttons::LEFT; etc.
+}
+```
+
+After that the sim reads `TickInput` like every other game, the recorder
+sees the press, and a mat run replays in a browser with a keyboard. The
+same shape covers any non-canon source a game grows: a steering axis
+quantised into LEFT/RIGHT, a light gun, a second player's pad. If the
+device genuinely cannot be expressed in the canon bits, that is a
+`gamebient-input` change, not a game-local read.
+
+Grep: `grep -rn 'ButtonInput<\|Query<&Gamepad\|KeyCode\|GamepadButton' src/game/`.
+The rollout script's HAND EDIT about raw `ButtonInput<KeyCode>` is the same
+finding one device narrower.
+
+### The dev autopilot must end its runs through input too
+
+Rule 2's other half, and it is the one that quietly breaks a port's
+end-to-end proof. An autopilot that finishes its tour by writing
+`GameData` — `data.health = 0.0`, `data.lives = 0` — is fine as a
+screenshot harness and useless as a recording: the replay carries the
+inputs, not the write, so the re-simulation plays on past the point the
+recording ended. Ladder Legend's `drive_autopilot` pinned `health = 0.0`;
+it now stops stepping and lets missed notes drain HP through the real
+game-over path, which is what made a verified autopilot tour possible at
+all.
+
+So: a dev path may write run state **only** if no recording is ever made
+through it. The moment you want `GX_REPLAY_DIR=... cargo run --features
+autopilot` to produce a verifiable `.gxr` — and step 5 of the skill does —
+the tour has to end the run the way a player does. Keep it out of the
+selftest script either way (the rollout script prints a HAND EDIT naming
+the file).
 
 ## Rule 3 — `GameRng` only
 
@@ -614,6 +875,100 @@ checksum is sensitive to float behaviour — that's what the native-vs-wasm
 fixture check in step 5 of the skill relies on catching. Fold in a fixed
 order every tick; `Checksum::fold` is order-sensitive by design
 (`sim.rs`'s `checksum_folds_order_sensitively` test).
+
+### The transcendental rule: never fold what libm produced
+
+The paragraph above is right for the floats *arithmetic* produces and wrong
+for the ones `libm` does, and the difference is the whole of this rule.
+`+ - * /` and `sqrt` are pinned bit-exactly by IEEE-754 on every platform
+the fleet runs on; `sin`, `cos`, `exp`, `powf` and `atan2` are library
+calls, and macOS, the Linux CI runner and wasm are each free to round them
+a different way. **One such value in the fold makes the checksum a
+referendum on whose libm ran the sim.**
+
+Gulper is the measurement (59 transcendental call sites, the fleet's
+highest). Its `checksum_gulper` folded `head.facing`, which is
+`velocity.y.atan2(velocity.x)`, and one 5400-tick fixture gave three
+verifiers three answers:
+
+```
+native (macOS aarch64) checksum 15088799176327886924  score 366  ticks 5400
+node   (wasm)          checksum 7126891345786100575   score 366  ticks 5400
+native (CI, Linux x64) checksum 11654525614748877228  score 366  ticks 5400
+```
+
+Identical score, identical tick count, three checksums. That is not a
+tolerable informational mismatch: `tests/selftest.rs`'s
+`committed_fixture_still_verifies` re-simulates the committed **native**
+fixture **natively**, so a fixture recorded on the porter's Mac could not
+verify on the CI runner and the job went red. Bisected by truncated prefix,
+ticks 1–7 were bit-identical and they parted at tick 8 — the two libms
+agree on `atan2` for the first six arguments the run produces and round the
+seventh one ulp apart.
+
+Two halves, and both are cheap:
+
+1. **No libm result is folded bit-exactly.** Audit the game's
+   `checksum_<game>` system value by value and ask, for each, which
+   operation produced it. A transcendental's output is almost always a pure
+   function of something already folded beside it (Gulper's `facing` is a
+   function of the velocity in the next line), so dropping it costs the
+   checksum almost no sensitivity. Where a transcendental only ever feeds a
+   *comparison* — an aggro radius, a regen gate — it never reaches the fold
+   and is fine as it is; Dive Rise's `depth::light_at` is an `exp` in that
+   position.
+2. **A transcendental whose argument is constant under the fixed tick
+   becomes a literal.** `(-K * dt).exp()` with a fixed rate and the fixed
+   60 Hz `dt` is one number, recomputed sixty times a second on a
+   per-platform libm, and its result typically lands straight in a folded
+   velocity. Gulper's `eel::movement` drag became `DRAG_PER_TICK`; Dive
+   Rise turned eight of them into `*_PER_TICK` literals (knockback decay,
+   an orbit ease, six companion follow rates) and changed the signatures
+   that took a rate and a `dt` to take the per-tick ease instead.
+
+**Unit-test each literal against the tick length, with a tolerance — never
+bit-exactly.**
+
+```rust
+#[test]
+fn exp_drag_literal_matches_the_formula() {
+    let dt = sim::tick_duration().as_secs_f32();
+    assert!((DRAG_PER_TICK - (-EEL_DRAG * dt).exp()).abs() < 1e-6);
+}
+```
+
+A bit-exact assertion would pin *this* machine's libm, which is precisely
+the dependency the literal exists to remove — it would go red on the CI
+runner for the reason the literal fixed. What the tolerance version catches
+is the thing that actually happens: a stale or mistyped literal after
+someone changes the rate constant or the tick rate.
+
+Measured on Dive Rise, the change is **bit-neutral**: the committed
+fixture's checksum was the same before and after the literals, natively and
+under Node. What the literals buy is that a third platform cannot disagree
+later.
+
+**What the rule does not remove**, and do not claim it does: a
+transcendental whose argument genuinely varies (a wander phase, a drift
+angle, `Vec2::from_angle`) has no literal to write, and its result can still
+reach a folded number indirectly. Dive Rise's rendered run parts from Node
+at tick 44 083 — twelve sim-minutes — three ticks after a hunter bite folds
+a `sin`/`cos`-driven hunter position into the player's knockback; Sundae
+Shooter's parts at 1056. That is the fleet-wide caveat in
+`docs/replay-verification.md`, and the shape of what it costs is: **only a
+wasm-recorded run is guaranteed to verify.** Production is safe (the
+browser records in wasm, the site re-simulates in wasm), and a
+native-recorded run — a cabinet run, or your own `GX_REPLAY_DIR` recording
+in step 5 — may legitimately fail under the Node verifier after long
+enough. Record the measurement in the game's `docs/replay-notes.md`, never
+in `docs/replay-verification.md`.
+
+**Greppable:** `grep -rnE '\.sin\(\)|\.cos\(\)|\.exp\(\)|\.powf\(|\.atan2\(' src/game/`.
+`tools/rollout-replay.sh` runs that scan for you and prints a
+`HAND EDIT (advisory)` naming the files; like the other two advisories it is
+a reading list, not a verdict — most hits are presentation or comparisons.
+The two things to look for are a hit whose result reaches
+`checksum_<game>`, and a hit whose argument is constant under the tick.
 
 ## Rule 6 — `sim::checksum_tick` folds only score and tick
 
@@ -1112,11 +1467,14 @@ evidence the sorts can go.
 
 **`tests/windowed_shape.rs` is the other half of this test, and it asks the
 resource question.** `archetype_order` adds components; `windowed_shape`
-records the same script in an app carrying `ScreenFade` and the windowed
-build's `Update` systems and verifies it in a bare one. It is copied in by the
-rollout script and, unlike the archetype probe, compiles unadapted — but
-adapt it anyway with your `!headless` systems and your `UiPlugin`-owned
-resources. See "The third trap" under rule 1 for the bug it exists to catch.
+records the same script in an app carrying `ScreenFade`, the windowed
+build's `Update` systems and the game's own `AssetsPlugin` (on hand-made
+asset stores) and verifies it in a bare one. It is copied in by the rollout
+script and, unlike the archetype probe, compiles unadapted — the one thing
+it needs from the game is a `pub struct AssetsPlugin` under `src/assets/`,
+and the script refuses to write the file rather than hand over one that
+cannot compile. Adapt it anyway with your `!headless` systems and your
+`UiPlugin`-owned resources. See "The third trap" under rule 1 for the bug it exists to catch.
 
 **Before / after (the pilot's specific Update-vs-SimSet split)** — Cannonball
 Putt's ten chained `Update` systems split six/four. The six that moved into
@@ -1246,12 +1604,24 @@ that tick — add a temporary `eprintln!` in the game's own `checksum_<game>`
 system for `tick == N` and run both verifiers again — and you will see which
 value moved and, usually, which call produced it.
 
-When the bisect confirms drift, no workflow change is needed — the
-native-vs-Node step (`Cross-check the native fixture under Node`) is already
-`continue-on-error: true` — but write the measurement down: the two
-checksums, the agreeing `score` and `ticks`, the first tick at which they
-part, and the call site responsible. The next person should not have to redo
-the bisect.
+**Then check whether it is the removable half of the drift before writing it
+off.** Rule 5's transcendental rule is the fix for two of the three shapes
+this bisect turns up, and both were found this way: a libm result folded
+into the checksum bit-exactly (Gulper's `atan2` facing — and note that this
+one can turn `cargo test` itself red on a different machine, because the
+committed *native* fixture is re-simulated *natively*), and a
+transcendental whose argument is constant under the fixed tick (an
+`exp(-k·dt)` decay) whose result lands in a folded value. Both are removed
+rather than documented. Only the third shape — a varying-argument
+transcendental laundered into a folded number by an in-game event — is the
+caveat, and that is the one to write up.
+
+When the bisect confirms drift of that third kind, no workflow change is
+needed — the native-vs-Node step (`Cross-check the native fixture under
+Node`) is already `continue-on-error: true` — but write the measurement
+down: the two checksums, the agreeing `score` and `ticks`, the first tick at
+which they part, and the call site responsible. The next person should not
+have to redo the bisect.
 
 **Write it in the game's own `docs/replay-notes.md`, never in
 `docs/replay-verification.md`.** That second file is copied verbatim from the
