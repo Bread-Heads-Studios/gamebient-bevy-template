@@ -136,11 +136,15 @@ attic-excavator, grand-theft-otto).
 
    **`tests/windowed_shape.rs` is its resource-level sibling**, and unlike
    the probe it compiles as copied: it records the scripted run in an app
-   carrying `ScreenFade::boot()` and verifies it in a bare one, which is the
+   carrying `ScreenFade::boot()`, the asset stores and the game's own
+   `AssetsPlugin`, and verifies it in a bare one, which is the
    production question (the browser records with the windowed shape present,
    the site re-simulates with none of it). Extend `record_windowed` with this
-   game's own `!headless` `Update` systems and any `UiPlugin`/`AssetsPlugin`
-   resource a sim system might read. It exists because Sundae Shooter's
+   game's own `!headless` `Update` systems, any `UiPlugin`/`AssetsPlugin`
+   resource a sim system might read, and whatever `main.rs` inserts that the
+   plugin expects. Dive Rise is why the asset layer is in there: a sim system
+   read `Transform.scale.x`, which an `AssetsPlugin` system writes to mirror
+   the sprite and which is `+1` for ever in the verifier. It exists because Sundae Shooter's
    `fire_scoop`/`swap_queue` gated on the fade and no fixture could see it —
    a browser recording claimed 195 points against 200 re-simulated. The file's doc comment and the
    checklist's "What may stay in `Update`" have the detail.
@@ -151,9 +155,10 @@ attic-excavator, grand-theft-otto).
    windowed-only system (the file ships `FadeBusyFrames` as the pattern) and
    look at the totals. **If the fixture bot is a careful router, write a
    reckless second script and assert it reaches them (non-zero counter):**
-   the probe carries a two-row bot table (`enum Bot`) with `reckless_script`
-   in the second row as a documented placeholder, so this is a replacement,
-   not new scaffolding. Attic Excavator is why the step exists — under its
+   the probe carries a three-row bot table (`enum Bot`) with
+   `reckless_script` in the second row as a documented placeholder and
+   `coaster_script` — the row that releases the stick — in the third, so
+   this is a replacement, not new scaffolding. Attic Excavator is why the step exists — under its
    fixture bot `heavy::wobble_shake` fired zero times in 1800 ticks and
    `cat::cat_touch` never connected, and two planted bugs passed the probe
    until a heavy-seeking second bot went in. Checklist rule 1, "Then measure
@@ -268,17 +273,20 @@ bash ../../libs/gamebient-bevy-template/tools/rollout-replay.sh --upgrade .
   breaking a working game is the whole promise of `--upgrade`. You get a HAND
   EDIT and a summary line asking for it instead; copy it from the template
   and adapt it as step 4 describes.
-* **`tests/windowed_shape.rs` is the opposite case.** Everything it names is
-  template-owned, so the copy compiles in any ported game — it is therefore
-  written whenever it is absent, `--upgrade` included, and called out in the
-  summary. Expect it to be able to fail on a checkout that was green a
+* **`tests/windowed_shape.rs` is the opposite case.** Nearly everything it
+  names is template-owned, so the copy compiles in any ported game — it is
+  therefore written whenever it is absent, `--upgrade` included, and called
+  out in the summary. Expect it to be able to fail on a checkout that was green a
   minute ago: that is a finding (a sim system is reading presentation state),
   not a regression. A game that already adapted it keeps its copy and gets
   the usual "locally modified" HAND EDIT; when you merge the template's
-  changes in, the second bot row is the part worth taking — step 4's
-  measurement paragraph says why. It is skipped, with a HAND EDIT, only when the game's
-  `src/game/replay/selftest.rs` does not export `pub fn script` or its
-  `ScreenFade` has lost `boot()` — the two things the copy needs.
+  changes in, the second and third bot rows are the part worth taking —
+  step 4's measurement paragraph says why. It is skipped, with a HAND EDIT,
+  only when the game is missing one of the three things the copy names: a
+  `pub fn script` in `src/game/replay/selftest.rs`, `ScreenFade::boot()`, or
+  a `pub struct AssetsPlugin` under `src/assets/` (the copy builds the
+  game's own asset layer, because a decorator writing a component *value* on
+  a sim entity is the half of the probe that resources cannot cover).
 
 Under `--upgrade`, a game whose `src/game/mod.rs` already names
 `sim::SimSet` also stops getting the two HAND EDITs the script prints

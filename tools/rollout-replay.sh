@@ -403,6 +403,48 @@ if [ -d "$GAME/src/game" ]; then
   fi
 fi
 
+# Advisory, and the third of the three greps: a value a libm function
+# produced must not be folded into `Checksum` bit-exactly, and a
+# transcendental whose argument is constant under the fixed tick should be a
+# literal.
+#
+# `+ - * /` and `sqrt` are pinned bit-exactly by IEEE-754; `sin`, `cos`,
+# `exp`, `powf` and `atan2` are library calls, and macOS, the Linux CI runner
+# and wasm are each free to round them differently. Gulper folded
+# `head.facing` (an `atan2`) and got three checksums for one 5400-tick
+# fixture from three verifiers -- same score, same tick count -- which turned
+# its own `cargo test` red on CI, since `committed_fixture_still_verifies`
+# re-simulates the committed NATIVE fixture natively. Its fixed-tick
+# `(-EEL_DRAG * dt).exp()` was the other half, and became a literal.
+#
+# Reports `<file>:<call>` pairs over `src/game/` and subtracts whatever the
+# same scan finds in this template, so the inherited synth palette
+# (`src/game/audio/synth.rs`, which is presentation and folds nothing) is
+# never named. Like the other two advisories this is a grep, not a verdict:
+# most hits are presentation or feed only comparisons. The two shapes to look
+# for are a hit whose result reaches `checksum_<game>`, and a hit whose
+# argument is constant under the tick.
+transcendental_calls() {
+  local root="$1" f
+  [ -d "$root/src/game" ] || return 0
+  while read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in */autopilot.rs) continue ;; esac
+    grep -ohE '\.sin\(\)|\.cos\(\)|\.exp\(\)|\.powf\(|\.atan2\(' "$f" 2>/dev/null \
+      | sort -u \
+      | while read -r call; do printf '%s:%s\n' "${f#"$root/"}" "$call"; done
+  done < <(find "$root/src/game" -name '*.rs' 2>/dev/null | sort)
+}
+if [ -d "$GAME/src/game" ]; then
+  LIBM_ADVISORY="$(comm -13 \
+    <(transcendental_calls "$TEMPLATE" | sort -u) \
+    <(transcendental_calls "$GAME" | sort -u) | tr '\n' ' ')"
+  LIBM_ADVISORY="${LIBM_ADVISORY% }"
+  if [ -n "$LIBM_ADVISORY" ]; then
+    echo "HAND EDIT (advisory): sim code calls libm — ${LIBM_ADVISORY}. Two rules, both in port-checklist.md rule 5, \"The transcendental rule\": (1) NEVER fold a value a libm function produced into Checksum bit-exactly — libm rounds differently on macOS, on the Linux CI runner and in wasm, so one such value makes the checksum a referendum on whose libm ran the sim (Gulper folded an atan2 facing and got three checksums for one fixture from three verifiers, turning its own cargo test red on CI); the value is almost always a pure function of something already folded beside it, so drop it. (2) A transcendental whose argument is CONSTANT under the fixed tick — an (-k*dt).exp() decay — must be a literal, unit-tested against the tick length with a 1e-6 tolerance, never bit-exactly (a bit-exact assertion pins this machine's libm, which is the dependency the literal removes). Varying-argument calls stay and are the fleet-wide ulp caveat: only a WASM-recorded run is guaranteed to verify, so a long native recording (a cabinet run) may legitimately fail under the Node verifier. This is a grep — most hits are presentation or feed only comparisons. Write measurements in the game's docs/replay-notes.md, never in docs/replay-verification.md."
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # Copy the feature files verbatim. A file that already exists and isn't
 # byte-identical to the template's is left alone (HAND EDIT), never
@@ -693,6 +735,16 @@ if [ -n "$PKG" ]; then
   elif ! grep -qs 'pub fn boot()' "$GAME/src/ui/transition.rs"; then
     SHAPE_OK=0
     SHAPE_WHY="src/ui/transition.rs has no 'pub fn boot()' on ScreenFade"
+  elif ! grep -qrs 'pub struct AssetsPlugin' "$GAME/src/assets"; then
+    # The copy carries the game's own AssetsPlugin (on hand-made asset
+    # stores), because a decorator writing a component VALUE on a sim entity
+    # is the half of this probe that resources cannot cover -- Dive Rise's
+    # dash read the sprite mirror an AssetsPlugin Update system writes. A
+    # game with no src/assets/AssetsPlugin (Hunted is the fleet's one) would
+    # get a file that does not compile, which is the one thing this script
+    # promises never to hand anyone.
+    SHAPE_OK=0
+    SHAPE_WHY="no 'pub struct AssetsPlugin' under src/assets/, which the copy builds into record_windowed"
   fi
   if [ ! -e "$SHAPE_DST" ]; then
     if [ "$SHAPE_OK" -eq 1 ]; then
@@ -700,7 +752,7 @@ if [ -n "$PKG" ]; then
       printf '%s\n' "$SHAPE_EXPECTED" >"$SHAPE_DST"
       ADDED_SHAPE=1
     else
-      echo "HAND EDIT: $SHAPE_REL: not created — $SHAPE_WHY, so the copy would not compile. Fix that (make the selftest script pub; keep ScreenFade::boot()), then copy it from $TEMPLATE/$SHAPE_REL with gamebient_game:: -> ${SNAKE}::. It is the only test that catches a sim system reading presentation state."
+      echo "HAND EDIT: $SHAPE_REL: not created — $SHAPE_WHY, so the copy would not compile. Fix that (make the selftest script pub; keep ScreenFade::boot(); give src/assets/ an AssetsPlugin, or copy the file and drop its four asset-store lines and the add_plugins next to them), then copy it from $TEMPLATE/$SHAPE_REL with gamebient_game:: -> ${SNAKE}::. It is the only test that catches a sim system reading presentation state."
     fi
   elif [ "$UPGRADE" -eq 1 ] && [ "$(cat "$SHAPE_DST")" != "$SHAPE_EXPECTED" ]; then
     SHAPE_STALE="$(template_sha_matching "$SHAPE_REL" "$SHAPE_DST" rename)"
@@ -716,7 +768,7 @@ if [ -n "$PKG" ]; then
   # just crowd out the lines that need acting on.
   if [ "$SUPPRESS_PORTED_NOISE" -eq 0 ] && [ "$SNAKE" != gamebient_game ] \
     && [ -e "$SHAPE_DST" ] && [ "$(cat "$SHAPE_DST")" = "$SHAPE_EXPECTED" ]; then
-    echo "HAND EDIT (advisory): $SHAPE_REL: still the template's copy. As shipped it covers ScreenFade only; add this game's own !headless shape to record_windowed — every Update system GamePlugin::build registers behind !self.headless, and any UiPlugin/AssetsPlugin resource a sim system might read. Option<Res<T>> in a sim system is a compile fix, not a determinism fix."
+    echo "HAND EDIT (advisory): $SHAPE_REL: still the template's copy. As shipped it covers ScreenFade, the asset stores and this game's AssetsPlugin; add the rest of the !headless shape to record_windowed — every Update system GamePlugin::build registers behind !self.headless, any UiPlugin/AssetsPlugin resource a sim system might read, and whatever main.rs inserts that the plugin expects. Option<Res<T>> in a sim system is a compile fix, not a determinism fix. Then measure: the three shipped bots are a starting point, and the third (coaster_script, which releases the stick) is the one that reaches a direction-less action reading a facing presentation owns."
   fi
 fi
 

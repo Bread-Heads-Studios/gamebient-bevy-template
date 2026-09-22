@@ -36,9 +36,30 @@
 //! * every resource `UiPlugin`/`AssetsPlugin` own that a sim system might
 //!   read. `Option<Res<T>>` in a sim system is a compile fix, not a
 //!   determinism fix: the run still forks on whether `T` was there.
+//! * **`AssetsPlugin` itself**, on hand-made asset stores — see
+//!   [`record_windowed`], which carries the four lines a port needs.
+//!   Resources are not the only way presentation reaches the sim: a
+//!   decorator that writes a *field of a component* on an entity the sim
+//!   owns is the other, and it is the one Dive Rise was caught by.
+//!   `creature_visuals::face_movement` mirrors the player's own
+//!   `Transform.scale.x` to face the swim direction, and
+//!   `swim_burst::dash` read that sign back as the direction of a dash
+//!   thrown with no stick held. The verifier builds no `AssetsPlugin`, so
+//!   the scale was `+1` there for the whole run and a dash from a
+//!   standstill while facing left went one way in the browser and the
+//!   other in the verifier. Nothing could see it: the fixtures run bare (so
+//!   both sides read `+1` and agree by accident), `archetype_order` adds
+//!   components but never writes an existing one's *value*, and this file
+//!   used to leave the decorators out.
 //!
-//! The rule the test encodes: **a sim system may not read anything
-//! `UiPlugin` owns.** `sim::end_run`'s `Option<ResMut<ScreenFade>>` is one
+//! The rule the test encodes, in the width Dive Rise taught it: **a sim
+//! system may not read any state the windowed build writes and the
+//! verifier does not** — a resource, or a field of a component on an entity
+//! the sim owns (`Transform.scale`/`rotation`, `Visibility`). Latch such a
+//! thing from `TickInput` into sim-owned state and let presentation *paint*
+//! it, one-directionally; a facing latched in the movement system from
+//! `TickInput.move_x` is the shape.
+//! `sim::end_run`'s `Option<ResMut<ScreenFade>>` is one
 //! sanctioned touch, because it only *writes* a fade request on the tick
 //! the run ends and `sim::RunOver` has already frozen `SimSet` by then.
 //! `game::toggle_pause`'s `Option<Res<ScreenFade>>` is the other, and the
@@ -68,8 +89,23 @@
 //! is a careful router, replace `reckless_script` with one that goes
 //! looking for trouble and assert the counter is non-zero. See the port
 //! checklist, rule 1.
+//!
+//! **Two rows are not a target, they are the shipped minimum.** With the
+//! real `AssetsPlugin` carried and both rows in place, Dive Rise's probe
+//! still passed with the facing bug present: its forager was facing right
+//! on every one of the six blind dashes it threw, and its diver mashed A
+//! every tick but held `DOWN` every tick too, so its stick was never zero
+//! and the fallback was never reached. Each bot reached one half of the
+//! bug and neither reached both. A third row — hold LEFT for 90 ticks,
+//! release for 30, tap A during the release — reaches both, and two
+//! counters keep it honest: one asserted non-zero for *every* bot, so the
+//! asset layer can never go inert unnoticed, and one asserted non-zero for
+//! the new row alone, so it cannot decay into a copy of another. Add rows
+//! until each windowed-only mechanic has one that reaches it, then plant
+//! the bug back and confirm the right row goes red.
 
 use bevy::prelude::*;
+use bevy::shader::Shader;
 
 use gamebient_game::game::replay::recorder::ReplayRecorder;
 use gamebient_game::game::replay::selftest::{SELFTEST_SEED, SELFTEST_TICKS, script};
@@ -113,6 +149,13 @@ enum Bot {
     /// template ships [`reckless_script`] here as a placeholder — see this
     /// file's module comment.
     Reckless,
+    /// The third slot, and the one row here that is not a placeholder:
+    /// [`coaster_script`] **releases the stick**. Both rows above hold a
+    /// direction on every single tick, so between them they never produce
+    /// an idle-stick tick — and a "do it the way you're facing" fallback
+    /// fires on exactly those. Dive Rise's sprite-mirror desync survived
+    /// two rows for that reason and died against this one.
+    Coaster,
 }
 
 /// A deliberately careless bot: the second row of the table, shipped so the
@@ -150,6 +193,38 @@ fn reckless_script(tick: Res<SimTick>, mut virt: ResMut<VirtualInput>) {
     }
 }
 
+/// The bot that lets go of the stick, and taps while it is let go.
+///
+/// Holds LEFT for 90 ticks, releases for 30, and taps A in the middle of
+/// the release. Three things a game's sim can disagree with its presentation
+/// about meet on those ticks: the player has a *facing* (something moved it
+/// left), the stick is *idle* (so a direction-less action has to get its
+/// direction from somewhere), and an action *fires*.
+///
+/// That combination is what neither shipped row above can produce — they
+/// both hold a direction on every tick — and it is the one Dive Rise's
+/// `swim_burst::dash` fell through, reading the sprite's mirrored
+/// `Transform.scale.x` (written by an `AssetsPlugin` `Update` system, and
+/// `+1` for ever in the verifier) as the direction of a dash thrown from a
+/// standstill.
+///
+/// Keep the row when you adapt this file, and point it at whatever this
+/// game's direction-less action is (a dash, a swing, a drop, a fire button
+/// with no aim). Same two constraints as [`reckless_script`]: pure input,
+/// no RNG.
+fn coaster_script(tick: Res<SimTick>, mut virt: ResMut<VirtualInput>) {
+    let phase = tick.0 % 120;
+    if phase < 90 {
+        virt.set_held(Buttons::LEFT);
+    } else {
+        // Stick released — and an action thrown while it is.
+        virt.set_held(Buttons::NONE);
+        if phase == 105 {
+            virt.latched |= Buttons::A;
+        }
+    }
+}
+
 /// Frames on which `ScreenFade` had something to do.
 ///
 /// This is the shipped instance of the measurement the module comment asks
@@ -175,13 +250,42 @@ fn count_fade_busy(mut frames: ResMut<FadeBusyFrames>, fade: Res<ScreenFade>) {
 
 /// The scripted run, recorded in an app shaped like the windowed game:
 /// `ScreenFade` present and mid-fade at the start (`boot()` is the state the
-/// player's first run really begins in), plus the `Update` systems
-/// `GamePlugin` registers only when `!headless`.
+/// player's first run really begins in), the game's own `AssetsPlugin` on
+/// hand-made asset stores, plus the `Update` systems `GamePlugin` registers
+/// only when `!headless`.
 ///
 /// This is where a port adds its own presentation systems — see the module
 /// comment.
 fn record_windowed(bot: Bot) -> Replay {
     let mut app = build_headless_app();
+    // The real `src/assets/` decorators, on hand-made asset stores.
+    // `build_headless_app` is `MinimalPlugins`, so none of this exists by
+    // default and `AssetsPlugin` cannot bake anything there; these four
+    // lines are what a port needs to carry it:
+    //
+    // * `AssetPlugin` for the `AssetServer` — any plugin that *loads*
+    //   something (a shader kit, a font, an atlas) will not build without
+    //   one, and inserting bare `Assets<T>` stores is not enough for it;
+    // * `init_asset::<T>()` for each store the plugin bakes its art
+    //   resources out of. This template's own art is a `Mesh` and a
+    //   `StandardMaterial`; `Shader` and `ColorMaterial` are here because a
+    //   2D game's `AssetsPlugin` wants them and a port should not have to
+    //   rediscover the list.
+    //
+    // It is here because leaving it out cost Dive Rise a desync that
+    // nothing else could see: a sim system read `Transform.scale.x`, a
+    // field an `AssetsPlugin` `Update` system writes to mirror the sprite,
+    // which is `+1` for ever in the verifier. See the module comment.
+    //
+    // Also insert here whatever a game's `main.rs` inserts rather than its
+    // plugin (a playtest speed multiplier, a settings resource) — otherwise
+    // the plugin's systems are present but never run.
+    app.add_plugins(bevy::asset::AssetPlugin::default());
+    app.init_asset::<Shader>();
+    app.init_asset::<Mesh>();
+    app.init_asset::<ColorMaterial>();
+    app.init_asset::<StandardMaterial>();
+    app.add_plugins(gamebient_game::assets::AssetsPlugin);
     app.insert_resource(ScreenFade::boot());
     // The bot table. One arm per `Bot`; each arm registers that row's script
     // where the fixture's own harness registers it, so the recorded input is
@@ -195,6 +299,10 @@ fn record_windowed(bot: Bot) -> Replay {
             PreUpdate,
             reckless_script.before(gamebient_input::input::accumulate_input),
         ),
+        Bot::Coaster => app.add_systems(
+            PreUpdate,
+            coaster_script.before(gamebient_input::input::accumulate_input),
+        ),
     };
     app.init_resource::<FadeBusyFrames>();
     app.add_systems(Update, (tick_fade, count_fade_busy));
@@ -204,6 +312,30 @@ fn record_windowed(bot: Bot) -> Replay {
         .resource_mut::<NextState<GameState>>()
         .set(GameState::Playing);
     app.update();
+    // The asset stores are live, proved rather than assumed: this
+    // template's `player::spawn_player` inserts `Mesh3d`/`MeshMaterial3d`
+    // only when `Assets<Mesh>` and `Assets<StandardMaterial>` are both
+    // present, which is the same `Option<Res<...>>` fork every game's
+    // decorators hang off. If this count is zero the asset lines above did
+    // nothing and the probe is back to covering resources only.
+    //
+    // The template's own `AssetsPlugin` is a stub, so this is the strongest
+    // statement it can make about itself. **In a game it is not enough**:
+    // assert there too that a decorator has actually written the component
+    // *field* a sim system might read (a mirrored `scale.x`, a rotation),
+    // under every bot in the table — see the module comment.
+    let meshed = app
+        .world_mut()
+        .query_filtered::<Entity, With<Mesh3d>>()
+        .iter(app.world())
+        .count();
+    assert!(
+        meshed > 0,
+        "{bot:?}: no entity carries a Mesh3d, so AssetPlugin/init_asset above \
+         did not take effect and this app is not windowed-shaped in the asset \
+         dimension. The decorators that write component values on sim \
+         entities are the half of this probe that resources cannot cover."
+    );
     // Bounded exactly like `selftest::record_scripted_run`: a script that
     // ends its own run freezes `SimSet` and leaves `Playing`, and `SimTick`
     // then never reaches `SELFTEST_TICKS`.
@@ -263,6 +395,46 @@ fn a_run_recorded_with_the_windowed_presentation_still_verifies_without_it() {
 /// soon as a port replaces [`reckless_script`] with a bot that reaches what
 /// the fixture's routes around, which is the case the module comment and the
 /// checklist's rule 1 are about.
+/// The third row, and the one that asks the question the other two cannot:
+/// what does the sim do on a tick when **nothing is held**?
+///
+/// A game whose direction-less action falls back on presentation state — a
+/// mirrored sprite scale, a rotation an animator writes — agrees with
+/// itself in both apps until a run produces a facing *and* an idle stick
+/// *and* a press on the same tick. Both rows above hold a direction every
+/// tick, so neither ever produces one. This row does, sixty times over a
+/// 3600-tick script.
+///
+/// On the template's own game it is, like the reckless row, weaker than
+/// the fixture script — the template's `AssetsPlugin` is a stub, so no
+/// decorator writes a component value for a sim system to read back.
+/// Measured on this template while adopting the row: a planted
+/// `tf.scale.x.signum()` fallback in `move_player` passes all three rows on
+/// its own, and fails **this** row (and only this row) as soon as the
+/// template's `AssetsPlugin` is given a `face_movement` system of the kind
+/// every real game has. That is the pair of mutations to re-run in a game
+/// after adapting this file.
+#[test]
+fn a_run_that_releases_the_stick_still_verifies_without_the_windowed_presentation() {
+    let replay = record_windowed(Bot::Coaster);
+    assert_eq!(
+        replay.ticks, SELFTEST_TICKS,
+        "the coaster run should reach the same tick count as the bare one"
+    );
+    let v = verify(&replay);
+    assert!(
+        v.matches,
+        "a run that releases the stick, recorded with the windowed presentation \
+         present, did not reproduce in a bare verifier app. The usual cause is a \
+         direction-less action reading a facing the presentation layer owns — a \
+         mirrored Transform.scale.x, an animator's rotation — which the verifier \
+         never writes. Latch the facing from TickInput into sim-owned state and \
+         let presentation paint it.\n{v:?} vs claimed score {} checksum {}",
+        replay.score, replay.checksum
+    );
+    assert_eq!(v.ticks, SELFTEST_TICKS);
+}
+
 #[test]
 fn a_reckless_run_recorded_with_the_windowed_presentation_still_verifies_without_it() {
     let replay = record_windowed(Bot::Reckless);
