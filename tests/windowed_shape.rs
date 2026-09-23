@@ -115,12 +115,19 @@
 //! | the three bot rows | what the windowed build *is*: `ScreenFade`, the `!headless` `Update` systems, `AssetsPlugin`'s decorators |
 //! | [`a_run_does_not_depend_on_how_long_the_app_was_up_before_it`] | what the app did **before** the run: `Time<Fixed>::elapsed()` counts from app start |
 //! | [`a_second_run_in_the_same_app_reproduces_the_first`] | what the app kept **from the last run**: a `Local<_>`, a `static`, a resource nothing resets |
+//! | [`a_second_run_in_the_same_app_reproduces_the_first_with_a_direction_held`] | the same, for state that only accumulates **while an input is held** |
 //!
 //! The third was the blind spot as late as 2026-09-23: every probe in this
 //! repo and in every ported game recorded exactly one run per `App`, while
 //! a browser plays run after run in one. Grand Theft Auto-Reply's cursor
 //! auto-repeat lived in a `Local<Repeat>` inside a `SimSet` system for that
 //! whole time, and nothing could see it.
+//!
+//! The fourth is the blind spot *that row* had, found while rolling it out
+//! to the fleet: under a bot that only taps, the third row **does not
+//! catch Grand Theft Auto-Reply's own bug with the fix reverted**. A
+//! tapping bot ends its run with every hold-dependent accumulator decayed
+//! back to rest, so run 2 inherits nothing. See [`Bot::Holder`].
 
 use bevy::prelude::*;
 use bevy::shader::Shader;
@@ -174,6 +181,35 @@ enum Bot {
     /// fires on exactly those. Dive Rise's sprite-mirror desync survived
     /// two rows for that reason and died against this one.
     Coaster,
+    /// The fixture's script **with a direction held down on top of it**
+    /// ([`hold_down`]), and the row
+    /// [`a_second_run_in_the_same_app_reproduces_the_first_with_a_direction_held`]
+    /// exists because without it the second-run probe is *blind to the very
+    /// bug it was written for*.
+    ///
+    /// Measured across the fleet upgrade to 17ea13b. Grand Theft
+    /// Auto-Reply's `Local<Repeat>` cursor auto-repeat — the worked example
+    /// in the row below — **passes the second-run row under
+    /// [`Bot::Selftest`] with its fix reverted**: `desk_input` holds a
+    /// direction on one tick in sixty, `Repeat::step` zeroes the timer on
+    /// the released tick, so the repeat never reaches its `held >=
+    /// REPEAT_DELAY` branch, run 1 always ends with it at `Default`, and
+    /// run 2 inherits nothing. Sundae Shooter found the same on its
+    /// `Launcher.angle` aim integrator and Gulper on `TuneMenu`'s repeat
+    /// cooldown. A tapping bot ends its run with everything decayed back to
+    /// rest, so **state that only accumulates while an input is held has
+    /// nothing to carry over.**
+    ///
+    /// Two things make a holder a holder, and both have been got wrong:
+    ///
+    /// * it writes `virt.held`, **not** `virt.latched` — `collect_input`
+    ///   *takes* `latched` every frame, so a `latched |= DOWN` bot is still
+    ///   a tapping bot (Ladder Legend wrote that version first and its
+    ///   vacuity guard caught it);
+    /// * it keeps the fixture script's taps, so the run still reaches the
+    ///   mechanics the fixture routes to rather than idling with a
+    ///   direction held.
+    Holder,
 }
 
 /// A deliberately careless bot: the second row of the table, shipped so the
@@ -243,6 +279,27 @@ fn coaster_script(tick: Res<SimTick>, mut virt: ResMut<VirtualInput>) {
     }
 }
 
+/// The held half of [`Bot::Holder`]: chained straight after the fixture's
+/// own `script`, so the recording is that script's taps **plus** a direction
+/// that is never released.
+///
+/// `virt.held |= ..`, deliberately, and not `virt.set_held(..)` (which would
+/// throw the script's own direction away) and above all not `virt.latched
+/// |= ..`: `gamebient_input::input::collect_input` consumes `latched` every
+/// frame, so a latching bot presses and releases on every tick and is a
+/// *tapping* bot wearing a holder's name. The row's own vacuity guard —
+/// the last recorded tick must still carry the bit in `held` — is what
+/// stands over that.
+///
+/// During the port, point it at whatever this game's hold-dependent
+/// mechanic reads: an auto-repeat's direction, a charge button, an aim
+/// stick. A game with none still keeps the row (it costs one recorded run
+/// and it is the carrier for the hold-accumulating mutation below), but say
+/// so in `docs/replay-notes.md` rather than claiming it proves more.
+fn hold_down(mut virt: ResMut<VirtualInput>) {
+    virt.held |= Buttons::DOWN;
+}
+
 /// Frames on which `ScreenFade` had something to do.
 ///
 /// This is the shipped instance of the measurement the module comment asks
@@ -257,6 +314,20 @@ fn coaster_script(tick: Res<SimTick>, mut virt: ResMut<VirtualInput>) {
 /// non-zero under whichever bot is supposed to reach it. That assertion is
 /// what stops the second row of the bot table quietly decaying into a
 /// duplicate of the first.
+///
+/// **Assert `> 0`, never equality between two recordings — unless the
+/// counter is sim-derived.** A counter fed by an `Update` system is not a
+/// property of the run, it is a property of the schedule: Gulper's probe
+/// compared `Reached`'s `tune`/`decor` frame counts across two recordings of
+/// the *same* run and got 74, 75 or 76 for one and 5 395 or 5 396 for the
+/// other, because the systems behind them spawn through `Commands` in an
+/// **unordered `Update` tuple** and `measure` sees the result a frame later
+/// or not depending on which sync point the scheduler reached first. That is
+/// a flaky test, not a finding. So: compare only counters derived from the
+/// sim (which mechanics a run reached, what `SimSet` folded) for equality,
+/// give presentation counters `> 0` or "did it reach this at all"
+/// assertions, and if a presentation count really must be exact, `.chain()`
+/// the tuple that produces it and say why.
 #[derive(Resource, Default)]
 struct FadeBusyFrames(u32);
 
@@ -350,6 +421,19 @@ fn windowed_app(bot: Bot) -> App {
     // Also insert here whatever a game's `main.rs` inserts rather than its
     // plugin (a playtest speed multiplier, a settings resource) — otherwise
     // the plugin's systems are present but never run.
+    //
+    // And if the game has an attract mode — an `OnEnter(Menu)` spawn chain,
+    // a title diorama, a menu that runs sim systems — register it here too,
+    // because the second-run row's dwell goes through `Menu` and a dwell in
+    // an empty one probes nothing. **Its `OnExit(Menu)` counterpart must
+    // live in the COMMON half of `GamePlugin::build`, not the `!headless`
+    // branch**: this app is built on `build_headless_app()`, so a cleanup
+    // registered only for the windowed build never runs here and run 2
+    // starts among run 1's leftovers. Grand Theft Otto had to move exactly
+    // that line (grand-theft-otto#6); it is a no-op in the verifier, which
+    // registers no `OnEnter(Menu)` spawns at all. This template has no
+    // attract mode, so it has nothing on either `Menu` edge — check your
+    // game's registration rather than assuming the same.
     app.add_plugins(bevy::asset::AssetPlugin::default());
     app.init_asset::<Shader>();
     app.init_asset::<Mesh>();
@@ -373,6 +457,15 @@ fn windowed_app(bot: Bot) -> App {
             PreUpdate,
             coaster_script.before(gamebient_input::input::accumulate_input),
         ),
+        // The fixture's script and then the hold, chained: `script` calls
+        // `set_held`, which *replaces* the held set, so the hold has to be
+        // OR-ed in afterwards or it is thrown away every tick.
+        Bot::Holder => app.add_systems(
+            PreUpdate,
+            (script, hold_down)
+                .chain()
+                .before(gamebient_input::input::accumulate_input),
+        ),
     };
     app.init_resource::<FadeBusyFrames>();
     app.add_systems(Update, (tick_fade, count_fade_busy));
@@ -388,25 +481,58 @@ fn windowed_app(bot: Bot) -> App {
 /// [`a_second_run_in_the_same_app_reproduces_the_first`], which calls it
 /// twice.
 fn play_one_run(app: &mut App, bot: Bot) -> Replay {
-    // Rewind the **bot's** clock, one frame before `begin_run` rewinds the
-    // sim's. Every script in the table is a pure function of `SimTick`, and
-    // `PreUpdate` runs before `StateTransition` — so on the frame the
-    // transition applies, the script would still see the *previous* run's
-    // final tick index and press the wrong button for exactly one tick.
-    // That is an artifact of standing a `SimTick`-driven bot in for a
-    // player (a player is not a function of `SimTick`), not a divergence:
-    // it moves what the recording *records*, and a replay carries whatever
-    // was recorded. Left in, it shifts the whole input stream by one tick
-    // and the second-run row fails on a difference that has nothing to do
-    // with what the app carried over. A no-op on a fresh app, where this is
-    // already 0.
+    // Everything the HARNESS carries between runs is rewound here. The sim's
+    // own rewind is `sim::begin_run`'s job, four lines below; this is the
+    // half no `OnEnter(Playing)` system can reach, and every one of the
+    // three things below was a real failure on a real game during the
+    // 17ea13b fleet upgrade.
     //
-    // A port whose bot is driven by something else (a frame counter, its
-    // own resource) rewinds that here instead.
-    app.world_mut().insert_resource(SimTick(0));
+    // 1. **The bot's own state.** `VirtualInput` is where the bot writes,
+    //    and a bot gated `run_if(in_state(Playing))` (Grand Theft Otto's
+    //    reckless one) leaves its last press sitting there through the whole
+    //    game-over screen and into run 2's first tick. Clearing it is also
+    //    what makes the `runs` guard below mean something.
+    //
+    //    A bot that keeps a *counter* rewinds it here too — and that is why
+    //    a bot script's counters must be **resources, not `Local`s**: there
+    //    is no way to reset a `Local` from outside its own system, so a
+    //    `Local` in the bot fails the row on the harness rather than on the
+    //    game. Pack The Ripper moved its script's grade counter to
+    //    `selftest::ScriptGrades`, Sundae Shooter its shot cadence to
+    //    `BotState`, Grand Theft Otto its frame counter to `RecklessFrame`,
+    //    all for this line. This template's `script` is a pure function of
+    //    `SimTick` and has none.
+    //
+    // 2. **The boot fade.** `windowed_app` stages `ScreenFade::boot()` once;
+    //    by run 2 it is long exhausted, so the fade-busy assertion below
+    //    would pass on run 1's frames and this app would not be
+    //    windowed-shaped in the one dimension it measures. Re-stage it (and
+    //    zero the counter) so every run starts in the state a player's run
+    //    really starts in — which is also what keeps run 1 and run 2
+    //    comparable. Gulper's port failed on this one. A game whose own
+    //    `OnEnter(Playing)` consumes a fade re-stages that here instead.
+    //
+    // 3. **The state transition, before the bot's next `PreUpdate`.**
+    //    `PreUpdate` runs before `StateTransition` in `Main`, so on the
+    //    frame the transition applies the bot would still see the *previous*
+    //    run's world — its final `SimTick`, its last-frame entities — and
+    //    press what that world called for, for exactly one tick. That is an
+    //    artifact of standing a bot in for a player, not a divergence: it
+    //    moves what the recording *records*, and a replay carries whatever
+    //    was recorded. Left in, it shifts the whole input stream by one tick
+    //    and the row fails on something that has nothing to do with carried
+    //    state. Running `StateTransition` by hand first puts `begin_run`
+    //    ahead of the bot, and it subsumes the `SimTick(0)` rewind this
+    //    used to do — `begin_run` has just done it, and it also covers a bot
+    //    that reads the world rather than the tick (Cannonball Putt's,
+    //    Ladder Legend's, Dive Rise's).
+    *app.world_mut().resource_mut::<VirtualInput>() = VirtualInput::default();
+    app.world_mut().insert_resource(ScreenFade::boot());
+    app.world_mut().insert_resource(FadeBusyFrames::default());
     app.world_mut()
         .resource_mut::<NextState<GameState>>()
         .set(GameState::Playing);
+    app.world_mut().run_schedule(StateTransition);
     app.update();
     // The asset stores are live, proved rather than assumed: this
     // template's `player::spawn_player` inserts `Mesh3d`/`MeshMaterial3d`
@@ -509,6 +635,10 @@ fn a_run_does_not_depend_on_how_long_the_app_was_up_before_it() {
          `Time<Fixed>`'s app-lifetime elapsed. Read `sim::RunClock` instead; \
          see its doc comment and determinism rule 7."
     );
+    // After the verdict, for the reason spelled out in
+    // [`a_second_run_reproduces_the_first`]: a bot that reads the world
+    // turns any sim divergence into an input divergence too, and this
+    // assertion would then fire first and report the symptom.
     assert_eq!(
         warm.runs, cold.runs,
         "sanity: the bot pressed different buttons in the two recordings, so \
@@ -581,20 +711,68 @@ fn a_run_does_not_depend_on_how_long_the_app_was_up_before_it() {
 /// them.
 #[test]
 fn a_second_run_in_the_same_app_reproduces_the_first() {
+    a_second_run_reproduces_the_first(Bot::Selftest);
+}
+
+/// **The same row under a bot that never lets go**, and the reason the
+/// fleet needed it: with a tapping bot the row above is *blind to the very
+/// bug it was written for*.
+///
+/// [`Bot::Holder`]'s doc comment has the measurements. The short version is
+/// that Grand Theft Auto-Reply's `Local<Repeat>` — the worked example the
+/// row above is written around — **passes it under `Bot::Selftest` with the
+/// fix reverted**, because a bot that taps ends its run with every
+/// hold-dependent accumulator decayed back to rest, and there is then
+/// nothing for run 2 to inherit. Sundae Shooter's aim integrator and
+/// Gulper's tuning-cursor repeat behave the same way.
+///
+/// The vacuity guard is the last recorded tick: if it does not carry the
+/// held bit, this row has quietly decayed into a duplicate of the one above
+/// — which is exactly what happens if a port writes `virt.latched |= ..`
+/// instead of `virt.held |= ..`, since `collect_input` consumes `latched`
+/// every frame.
+///
+/// **The mutation to re-run after adapting this file** is not the plain
+/// tick counter the row above uses — that one is visible to both bots. It
+/// is a `Local<u32>` in a `SimSet` system that increments **only on ticks
+/// where the direction is held**, and perturbs the sim once it passes a
+/// threshold a single run cannot reach. Measured on this template, planted
+/// in `player::move_player`: it fails this row and **passes** the
+/// `Bot::Selftest` one, which is the finding in one table.
+#[test]
+fn a_second_run_in_the_same_app_reproduces_the_first_with_a_direction_held() {
+    let (cold, second) = a_second_run_reproduces_the_first(Bot::Holder);
+    for (which, r) in [("the cold recording", &cold), ("run 2", &second)] {
+        let last = r.runs.last().expect("a recorded run has at least one tick");
+        assert!(
+            last.held & (Buttons::DOWN.0 as u16) != 0,
+            "vacuity: {which}'s last recorded tick does not carry DOWN in \
+             `held`, so nothing was being held when the run ended and this \
+             row is a duplicate of the Selftest one. A holder writes \
+             `virt.held |= ..`; `virt.latched |= ..` is consumed by \
+             collect_input every frame and is still a tapping bot. Got \
+             {last:?}."
+        );
+    }
+}
+
+/// The body of both rows above. Returns `(cold, second)` so a caller can
+/// assert what its own bot is supposed to have reached.
+fn a_second_run_reproduces_the_first(bot: Bot) -> (Replay, Replay) {
     // The game-over screen, and the pause before pressing Start again.
     // Deliberately not round, and not a multiple of anything in the sim.
     const BETWEEN_RUNS_TICKS: u32 = 373;
 
-    let cold = record_windowed(Bot::Selftest);
+    let cold = record_windowed(bot);
 
-    let mut app = windowed_app(Bot::Selftest);
-    let first = play_one_run(&mut app, Bot::Selftest);
+    let mut app = windowed_app(bot);
+    let first = play_one_run(&mut app, bot);
     assert_eq!(
         (first.ticks, first.score, first.checksum),
         (cold.ticks, cold.score, cold.checksum),
-        "vacuity: run 1 of the two-run app already differs from the cold \
-         recording, so nothing run 2 does below is about being second. Both \
-         apps come out of the same windowed_app()."
+        "{bot:?}: vacuity: run 1 of the two-run app already differs from the \
+         cold recording, so nothing run 2 does below is about being second. \
+         Both apps come out of the same windowed_app()."
     );
 
     // Out through the real state path: `play_one_run` has already set
@@ -615,40 +793,54 @@ fn a_second_run_in_the_same_app_reproduces_the_first() {
     // Run 2: the same seed, staged the way a host stages it, and the same
     // script — which is driven by `SimTick`, and `begin_run` rewinds that.
     app.world_mut().resource_mut::<PendingSeed>().0 = Some(SELFTEST_SEED);
-    let second = play_one_run(&mut app, Bot::Selftest);
+    let second = play_one_run(&mut app, bot);
     assert_eq!(
         second.seed, cold.seed,
-        "sanity: run 2 was seeded differently from the cold run, so the \
-         comparison below was never about what the app carried over"
-    );
-    assert_eq!(
-        second.runs, cold.runs,
-        "sanity: the bot pressed different buttons on run 2, so the \
-         comparison below was never about what the app carried over. The \
-         scripts are driven by SimTick, which begin_run rewinds, so this \
-         should be impossible — check what the dwell left in VirtualInput."
+        "{bot:?}: sanity: run 2 was seeded differently from the cold run, so \
+         the comparison below was never about what the app carried over"
     );
     assert_eq!(
         (second.ticks, second.score, second.checksum),
         (cold.ticks, cold.score, cold.checksum),
-        "the same seed and the same inputs produced a different run the \
-         second time through the same App. Some sim system is carrying run \
-         state the verifier's fresh app does not have — a `Local<_>` (the \
-         one that has shipped: a held-direction auto-repeat), a `static`, a \
-         cache a plugin built once, or a resource that `OnEnter(Playing)` \
-         forgets to reset. Move it into run state `begin_run`/`reset_run` \
-         clears; see determinism rule 7 and sim::tests::\
-         no_local_state_in_sim_systems."
+        "{bot:?}: the same seed and the same inputs produced a different run \
+         the second time through the same App. Some sim system is carrying \
+         run state the verifier's fresh app does not have — a `Local<_>` \
+         (the one that has shipped: a held-direction auto-repeat), a \
+         `static`, a cache a plugin built once, or a resource that \
+         `OnEnter(Playing)` forgets to reset. Move it into run state \
+         `begin_run`/`reset_run` clears; see determinism rule 7 and \
+         sim::tests::no_local_state_in_sim_systems."
+    );
+    // **This guard comes after the verdict, and the order is load-bearing.**
+    // It is a vacuity check — "the two recordings were of the same inputs,
+    // so the comparison above was about the sim" — and it reads like one
+    // that should run first. It must not, as soon as a bot reads the world
+    // to decide what to press, which is every interesting bot: a closed-loop
+    // bot turns any sim divergence into an input divergence, so a real
+    // carried-over-state failure trips this assertion too. Put it first and
+    // the row reports "the bot pressed different buttons", which is true, is
+    // a consequence, and sends the reader to look at `VirtualInput` instead
+    // of at the `Local<_>` that caused it. Measured on five games during the
+    // 17ea13b upgrade (cannonball-putt#10, pack-the-ripper#7,
+    // dough-io#8, grand-theft-otto#6, dive-rise#6), each of which moved it
+    // independently before the template did.
+    assert_eq!(
+        second.runs, cold.runs,
+        "{bot:?}: sanity: the bot pressed different buttons on run 2, so the \
+         comparison above was never about what the app carried over. The \
+         scripts are driven by SimTick, which begin_run rewinds, so this \
+         should be impossible — check what the dwell left in VirtualInput."
     );
     let v = verify(&second);
     assert!(
         v.matches,
-        "the second run played in one App did not reproduce in a bare \
-         verifier app, which always plays exactly one run.\n{v:?} vs \
+        "{bot:?}: the second run played in one App did not reproduce in a \
+         bare verifier app, which always plays exactly one run.\n{v:?} vs \
          claimed score {} checksum {}",
         second.score, second.checksum
     );
     assert_eq!(v.ticks, SELFTEST_TICKS);
+    (cold, second)
 }
 
 #[test]

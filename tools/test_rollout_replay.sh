@@ -95,6 +95,10 @@
 #       refused with a HAND EDIT when the game's selftest script is not
 #       `pub`, or when the game has no assets::AssetsPlugin for the copy to
 #       build — either way the copy would not compile.
+#       An adapted copy that predates the second-run row is told, and one
+#       that has it but predates Bot::Holder is told that row is blind to
+#       hold-dependent carried state; both notices are silent once the rows
+#       are in.
 #   (q) the presentation-resource advisory: a sim file reading a fade
 #       resource must be named, while sim::end_run's own callers,
 #       toggle_pause and the autopilot must not — and the pause toggler is
@@ -127,6 +131,13 @@
 #       began with run 1's last held direction), while the dev recorder's
 #       dedupe boxes under `src/game/record/` — which no SimSet system runs
 #       — must not be, and an `allow-local` marker must silence it.
+#   (w) host.rs's Mute arm: the idempotency guard is "is the assignment
+#       already guarded", not "did this script write the guard". A copy
+#       carrying a hand-written `if let Some(..) = global_volume.as_mut()`
+#       must come back byte-identical under --upgrade (wrapping it a second
+#       time does not compile — grand-theft-otto#6); an unguarded one must
+#       still gain `as_deref_mut()`; an ambiguous one (two assignments, no
+#       guard) must draw a HAND EDIT and keep its file.
 #
 # Usage: tools/test_rollout_replay.sh [--no-game]
 #
@@ -1248,6 +1259,29 @@ if grep -q "predates a_second_run_in_the_same_app_reproduces_the_first" "$SCRATC
 fi
 pass "(p) an adapted copy missing the second-run row is told, once it is there is not"
 
+# And the same again one layer down: a copy that HAS the second-run row but
+# predates Bot::Holder has a row that is blind to hold-dependent carried
+# state — which is how Grand Theft Auto-Reply's own Local<Repeat> survived
+# it with the fix reverted. Keyed on Bot::Holder, so it also stops the day
+# the row is ported across. $COPY_P is the unmodified template copy from
+# above, which has both rows, so p1c's output doubles as the silence check.
+COPY_P1D="$SCRATCH_ROOT/template-copy-p1d"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_P1D"
+perl -0pi -e 's/\bBot::Holder\b/Bot::Coaster/g' "$COPY_P1D/tests/windowed_shape.rs"
+grep -q 'Bot::Holder' "$COPY_P1D/tests/windowed_shape.rs" \
+  && fail "(p) setup: Bot::Holder was not adapted out of the copy"
+grep -q 'a_second_run_in_the_same_app_reproduces_the_first' "$COPY_P1D/tests/windowed_shape.rs" \
+  || fail "(p) setup: the second-run row went missing too, so this probes the wrong notice"
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_P1D" >"$SCRATCH_ROOT/p1d-output.txt" 2>&1
+grep -q "no Bot::Holder" "$SCRATCH_ROOT/p1d-output.txt" \
+  || fail "(p) an adapted windowed_shape.rs with the second-run row but no holder drew no HAND EDIT"
+grep -q "held, NOT latched" "$SCRATCH_ROOT/p1d-output.txt" \
+  || fail "(p) the holder notice does not carry the held-vs-latched trap"
+if grep -q "no Bot::Holder" "$SCRATCH_ROOT/p1c-output.txt"; then
+  fail "(p) the holder notice fires on a copy that already has the row"
+fi
+pass "(p) an adapted copy whose second-run row has no holder bot is told"
+
 COPY_P2="$SCRATCH_ROOT/template-copy-p2"
 snapshot_as_git_baseline "$TEMPLATE" "$COPY_P2"
 rm "$COPY_P2/tests/windowed_shape.rs"
@@ -1546,5 +1580,73 @@ bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_U" >"$SCRATCH_ROOT/u2-
 [ "$(grep -c 'sim::sync_run_clock,' "$COPY_U/src/game/mod.rs")" = "1" ] \
   || fail "(u) a second --upgrade duplicated sim::sync_run_clock"
 pass "(u) the run-clock wiring is idempotent under a re-run"
+
+# ---------------------------------------------------------------------------
+# (w) The Mute arm's Option guard: recognise the guard, don't count the
+#     script's own handwriting.
+#
+# `GlobalVolume` is inserted by Bevy's `AudioPlugin`, which the headless
+# verifier never adds, so `apply_host_commands` takes it as
+# `Option<ResMut<GlobalVolume>>` and the `Mute` arm has to unwrap it. The old
+# idempotency guard here asked "does this file contain `as_deref_mut()`" —
+# i.e. "did I write this guard" — rather than "is that assignment guarded at
+# all". Grand Theft Otto had hand-written
+#
+#     if let Some(global_volume) = global_volume.as_mut() { .. }
+#
+# long before this script existed, so `--upgrade` wrapped the inner line a
+# SECOND time and emitted `global_volume.as_deref_mut()` inside a binding
+# that is already a `&mut GlobalVolume`. That does not compile, and it landed
+# on a file every previous run had correctly left alone (grand-theft-otto#6).
+# ---------------------------------------------------------------------------
+COPY_W="$SCRATCH_ROOT/template-copy-w"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_W"
+# Rewrite the template's own guard into Grand Theft Otto's hand-written one.
+perl -0pi -e 's/if let Some\(volume\) = global_volume\.as_deref_mut\(\) \{\n(\s*)volume\.volume = /if let Some(global_volume) = global_volume.as_mut() {\n$1global_volume.volume = /' \
+  "$COPY_W/src/game/host.rs"
+grep -q 'if let Some(global_volume) = global_volume.as_mut()' "$COPY_W/src/game/host.rs" \
+  || fail "(w) setup: the hand-written as_mut() guard was not planted"
+grep -q 'as_deref_mut' "$COPY_W/src/game/host.rs" \
+  && fail "(w) setup: the template's own as_deref_mut guard is still there"
+cp "$COPY_W/src/game/host.rs" "$SCRATCH_ROOT/w-host-before.rs"
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_W" >"$SCRATCH_ROOT/w-output.txt" 2>&1
+grep -q 'as_deref_mut' "$COPY_W/src/game/host.rs" \
+  && fail "(w) --upgrade wrapped a Mute arm that already had an Option guard (the grand-theft-otto#6 bug: the nested guard does not compile)"
+[ "$(grep -c 'global_volume\.volume = ' "$COPY_W/src/game/host.rs")" = "1" ] \
+  || fail "(w) the guarded assignment was duplicated or lost"
+diff -q "$SCRATCH_ROOT/w-host-before.rs" "$COPY_W/src/game/host.rs" >/dev/null \
+  || fail "(w) host.rs changed although its Mute arm was already guarded"
+pass "(w) an existing Option guard on global_volume is recognised and left alone"
+
+# ...and the edit the guard exists for still happens on a game that has none.
+COPY_W2="$SCRATCH_ROOT/template-copy-w2"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_W2"
+perl -0pi -e 's/^([ \t]*)if let Some\(volume\) = global_volume\.as_deref_mut\(\) \{\n[ \t]*volume\.volume = ([^\n]*);\n[ \t]*\}\n/$1global_volume.volume = $2;\n/m' \
+  "$COPY_W2/src/game/host.rs"
+grep -q 'as_deref_mut' "$COPY_W2/src/game/host.rs" \
+  && fail "(w) setup: the unguarded shape was not planted"
+grep -q '^\s*global_volume\.volume = ' "$COPY_W2/src/game/host.rs" \
+  || fail "(w) setup: the bare assignment was not planted"
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_W2" >"$SCRATCH_ROOT/w2-output.txt" 2>&1
+grep -q 'if let Some(volume) = global_volume.as_deref_mut()' "$COPY_W2/src/game/host.rs" \
+  || fail "(w) an unguarded Mute arm was not guarded"
+(cd "$COPY_W2" && cargo fmt --all -- --check >/dev/null 2>&1) \
+  || fail "(w) the inserted guard is not rustfmt-clean"
+pass "(w) an unguarded Mute arm still gets the as_deref_mut guard"
+
+# A shape this script cannot classify draws a HAND EDIT rather than a rewrite.
+COPY_W3="$SCRATCH_ROOT/template-copy-w3"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_W3"
+perl -0pi -e 's/^([ \t]*)if let Some\(volume\) = global_volume\.as_deref_mut\(\) \{\n[ \t]*volume\.volume = ([^\n]*);\n[ \t]*\}\n/$1global_volume.volume = $2;\n$1global_volume.volume = $2;\n/m' \
+  "$COPY_W3/src/game/host.rs"
+[ "$(grep -c '^\s*global_volume\.volume = ' "$COPY_W3/src/game/host.rs")" = "2" ] \
+  || fail "(w) setup: the two-assignment shape was not planted"
+cp "$COPY_W3/src/game/host.rs" "$SCRATCH_ROOT/w3-host-before.rs"
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_W3" >"$SCRATCH_ROOT/w3-output.txt" 2>&1
+grep -q "global_volume.volume" "$SCRATCH_ROOT/w3-output.txt" \
+  || fail "(w) an unclassifiable Mute arm drew no HAND EDIT"
+diff -q "$SCRATCH_ROOT/w3-host-before.rs" "$COPY_W3/src/game/host.rs" >/dev/null \
+  || fail "(w) an unclassifiable Mute arm was rewritten anyway"
+pass "(w) an ambiguous Mute arm draws a HAND EDIT and is left untouched"
 
 echo "test_rollout_replay: all checks passed"
