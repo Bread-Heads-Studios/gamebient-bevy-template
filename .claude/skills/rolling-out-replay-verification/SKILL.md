@@ -281,7 +281,13 @@ bash ../../libs/gamebient-bevy-template/tools/rollout-replay.sh --upgrade .
   not a regression. A game that already adapted it keeps its copy and gets
   the usual "locally modified" HAND EDIT; when you merge the template's
   changes in, the second and third bot rows are the part worth taking —
-  step 4's measurement paragraph says why. It is skipped, with a HAND EDIT,
+  step 4's measurement paragraph says why — and
+  `a_second_run_in_the_same_app_reproduces_the_first` is the part you will
+  be *told* to take, since `--upgrade` names it by hand until the game has
+  it. It plays two runs through one `App`, which nothing else in the kit
+  does, and it is the only probe that can see run state outliving its run
+  (Grand Theft Auto-Reply's cursor auto-repeat in a `Local<_>`; checklist
+  rule 7, "Run state may not outlive the run"). It is skipped, with a HAND EDIT,
   only when the game is missing one of the three things the copy names: a
   `pub fn script` in `src/game/replay/selftest.rs`, `ScreenFade::boot()`, or
   a `pub struct AssetsPlugin` under `src/assets/` (the copy builds the

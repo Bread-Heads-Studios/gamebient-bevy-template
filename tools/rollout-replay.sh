@@ -490,6 +490,97 @@ if [ -d "$GAME/src/game" ]; then
   fi
 fi
 
+# Advisory, and the fifth grep: the same bug class as the fourth, reached
+# from the other end. The clock one asks what the app did BEFORE the run;
+# this one asks what the app kept FROM THE LAST RUN.
+#
+# A `Local<T>` belongs to the system instance, so it lives as long as the App
+# and no run start can reach it -- not OnEnter(Playing), not begin_run, not a
+# reset_run however careful. The verifier is always a fresh app playing
+# exactly one run, so every Local it owns starts at Default; a browser plays
+# run after run in one app, and run 2 begins with whatever run 1 left there.
+# Grand Theft Auto-Reply shipped its cursor auto-repeat in two
+# `Local<Repeat>`s inside a SimSet system for that reason, and nothing in the
+# fleet could see it, because every probe recorded exactly one run per App.
+#
+# Scope is the files whose systems SimSet runs: the files that register a
+# chain `.in_set(..SimSet)`, plus the modules those registrations name.
+# Presentation and `Update` systems may keep Locals freely. Lines carrying
+# `allow-local` are skipped, and the template's own hits (the dev recorder's
+# dedupe boxes in `src/game/record/`) are subtracted the way the other
+# advisories subtract theirs.
+sim_set_files() {
+  local root="$1" f kind value rel cand
+  [ -d "$root/src/game" ] || return 0
+  while read -r f; do
+    [ -n "$f" ] || continue
+    # One chunk per `add_systems(` call, so a `.before(SimSet)` in a
+    # different registration cannot pull that registration's systems in.
+    awk -v file="$f" '
+      { text = text $0 "\n" }
+      END {
+        n = split(text, part, /add_systems\(/)
+        for (i = 2; i <= n; i++) {
+          chunk = part[i]
+          if (chunk !~ /in_set\([A-Za-z_:]*SimSet\)/) continue
+          print "FILE\t" file
+          while (match(chunk, /[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+/)) {
+            print "PATH\t" substr(chunk, RSTART, RLENGTH)
+            chunk = substr(chunk, RSTART + RLENGTH)
+          }
+        }
+      }' "$f"
+  done < <(find "$root/src/game" -name '*.rs' 2>/dev/null | sort) \
+    | while IFS="$(printf '\t')" read -r kind value; do
+        case "$kind" in
+          FILE) printf '%s\n' "$value" ;;
+          PATH)
+            # Drop the item name, then crate/self/super/game, and keep
+            # only all-lowercase module paths: `GameState::Playing` is an
+            # associated item, `gamebient_input::input::x` is another
+            # crate's and resolves to no file here.
+            rel="${value%::*}"
+            rel="${rel//:://}"
+            while :; do
+              case "$rel" in
+                crate/*) rel="${rel#crate/}" ;;
+                self/*) rel="${rel#self/}" ;;
+                super/*) rel="${rel#super/}" ;;
+                game/*) rel="${rel#game/}" ;;
+                *) break ;;
+              esac
+            done
+            case "$rel" in
+              *[!a-z0-9_/]* | "") continue ;;
+            esac
+            for cand in "$root/src/game/$rel.rs" "$root/src/game/$rel/mod.rs"; do
+              [ -f "$cand" ] && printf '%s\n' "$cand"
+            done
+            ;;
+        esac
+      done | sort -u
+}
+sim_local_state() {
+  local root="$1" f
+  [ -d "$root/src/game" ] || return 0
+  while read -r f; do
+    [ -n "$f" ] || continue
+    grep -hv 'allow-local' "$f" 2>/dev/null \
+      | grep -ohE 'Local<' \
+      | sort -u \
+      | while read -r call; do printf '%s:%s\n' "${f#"$root/"}" "$call"; done
+  done < <(sim_set_files "$root")
+}
+if [ -d "$GAME/src/game" ]; then
+  LOCAL_ADVISORY="$(comm -13 \
+    <(sim_local_state "$TEMPLATE" | sort -u) \
+    <(sim_local_state "$GAME" | sort -u) | tr '\n' ' ')"
+  LOCAL_ADVISORY="${LOCAL_ADVISORY% }"
+  if [ -n "$LOCAL_ADVISORY" ]; then
+    echo "HAND EDIT (advisory): a sim system's file keeps state in a Local — ${LOCAL_ADVISORY}. See port-checklist.md rule 7, \"run state may not outlive the run\". A Local belongs to the SYSTEM INSTANCE, so it lives as long as the App and no run start can reach it: not OnEnter(Playing), not begin_run, not reset_run. The verifier is always a fresh app that plays exactly ONE run, so its Locals all start at Default; the browser is not, and run 2 begins with whatever run 1 left in there. Grand Theft Auto-Reply kept its cursor and crime-wheel held-direction auto-repeat in two Local<Repeat>s inside selection::handle_input, a SimSet system, so a second run in one session started holding run 1's last direction with the repeat timer already past REPEAT_DELAY and swallowed a cursor step the verifier emits; it is now a resource reset_run clears. Move run state into a resource or component OnEnter(Playing) resets. This is a grep, and a Local in a presentation or Update system that happens to share the file is fine — the marker allow-local: <reason> on the line silences it once you have checked. The tests that answer it are sim::tests::no_local_state_in_sim_systems and tests/windowed_shape.rs::a_second_run_in_the_same_app_reproduces_the_first, which plays two runs through ONE App and requires the second to equal a cold recording and to verify bare."
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # Copy the feature files verbatim. A file that already exists and isn't
 # byte-identical to the template's is left alone (HAND EDIT), never
@@ -804,6 +895,11 @@ if [ -n "$PKG" ]; then
     if [ -n "$SHAPE_STALE" ]; then
       printf '%s\n' "$SHAPE_EXPECTED" >"$SHAPE_DST"
       REFRESHED="${REFRESHED}${SHAPE_REL} (was template ${SHAPE_STALE:0:7})"$'\n'
+    elif ! grep -q 'a_second_run_in_the_same_app_reproduces_the_first' "$SHAPE_DST"; then
+      # Adapted here, so it was not refreshed -- and this copy predates the
+      # second-run row, which is the one row a port cannot get for free.
+      # Self-limiting: the day the row is in, this stops printing.
+      echo "HAND EDIT: $SHAPE_REL: adapted here, so --upgrade left it alone — and this copy predates a_second_run_in_the_same_app_reproduces_the_first. Port that row across from $TEMPLATE/$SHAPE_REL (it needs windowed_app() and play_one_run(), the split the template made to record two runs through one App). It is the only probe in the kit that plays a SECOND run: the verifier is always a fresh app that plays exactly one, a browser is not, and anything a run leaves behind — a Local<_> in a SimSet system, a static, a resource OnEnter(Playing) forgets — is invisible to every other test here. Grand Theft Auto-Reply's cursor auto-repeat lived in a Local<Repeat> for six weeks for exactly that reason."
     fi
   fi
   # Unadapted is a usable state here (the shipped file already covers
