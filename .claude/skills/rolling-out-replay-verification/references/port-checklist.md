@@ -1113,6 +1113,118 @@ re-proof: a quiet smoke run is not evidence.
   can see a clock read the greps miss (a helper that takes `f32` seconds, a
   `Timer` fed from elapsed).
 
+### Run state may not outlive the run
+
+Same rule, third form. The clock is what the app did **before** the run;
+this is what the app kept **from the last run**. Both come from one fact:
+
+> **The verifier is always a fresh `App` that plays exactly one run. The
+> browser is not.**
+
+So run state lives in a resource or a component that `OnEnter(Playing)`
+resets — never in a `Local<_>`, never in a `static` or a `thread_local!`,
+never in a cache a plugin computed once at build time, never in a resource
+nothing rewinds. A `Local<T>` is the one that has shipped, and it is worth
+being precise about why: a `Local` belongs to the **system instance**, so it
+lives as long as the `App` and **no run start can reach it** — not
+`OnEnter(Playing)`, not `begin_run`, not a `reset_run` however careful,
+because none of them can name it. There is no way to reset a `Local` from
+outside its own system.
+
+**The worked example: Grand Theft Auto-Reply, 2026-09-23**
+(grand-theft-auto-reply#8). `selection::handle_input` is a `SimSet` system,
+and it kept the held-direction auto-repeat for the inbox cursor and for the
+crime wheel in two `Local<Repeat>`s — the ordinary "hold left and the
+cursor keeps stepping after a delay" behaviour every menu has:
+
+```rust
+// before: the repeat state belongs to the system, and outlives the run
+fn handle_input(time: Res<Time>, input: Res<TickInput>, mut rep: Local<Repeat>, /* .. */) {
+// after: it belongs to the run, and reset_run clears it like everything else
+fn handle_input(time: Res<Time>, input: Res<TickInput>, mut rep: ResMut<RepeatState>, /* .. */) {
+```
+
+A second run played in one browser session therefore started holding
+whatever direction the player had been holding on run 1's *last* tick, with
+that direction's repeat timer already past `REPEAT_DELAY` — so run 2's
+first tick swallowed a cursor step that a fresh app emits, and the run
+forked from its own replay on tick one. The fix is bit-neutral for the
+fixtures (the repeat's only effect reaches `Selection::slot` and
+`Arsenal::selected`, which the checksum already folds), which is exactly why
+no fixture noticed.
+
+**Nothing in the fleet could see it**, and the reason is the same one that
+hid the clock: every probe in every one of these repos recorded exactly
+**one run per `App`**, so all of them agreed with the verifier by accident.
+`tests/windowed_shape.rs::a_second_run_in_the_same_app_reproduces_the_first`
+is the row that is not blind. It plays run 1 with the bot's script, leaves
+`Playing` through the real state path (`GameOver` → `Menu`, `NextState` and
+the real `OnExit`/`OnEnter` systems — not a hand-reset world), dwells in
+`Menu`, then plays run 2 with the **same seed and the same script** and
+requires its `(ticks, score, checksum)` to equal a cold recording from a
+fresh app *and* to `verify()` bare.
+
+One thing to know before adapting it: if the game's bot is a pure function
+of `SimTick` (the template's selftest script is), rewind `SimTick` in
+`play_one_run` before entering `Playing`, as the template does. `PreUpdate`
+runs before `StateTransition`, so on the transition frame the bot would
+still see the *previous* run's final tick index and press the wrong button
+for exactly one tick — an artifact of standing a `SimTick`-driven bot in for
+a player, which shifts the whole recorded input stream by a tick and fails
+the row for a reason that has nothing to do with carried-over state.
+
+Enforcement, the same pair as the clock:
+
+* `sim::tests::no_local_state_in_sim_systems` (`cargo test`) flags `Local<`
+  in any file whose systems `SimSet` runs — the files that register a chain
+  `.in_set(..SimSet)`, plus the modules those registrations name. It derives
+  that scope from the registrations rather than from a list, and asserts it
+  found at least one such file, so it cannot pass by scanning nothing.
+  Presentation and `Update` systems may keep `Local`s freely; `//
+  allow-local: <reason>` on the line is the opt-out for one that shares a
+  sim file, and write why.
+* `tools/rollout-replay.sh` prints the matching advisory during a port and
+  on `--upgrade`, subtracting the template's own non-sim hits (the dev
+  recorder's dedupe boxes under `src/game/record/`). A game whose
+  `windowed_shape.rs` is adapted — which is all of them — also gets a
+  `HAND EDIT` naming the second-run row until it has ported it across.
+
+### The fleet audit, 2026-09-23: what nine games found
+
+Ordered by what each one turned up, not by wave. Every one of these PRs
+also added the after-menu row and the source scan, so a game with no
+finding still gained the two guards.
+
+| game | PR | app-clock sim reads | other findings |
+|---|---|---|---|
+| grand-theft-auto-reply | #8 | none | **the second bug class**: `selection::handle_input`'s two `Local<Repeat>`s, above |
+| pack-the-ripper | #6 | **1** — `conveyor::move_belt` | checksum-invisible today; see below |
+| ladder-legend | #7 | none | 1 presentation hit, marked |
+| cannonball-putt | #9 | none | `Local`s only in `ball::spawn_trail` (`Update`) and `host::report_score` |
+| sundae-shooter | #6 | none | — |
+| attic-excavator | #6 | none | — |
+| dough-io | #7 | none | — |
+| gulper | #6 | none | — |
+| grand-theft-otto | #5 | none | `Local`s only in `host.rs`, `record/` and the selftest bot |
+
+**Eight of nine were clean on the thing being audited.** That is the shape
+of a good audit, not a wasted one: the value is the guards the audit left
+behind and the *second* class it turned up on the way.
+
+**And a site can be checksum-invisible today and still be a latent
+`UNVERIFIED`.** Pack The Ripper's `conveyor::move_belt` — a `SimSet` system
+— drove a pack's spin from `time.elapsed_secs()`, a genuine app-lifetime
+read in the sim. But `t` only reaches `Transform.rotation` on a `Pack`; no
+sim system reads that rotation back, and `scoring::checksum_pack` folds a
+pack's `translation.x` and tear count but not its rotation. Measured rather
+than assumed: reverting the fix and re-running the after-menu row **passes**
+— the checksum does not move. It was fixed anyway, and that is the rule to
+take away. The day anything folds a pack's rotation, hit-tests against it,
+or derives a position from it, every run recorded after a menu dwell becomes
+an `UNVERIFIED` nobody can reproduce locally, because every local harness
+starts its run in the app's first frames. **Classify by where the system is
+registered, not by whether today's checksum happens to see it.**
+
 ## Rule 8 — never read `pause_just_pressed` in a sim system
 
 The recorder masks `Buttons::PAUSE` out of every recorded tick, so it's the

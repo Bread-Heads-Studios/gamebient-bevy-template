@@ -731,6 +731,214 @@ mod tests {
     }
 
     #[test]
+    fn no_local_state_in_sim_systems() {
+        // The sibling of `no_app_lifetime_clock_in_sim_code`, and the same
+        // bug class from the other end: state the recording app has and the
+        // verifier does not.
+        //
+        // A `Local<T>` belongs to the **system instance**, so it lives as
+        // long as the `App` and no run start can reach it — not
+        // `OnEnter(Playing)`, not `begin_run`, not a `reset_run` however
+        // careful. The verifier is always a fresh app that plays exactly
+        // one run, so every `Local` it owns starts at `Default`. A browser
+        // is not: run 2 begins with whatever run 1 left in there, and
+        // re-simulates into a different game.
+        //
+        // That is not hypothetical. Grand Theft Auto-Reply's
+        // `selection::handle_input` — a `SimSet` system — kept the cursor's
+        // and the crime wheel's held-direction auto-repeat in two
+        // `Local<Repeat>`s, so a second run in one browser session started
+        // holding run 1's last direction with its repeat timer already
+        // past the delay, and swallowed a cursor step the verifier emits.
+        // Found by the fleet clock audit (grand-theft-auto-reply#8) because
+        // nothing in the fleet recorded two runs in one `App`;
+        // `tests/windowed_shape.rs::a_second_run_in_the_same_app_reproduces_the_first`
+        // is the behavioural half of this test and does.
+        //
+        // The rule: **run state lives in a resource or a component that
+        // `OnEnter(Playing)` resets.** Never a `Local<_>`, never a
+        // `static`, never something a plugin computed once at build time.
+        //
+        // Scope is the files whose systems `SimSet` runs —
+        // presentation and `Update` systems may keep `Local`s freely, and
+        // that is most of what the parameter is for (a change detector, a
+        // "have I spawned the overlay yet", a dedupe). `// allow-local:
+        // <reason>` on the line is the opt-out for a `Local` in a sim file
+        // that genuinely cannot carry run state across runs (one in an
+        // `Update` system that happens to live in the same file, a
+        // `#[cfg(test)]` helper); write why on the line.
+        //
+        // The needle is itself an instance of what it forbids, so this line
+        // carries the marker, exactly like the two scans beside it.
+        let needle = "Local<"; // allow-local: the needle itself
+        let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/game"));
+        let sim_files = sim_set_files(root);
+        // Vacuity guard. This scan derives its scope from the
+        // registrations, so a game that writes them in a shape it does not
+        // recognise would be scanning nothing at all and passing for it —
+        // the one failure mode a source scan cannot report as a hit. If
+        // this fires during a port, teach `sim_set_files` that game's
+        // registration shape rather than deleting the test.
+        assert!(
+            !sim_files.is_empty(),
+            "no file was found registering systems into SimSet, so this scan \
+             covered nothing. It looks for `.add_systems(..)` carrying \
+             `.in_set(..SimSet)`; if this game registers its chain some other \
+             way, extend sim_set_files to match."
+        );
+        let mut hits = Vec::new();
+        for entry in &sim_files {
+            let text = std::fs::read_to_string(entry).unwrap();
+            for (n, line) in text.lines().enumerate() {
+                let code = line.trim_start();
+                if code.starts_with("//") || line.contains("allow-local") {
+                    continue;
+                }
+                if code.contains(needle) {
+                    hits.push(format!("{}:{}: {}", entry.display(), n + 1, code.trim()));
+                }
+            }
+        }
+        assert!(
+            hits.is_empty(),
+            "a sim system's file keeps state in a system-local parameter, \
+             which outlives the \
+             run (and the whole App) — the verifier's fresh app starts it at \
+             Default and the browser's second run does not. Move it into run \
+             state OnEnter(Playing) resets; see docs/replay-verification.md \
+             rule 7 and tests/windowed_shape.rs::\
+             a_second_run_in_the_same_app_reproduces_the_first. Mark a \
+             genuinely run-free one `// allow-local: <reason>`.\n{}",
+            hits.join("\n")
+        );
+    }
+
+    /// Every file under `src/game/` whose systems `SimSet` runs: the files
+    /// that *register* a chain into it, plus the files the registered
+    /// system paths name.
+    ///
+    /// Derived from the registrations rather than from a hand-kept list, so
+    /// a port cannot forget to add its new gameplay module to it. A chunk
+    /// counts when it registers `.in_set(..SimSet)`; `.before(SimSet)` and
+    /// `.after(SimSet)` deliberately do not, since those systems are
+    /// outside the chain (`toggle_pause` is the template's own).
+    ///
+    /// It over-approximates on purpose: every `a::b` path in the
+    /// registration's text — comments included — that resolves to a file
+    /// under `src/game/` is scanned. A module named in a comment beside the
+    /// chain is one somebody thought belonged there.
+    fn sim_set_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out: Vec<std::path::PathBuf> = Vec::new();
+        let push = |p: std::path::PathBuf, out: &mut Vec<std::path::PathBuf>| {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        };
+        for entry in walk(root) {
+            let text = std::fs::read_to_string(&entry).unwrap();
+            let mut registers = false;
+            // One chunk per `add_systems(` call: the call's own text plus
+            // whatever follows it up to the next call. Splitting here is
+            // what keeps a `.before(sim::SimSet)` in a *different*
+            // registration from pulling that registration's systems in.
+            for chunk in text.split("add_systems(").skip(1) {
+                if !registers_into_sim_set(chunk) {
+                    continue;
+                }
+                registers = true;
+                for path in module_paths(chunk) {
+                    if let Some(file) = resolve_module(root, &path) {
+                        push(file, &mut out);
+                    }
+                }
+            }
+            if registers {
+                push(entry, &mut out);
+            }
+        }
+        out
+    }
+
+    /// Does this `add_systems` chunk put something **in** `SimSet`?
+    fn registers_into_sim_set(chunk: &str) -> bool {
+        chunk.match_indices("in_set(").any(|(i, _)| {
+            let rest = &chunk[i..];
+            rest[..rest.len().min(64)].contains("SimSet")
+        })
+    }
+
+    /// Every `a::b(::c)*` path in `chunk`, as its segments.
+    fn module_paths(chunk: &str) -> Vec<Vec<String>> {
+        let bytes = chunk.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            let c = bytes[i] as char;
+            if !(c.is_ascii_alphabetic() || c == '_') {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < bytes.len() {
+                let c = bytes[i] as char;
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    i += 1;
+                } else if c == ':' && bytes.get(i + 1) == Some(&b':') {
+                    i += 2;
+                } else {
+                    break;
+                }
+            }
+            let path = &chunk[start..i];
+            if path.contains("::") {
+                let segs: Vec<String> = path
+                    .split("::")
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                if segs.len() > 1 {
+                    out.push(segs);
+                }
+            }
+        }
+        out
+    }
+
+    /// The file a system path's module lives in, if it is one of ours.
+    ///
+    /// `player::move_player` is `src/game/player.rs`,
+    /// `replay::recorder::record_tick` is `src/game/replay/recorder.rs`,
+    /// `hunters::viperfish::attack` is `src/game/hunters/viperfish.rs` (or
+    /// its `mod.rs`). A path whose module segments are not lowercase is an
+    /// associated item (`GameState::Playing`, `Buttons::A`), and a path
+    /// that resolves to no file is another crate's
+    /// (`gamebient_input::input::accumulate_input`).
+    fn resolve_module(root: &std::path::Path, segs: &[String]) -> Option<std::path::PathBuf> {
+        let mods: Vec<&str> = segs[..segs.len() - 1]
+            .iter()
+            .map(String::as_str)
+            .filter(|s| !matches!(*s, "crate" | "self" | "super" | "game"))
+            .collect();
+        let (last, rest) = mods.split_last()?;
+        if mods
+            .iter()
+            .any(|s| !s.starts_with(|c: char| c.is_ascii_lowercase() || c == '_'))
+        {
+            return None;
+        }
+        let mut dir = root.to_path_buf();
+        for seg in rest {
+            dir = dir.join(seg);
+        }
+        let flat = dir.join(format!("{last}.rs"));
+        if flat.is_file() {
+            return Some(flat);
+        }
+        let nested = dir.join(last).join("mod.rs");
+        nested.is_file().then_some(nested)
+    }
+
+    #[test]
     fn no_forbidden_randomness_or_hashmaps_in_game_code() {
         // Each literal below is itself an instance of what it forbids, so it
         // carries the same `allow-forbidden-rng` marker `RunSeed::local`

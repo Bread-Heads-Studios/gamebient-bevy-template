@@ -103,6 +103,24 @@
 //! the new row alone, so it cannot decay into a copy of another. Add rows
 //! until each windowed-only mechanic has one that reaches it, then plant
 //! the bug back and confirm the right row goes red.
+//!
+//! # The three questions this file now asks
+//!
+//! Every row here is one instance of a single rule — **a sim system may
+//! read only what the replay carries** — and they differ in *where* the
+//! state the verifier lacks comes from:
+//!
+//! | row | the state the verifier does not have |
+//! |---|---|
+//! | the three bot rows | what the windowed build *is*: `ScreenFade`, the `!headless` `Update` systems, `AssetsPlugin`'s decorators |
+//! | [`a_run_does_not_depend_on_how_long_the_app_was_up_before_it`] | what the app did **before** the run: `Time<Fixed>::elapsed()` counts from app start |
+//! | [`a_second_run_in_the_same_app_reproduces_the_first`] | what the app kept **from the last run**: a `Local<_>`, a `static`, a resource nothing resets |
+//!
+//! The third was the blind spot as late as 2026-09-23: every probe in this
+//! repo and in every ported game recorded exactly one run per `App`, while
+//! a browser plays run after run in one. Grand Theft Auto-Reply's cursor
+//! auto-repeat lived in a `Local<Repeat>` inside a `SimSet` system for that
+//! whole time, and nothing could see it.
 
 use bevy::prelude::*;
 use bevy::shader::Shader;
@@ -282,6 +300,33 @@ fn record_windowed(bot: Bot) -> Replay {
 /// See `sim::RunClock` and
 /// [`a_run_does_not_depend_on_how_long_the_app_was_up_before_it`].
 fn record_windowed_after_menu(bot: Bot, menu_ticks: u32) -> Replay {
+    let mut app = windowed_app(bot);
+    // The menu dwell: the studio logo, the title, the how-to-play screen.
+    for _ in 0..menu_ticks {
+        app.update();
+    }
+    // Proved, not assumed. If this app ever stopped advancing `Time<Fixed>`
+    // outside `Playing` — a different `TimeUpdateStrategy`, a run condition
+    // on the fixed loop — the dwell would cost 1 319 updates and probe
+    // nothing, and the row below would go green for the wrong reason.
+    let elapsed_before_run = app.world().resource::<Time<Fixed>>().elapsed();
+    assert!(
+        menu_ticks == 0 || elapsed_before_run >= tick_duration() * menu_ticks,
+        "the menu dwell did not advance Time<Fixed>, so this row probes \
+         nothing: {elapsed_before_run:?} after {menu_ticks} ticks"
+    );
+    play_one_run(&mut app, bot)
+}
+
+/// The windowed-shaped `App`, built and stepped once, with this run's seed
+/// staged and no run started yet.
+///
+/// Split out of [`record_windowed_after_menu`] so a test can drive **more
+/// than one run through the same `App`** — see
+/// [`a_second_run_in_the_same_app_reproduces_the_first`]. Everything that
+/// makes the app windowed-shaped lives here; everything that happens to a
+/// run lives in [`play_one_run`].
+fn windowed_app(bot: Bot) -> App {
     let mut app = build_headless_app();
     // The real `src/assets/` decorators, on hand-made asset stores.
     // `build_headless_app` is `MinimalPlugins`, so none of this exists by
@@ -333,20 +378,32 @@ fn record_windowed_after_menu(bot: Bot, menu_ticks: u32) -> Replay {
     app.add_systems(Update, (tick_fade, count_fade_busy));
     app.world_mut().resource_mut::<PendingSeed>().0 = Some(SELFTEST_SEED);
     app.update();
-    // The menu dwell: the studio logo, the title, the how-to-play screen.
-    for _ in 0..menu_ticks {
-        app.update();
-    }
-    // Proved, not assumed. If this app ever stopped advancing `Time<Fixed>`
-    // outside `Playing` — a different `TimeUpdateStrategy`, a run condition
-    // on the fixed loop — the dwell would cost 1 319 updates and probe
-    // nothing, and the row below would go green for the wrong reason.
-    let elapsed_before_run = app.world().resource::<Time<Fixed>>().elapsed();
-    assert!(
-        menu_ticks == 0 || elapsed_before_run >= tick_duration() * menu_ticks,
-        "the menu dwell did not advance Time<Fixed>, so this row probes \
-         nothing: {elapsed_before_run:?} after {menu_ticks} ticks"
-    );
+    app
+}
+
+/// One run, start to sealed replay, in an `App` [`windowed_app`] built and
+/// left sitting outside `Playing` with `PendingSeed` staged.
+///
+/// Called once per app by every row but
+/// [`a_second_run_in_the_same_app_reproduces_the_first`], which calls it
+/// twice.
+fn play_one_run(app: &mut App, bot: Bot) -> Replay {
+    // Rewind the **bot's** clock, one frame before `begin_run` rewinds the
+    // sim's. Every script in the table is a pure function of `SimTick`, and
+    // `PreUpdate` runs before `StateTransition` — so on the frame the
+    // transition applies, the script would still see the *previous* run's
+    // final tick index and press the wrong button for exactly one tick.
+    // That is an artifact of standing a `SimTick`-driven bot in for a
+    // player (a player is not a function of `SimTick`), not a divergence:
+    // it moves what the recording *records*, and a replay carries whatever
+    // was recorded. Left in, it shifts the whole input stream by one tick
+    // and the second-run row fails on a difference that has nothing to do
+    // with what the app carried over. A no-op on a fresh app, where this is
+    // already 0.
+    //
+    // A port whose bot is driven by something else (a frame counter, its
+    // own resource) rewinds that here instead.
+    app.world_mut().insert_resource(SimTick(0));
     app.world_mut()
         .resource_mut::<NextState<GameState>>()
         .set(GameState::Playing);
@@ -466,6 +523,130 @@ fn a_run_does_not_depend_on_how_long_the_app_was_up_before_it() {
          a bare verifier app, which starts its run immediately.\n{v:?} vs \
          claimed score {} checksum {}",
         warm.score, warm.checksum
+    );
+    assert_eq!(v.ticks, SELFTEST_TICKS);
+}
+
+/// **The second run in one browser session.**
+///
+/// Same bug class as the row above — state the recording app has and the
+/// verifier does not — reached from the other side. The clock row asks what
+/// the app did *before* the run; this one asks what the app kept *from the
+/// last run*. The verifier is always a fresh `App` that plays exactly one
+/// run; a browser is an `App` that plays run after run after run, and every
+/// probe in this repo (and, until 2026-09-23, in every game in the fleet)
+/// recorded exactly one run per `App` — so anything a run leaves behind was
+/// invisible to all of them, and shows up first as a production
+/// `UNVERIFIED` on somebody's second game.
+///
+/// The worked example is Grand Theft Auto-Reply, found by the fleet clock
+/// audit (grand-theft-auto-reply#8). Its `selection::handle_input` — a
+/// `SimSet` system — kept the cursor's and the crime wheel's held-direction
+/// auto-repeat in two `Local<Repeat>`s. A `Local` belongs to the *system
+/// instance*, so it lives as long as the `App` and **no run start can reach
+/// it**: run 2 began holding whatever direction the player was holding on
+/// run 1's last tick, with that direction's repeat timer already past
+/// `REPEAT_DELAY`, and so swallowed a cursor step the verifier's fresh app
+/// emits. The fix is the rule: run state lives in a resource or a component
+/// that `OnEnter(Playing)` resets — never in a `Local<_>`, a `static`, or
+/// something a plugin computed once at build time.
+///
+/// What this row does: play run 1 with the bot's script, leave `Playing`
+/// through the real state path (`GameOver` → `Menu`, `NextState` and the
+/// real `OnExit`/`OnEnter` systems, not a hand-reset world), dwell in
+/// `Menu`, then play run 2 with the **same seed and the same script** and
+/// require its `(ticks, score, checksum)` to equal a cold recording from a
+/// fresh app *and* to `verify()` bare.
+///
+/// Mutation-checked on this template: a `Local<u32>` planted in
+/// `player::move_player` that counts every tick the system has ever run and
+/// speeds the player up once the count passes `SELFTEST_TICKS` — the
+/// smallest honest model of GTAR's carried-over repeat — fails this row
+/// (run 2 scored 35 against the cold run's 30, checksum
+/// 9139603612300875264 against 2705980485870064421) while **every other row
+/// in this file stays green**, because none of them plays a second run. The
+/// `Local<_>` half of `sim::tests::no_local_state_in_sim_systems` flags the
+/// same line.
+///
+/// # Adapt this during the port
+///
+/// Point it at a bot that actually *ends* its run, if the game has a game
+/// over the script can reach, and add the state the game carries between
+/// runs to the dwell: a game whose menu animates, whose high-score table
+/// updates or whose attract mode runs the sim has more to leave behind than
+/// this template does. If a game's run 2 is *supposed* to differ from run 1
+/// (a carried-over unlock, a difficulty that ramps across runs), that is
+/// not an excuse to delete the row — it is a statement that the run's
+/// starting conditions are part of the run, and the replay has to carry
+/// them.
+#[test]
+fn a_second_run_in_the_same_app_reproduces_the_first() {
+    // The game-over screen, and the pause before pressing Start again.
+    // Deliberately not round, and not a multiple of anything in the sim.
+    const BETWEEN_RUNS_TICKS: u32 = 373;
+
+    let cold = record_windowed(Bot::Selftest);
+
+    let mut app = windowed_app(Bot::Selftest);
+    let first = play_one_run(&mut app, Bot::Selftest);
+    assert_eq!(
+        (first.ticks, first.score, first.checksum),
+        (cold.ticks, cold.score, cold.checksum),
+        "vacuity: run 1 of the two-run app already differs from the cold \
+         recording, so nothing run 2 does below is about being second. Both \
+         apps come out of the same windowed_app()."
+    );
+
+    // Out through the real state path: `play_one_run` has already set
+    // `GameOver`, so this is the game-over screen's own "back to title".
+    app.world_mut()
+        .resource_mut::<NextState<GameState>>()
+        .set(GameState::Menu);
+    app.update();
+    assert_eq!(
+        *app.world().resource::<State<GameState>>().get(),
+        GameState::Menu,
+        "the app did not return to Menu, so run 2 below is not a second run"
+    );
+    for _ in 0..BETWEEN_RUNS_TICKS {
+        app.update();
+    }
+
+    // Run 2: the same seed, staged the way a host stages it, and the same
+    // script — which is driven by `SimTick`, and `begin_run` rewinds that.
+    app.world_mut().resource_mut::<PendingSeed>().0 = Some(SELFTEST_SEED);
+    let second = play_one_run(&mut app, Bot::Selftest);
+    assert_eq!(
+        second.seed, cold.seed,
+        "sanity: run 2 was seeded differently from the cold run, so the \
+         comparison below was never about what the app carried over"
+    );
+    assert_eq!(
+        second.runs, cold.runs,
+        "sanity: the bot pressed different buttons on run 2, so the \
+         comparison below was never about what the app carried over. The \
+         scripts are driven by SimTick, which begin_run rewinds, so this \
+         should be impossible — check what the dwell left in VirtualInput."
+    );
+    assert_eq!(
+        (second.ticks, second.score, second.checksum),
+        (cold.ticks, cold.score, cold.checksum),
+        "the same seed and the same inputs produced a different run the \
+         second time through the same App. Some sim system is carrying run \
+         state the verifier's fresh app does not have — a `Local<_>` (the \
+         one that has shipped: a held-direction auto-repeat), a `static`, a \
+         cache a plugin built once, or a resource that `OnEnter(Playing)` \
+         forgets to reset. Move it into run state `begin_run`/`reset_run` \
+         clears; see determinism rule 7 and sim::tests::\
+         no_local_state_in_sim_systems."
+    );
+    let v = verify(&second);
+    assert!(
+        v.matches,
+        "the second run played in one App did not reproduce in a bare \
+         verifier app, which always plays exactly one run.\n{v:?} vs \
+         claimed score {} checksum {}",
+        second.score, second.checksum
     );
     assert_eq!(v.ticks, SELFTEST_TICKS);
 }

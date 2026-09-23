@@ -219,6 +219,34 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
    same checksum every time — nothing the clock drove had reached anything
    the checksum folds. A green after-menu row on an idle bot means nothing;
    point the dwell at a run that scores, spawns and collides.
+
+   **And run state may not outlive the run.** The clock above is what the
+   app did *before* the run; this is what the app kept *from the last one*,
+   and it is the same rule: the verifier is always a **fresh app that plays
+   exactly one run**, and the browser is not. So a run's state lives in a
+   resource or a component that `OnEnter(Playing)` resets — never in a
+   `Local<_>`, never in a `static` or a `thread_local!`, never in a cache a
+   plugin computed once at build time, and never in a resource nothing
+   rewinds. A `Local<T>` belongs to the *system instance*: it lives as long
+   as the `App`, and no run start can reach it — not `OnEnter(Playing)`,
+   not `begin_run`, not a `reset_run` however careful.
+
+   The worked example is Grand Theft Auto-Reply, 2026-09-23. Its
+   `selection::handle_input` — a `SimSet` system — kept the cursor's and the
+   crime wheel's held-direction auto-repeat in two `Local<Repeat>`s. A
+   second run played in one browser session therefore began holding
+   whatever direction the player was holding on run 1's last tick, with
+   that direction's repeat timer already past `REPEAT_DELAY`, and swallowed
+   the cursor step a fresh app emits on its first tick. It is now a
+   resource `reset_run` clears. Nothing in the fleet could see it: every
+   probe in every repo recorded exactly **one run per `App`**, so they all
+   agreed with the verifier by accident, exactly as they all agreed with it
+   about the clock.
+   `tests/windowed_shape.rs::a_second_run_in_the_same_app_reproduces_the_first`
+   is the row that is not blind — it plays run 1, leaves through the real
+   `GameOver` → `Menu` path, dwells, then plays run 2 with the same seed
+   and script and requires it to equal a cold recording and to verify bare
+   — and `sim::tests::no_local_state_in_sim_systems` is the greppable half.
 8. **Never read `pause_just_pressed` in a sim system.** The recorder masks
    `Buttons::PAUSE` out of every recorded tick (a replayed pause would
    freeze the sim it is meant to reproduce), so it is the one bit a replay
@@ -262,7 +290,16 @@ The greppable ones (`rand::rng()`, `from_os_rng`, `thread_rng`, `SmallRng`,
 on the line is the opt-out for a genuine non-sim read, and
 `tools/rollout-replay.sh` prints an advisory for the wider family
 (`elapsed_wrapping`, `Instant::now`, `SystemTime`, `Date.now`) that the Rust
-test leaves to review. The rest — `SimSet` placement, `TickInput` usage,
+test leaves to review. Rule 7's other half, run state that outlives the run,
+is enforced by `sim::tests::no_local_state_in_sim_systems`, which flags
+`Local<` in any file whose systems `SimSet` runs (the files that register a
+chain `.in_set(..SimSet)`, plus the modules those registrations name);
+`allow-local: <reason>` on the line is its opt-out, for a `Local` in an
+`Update` system that happens to share the file. `tools/rollout-replay.sh`
+advises on the same thing during a port. Both scans are greps, and both have
+a behavioural row in `tests/windowed_shape.rs` that can see what a grep
+cannot — a clock reached through a helper, run state carried in a resource
+nothing resets. The rest — `SimSet` placement, `TickInput` usage,
 checksum folding, run-end latching — aren't mechanically checkable and need
 review.
 

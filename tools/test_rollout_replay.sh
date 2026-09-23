@@ -121,6 +121,12 @@
 #       systems and lost a production run to it), while the template's own
 #       benign wall-clock hits — the dev recorder and the replay header stamp
 #       — must not be, and an `allow-app-clock` marker must silence it.
+#   (v) the sim-Local advisory: a file whose systems SimSet runs must be
+#       named when it keeps state in a `Local<_>` (Grand Theft Auto-Reply's
+#       cursor auto-repeat did, and a second run in one browser session
+#       began with run 1's last held direction), while the dev recorder's
+#       dedupe boxes under `src/game/record/` — which no SimSet system runs
+#       — must not be, and an `allow-local` marker must silence it.
 #
 # Usage: tools/test_rollout_replay.sh [--no-game]
 #
@@ -1220,6 +1226,28 @@ grep -q "tests/windowed_shape.rs is NEW in this checkout" "$SCRATCH_ROOT/p-outpu
   || fail "(p) writing a new tests/windowed_shape.rs was not called out in the summary"
 pass "(p) an absent tests/windowed_shape.rs is written and announced"
 
+# Every ported game has ADAPTED this file (its own bots, its own counters),
+# so --upgrade will never refresh it — which is how a game keeps a copy that
+# predates the second-run row without ever being told. The notice is
+# self-limiting: it is keyed on the row's own name, so it stops the day the
+# row is ported across.
+COPY_P1B="$SCRATCH_ROOT/template-copy-p1b"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_P1B"
+perl -pi -e 's/^fn a_second_run_in_the_same_app_reproduces_the_first\(\) \{$/fn a_second_run_adapted_away() {/' \
+  "$COPY_P1B/tests/windowed_shape.rs"
+perl -pi -e 's/a_second_run_in_the_same_app_reproduces_the_first/a_second_run_adapted_away/g' \
+  "$COPY_P1B/tests/windowed_shape.rs"
+grep -q 'a_second_run_in_the_same_app_reproduces_the_first' "$COPY_P1B/tests/windowed_shape.rs" \
+  && fail "(p) setup: the second-run row was not renamed out of the copy"
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_P1B" >"$SCRATCH_ROOT/p1b-output.txt" 2>&1
+grep -q "predates a_second_run_in_the_same_app_reproduces_the_first" "$SCRATCH_ROOT/p1b-output.txt" \
+  || fail "(p) an adapted windowed_shape.rs without the second-run row drew no HAND EDIT"
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_P" >"$SCRATCH_ROOT/p1c-output.txt" 2>&1
+if grep -q "predates a_second_run_in_the_same_app_reproduces_the_first" "$SCRATCH_ROOT/p1c-output.txt"; then
+  fail "(p) the second-run notice fires on a copy that already has the row"
+fi
+pass "(p) an adapted copy missing the second-run row is told, once it is there is not"
+
 COPY_P2="$SCRATCH_ROOT/template-copy-p2"
 snapshot_as_git_baseline "$TEMPLATE" "$COPY_P2"
 rm "$COPY_P2/tests/windowed_shape.rs"
@@ -1431,6 +1459,57 @@ if grep -q "sim code reads a clock the replay does not carry" "$SCRATCH_ROOT/t2-
   fail "(t) an allow-app-clock marked read was still flagged"
 fi
 pass "(t) an allow-app-clock marker silences the advisory"
+
+# ---------------------------------------------------------------------------
+# (v) The sim-Local advisory.
+#
+# Same bug class as (t) from the other end: state the recording app has and
+# the verifier does not, except this one is carried from the LAST RUN rather
+# than from before the run. A `Local<T>` belongs to the system instance, so
+# it lives as long as the App and no run start can reach it; the verifier
+# plays exactly one run per app and the browser does not. Grand Theft
+# Auto-Reply kept its cursor auto-repeat in two `Local<Repeat>`s inside a
+# SimSet system (grand-theft-auto-reply#8). See port-checklist.md rule 7.
+# ---------------------------------------------------------------------------
+COPY_V="$SCRATCH_ROOT/template-copy-v"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_V"
+perl -pi -e 's/^    mut query: Query<&mut Transform, With<Player>>,$/    mut query: Query<&mut Transform, With<Player>>,\n    mut seen: Local<u32>,/' \
+  "$COPY_V/src/game/player.rs"
+grep -q 'Local<u32>' "$COPY_V/src/game/player.rs" \
+  || fail "(v) setup: move_player did not get a Local"
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_V" >"$SCRATCH_ROOT/v-output.txt" 2>&1
+grep -q "src/game/player.rs:Local<" "$SCRATCH_ROOT/v-output.txt" \
+  || fail "(v) a sim file keeping state in a Local was not named by the advisory"
+grep -q "rule 7" "$SCRATCH_ROOT/v-output.txt" \
+  || fail "(v) the advisory does not point at the rule it is about"
+grep -q "a_second_run_in_the_same_app_reproduces_the_first" "$SCRATCH_ROOT/v-output.txt" \
+  || fail "(v) the advisory does not name the probe that answers it"
+pass "(v) a sim file keeping state in a Local is named, with the rule and the probe"
+
+# The template's own hits are the dev recorder's dedupe boxes under
+# `src/game/record/`, which no SimSet system runs. Naming them would make the
+# advisory noise on every game for ever, and would also mean the scope
+# derivation had collapsed to "every file". (a)'s output is the template
+# against itself.
+if grep -q "a sim system's file keeps state in a Local" "$SCRATCH_ROOT/a-output.txt"; then
+  fail "(v) the advisory fires on the template's own checkout (record/ is not a sim file)"
+fi
+grep -q "src/game/record/mod.rs" "$SCRATCH_ROOT/v-output.txt" \
+  && fail "(v) the dev recorder's Locals were named alongside the planted one"
+pass "(v) the template's own non-sim Locals are not named"
+
+# A Local a port has justified must not nag on every later upgrade.
+COPY_V2="$SCRATCH_ROOT/template-copy-v2"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_V2"
+perl -pi -e 's/^    mut query: Query<&mut Transform, With<Player>>,$/    mut query: Query<&mut Transform, With<Player>>,\n    mut seen: Local<u32>, \/\/ allow-local: dev only/' \
+  "$COPY_V2/src/game/player.rs"
+grep -q 'allow-local' "$COPY_V2/src/game/player.rs" \
+  || fail "(v) setup: the marked Local was not planted"
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_V2" >"$SCRATCH_ROOT/v2-output.txt" 2>&1
+if grep -q "a sim system's file keeps state in a Local" "$SCRATCH_ROOT/v2-output.txt"; then
+  fail "(v) an allow-local marked Local was still flagged"
+fi
+pass "(v) an allow-local marker silences the advisory"
 
 # ---------------------------------------------------------------------------
 # (u) The run-clock wiring, on --upgrade.
