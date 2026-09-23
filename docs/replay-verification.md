@@ -164,9 +164,61 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
    registered in `SimSet` right after `sim::checksum_tick` — this
    template's `player::checksum_player` is the example (folds `lives`, then
    the player transform bit-exactly).
-7. **No `Instant`/`SystemTime`/frame count in sim logic.** Wall-clock and
-   frame-count reads aren't reproducible by a headless re-simulation driven
-   by `TimeUpdateStrategy::ManualDuration`.
+7. **A sim system may read only what the replay carries**: `TickInput`,
+   `RunSeed`/`GameRng`, its own run state, and the tick-derived clock
+   (`sim::RunClock`). Never `Time::elapsed*`, never a wall clock
+   (`Instant::now`, `SystemTime`, `Date.now`), never an app-lifetime
+   counter (frame count, a resource that only ever increments in `Update`).
+   A replay carries a seed and a stream of ticks; anything else a sim system
+   reads is a number the verifier has to guess, and it guesses whatever a
+   fresh app happens to hold.
+
+   **`Time::elapsed_secs()` is the one that has shipped.** Inside
+   `FixedUpdate`, `Res<Time>` is `Time<Fixed>`, and `Time<Fixed>::elapsed()`
+   counts from **app** start — nothing resets it when a run begins. So a
+   system that drives a drift, a weave, an orbit or a lunge phase off it
+   gives the player a different world depending on how long they watched the
+   studio logo and the menu, while `replay::run_verify_app` enters `Playing`
+   on its second `app.update()` under a zero-delta strategy and so always
+   re-simulates at offset **zero**. `Time::delta_secs()` stays fine and is
+   the reason the whole `Res<Time>` parameter is still allowed: inside
+   `FixedUpdate` it is always the fixed timestep. Use `sim::RunClock`
+   (`secs`, `ticks`) for anything phase-like; `sim::sync_run_clock` restates
+   it from `SimTick` at the head of `SimSet`, so it is a pure function of
+   the tick index and cannot drift.
+
+   The worked example is Dive Rise, 2026-09-23. A real run submitted from
+   colecovisiongx.com came back `UNVERIFIED / mismatch`: 11 877 ticks
+   claiming score 144, re-simulating to 56 in the deployed `verify.zip`, in
+   a locally rebuilt wasm one and natively — three verifiers agreeing with
+   each other and disagreeing with the browser, which is what says the
+   *recording* side is the outlier. Nine sim systems read
+   `Time::elapsed_secs()`: `food::move_food`,
+   `hunters::comb_jelly::jelly_drift`, `hunters::amphipod::amphipod_motion`,
+   `hunters::cutlassfish::cutlass_motion`, `hunters::viperfish::viper_attack`,
+   `companions::krill_swarm::update`, `companions::jellyfish::update`,
+   `behaviors::schooling::orbit_mates` and `events::squid_pack::update`.
+   **One extra tick of menu time is enough**: re-simulating that replay with
+   the pre-run `Time<Fixed>` advanced by 0/1/2/3 ticks gives scores
+   56/38/36/40 and four different checksums (60 → 50, 600 → 54, 1800 → 43).
+
+   Every probe the fleet had was blind to it, and all for the same reason:
+   `selftest::record_scripted_run`, both committed `.gxr` fixtures,
+   `tests/windowed_shape.rs`'s `record_windowed` and the `--playtest`
+   harness all enter `Playing` in the app's first frames, exactly like the
+   verifier, so their offset agreed with it by accident. The row that is not
+   blind is
+   `tests/windowed_shape.rs::a_run_does_not_depend_on_how_long_the_app_was_up_before_it`,
+   which dwells 1 319 fixed ticks in `Menu` first and requires the recorded
+   run to equal the cold one and to verify bare.
+
+   **And the probe has to be long and busy.** A short, quiet run does not
+   reproduce this class of bug: a 1 720-tick browser run of the *broken*
+   Dive Rise build that ate nothing and took no damage verified `matches:
+   true`, and re-simulating it at eight different clock offsets gave the
+   same checksum every time — nothing the clock drove had reached anything
+   the checksum folds. A green after-menu row on an idle bot means nothing;
+   point the dwell at a run that scores, spawns and collides.
 8. **Never read `pause_just_pressed` in a sim system.** The recorder masks
    `Buttons::PAUSE` out of every recorded tick (a replayed pause would
    freeze the sim it is meant to reproduce), so it is the one bit a replay
@@ -204,9 +256,15 @@ feeder does. Host pauses (`gx:set`) are covered by the same rule.
 
 The greppable ones (`rand::rng()`, `from_os_rng`, `thread_rng`, `SmallRng`,
 `std::collections::HashMap`) are enforced by the forbidden-names test in
-`src/game/sim.rs` (`cargo test`); the rest — `SimSet` placement, `TickInput`
-usage, checksum folding, wall-clock reads, run-end latching — aren't
-mechanically checkable and need review.
+`src/game/sim.rs` (`cargo test`), and rule 7's clock family
+(`.elapsed()`, `.elapsed_secs()`, `.elapsed_secs_f64()`) by
+`sim::tests::no_app_lifetime_clock_in_sim_code` beside it — `allow-app-clock`
+on the line is the opt-out for a genuine non-sim read, and
+`tools/rollout-replay.sh` prints an advisory for the wider family
+(`elapsed_wrapping`, `Instant::now`, `SystemTime`, `Date.now`) that the Rust
+test leaves to review. The rest — `SimSet` placement, `TickInput` usage,
+checksum folding, run-end latching — aren't mechanically checkable and need
+review.
 
 ## Keeping a ported game current
 

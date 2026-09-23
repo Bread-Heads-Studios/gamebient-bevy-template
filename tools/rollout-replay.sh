@@ -445,6 +445,51 @@ if [ -d "$GAME/src/game" ]; then
   fi
 fi
 
+# Advisory, and the fourth of the four greps: a sim system may read only what
+# the replay carries -- TickInput, RunSeed/GameRng, its own run state and the
+# tick-derived clock (rule 7). An app-lifetime or wall clock is not in that
+# list.
+#
+# `Time::elapsed_secs()` is the one that has actually shipped. Inside
+# FixedUpdate `Res<Time>` is `Time<Fixed>`, and `Time<Fixed>::elapsed()`
+# counts from APP start -- nothing resets it when a run begins -- so a sim
+# system that drives a phase off it forks on how long the player watched the
+# logo and the menu, while the verifier enters Playing on its second update
+# and so always re-simulates at offset zero. Dive Rise lost a production run
+# to exactly this in nine sim systems: 11 877 ticks claiming 144,
+# re-simulating to 56, with ONE extra tick of menu time enough to change the
+# whole run. `delta_secs()` is fine and deliberately not matched.
+#
+# Reports `<file>:<needle>` pairs over `src/game/` and subtracts whatever the
+# same scan finds in this template, so the inherited dev recorder
+# (`src/game/record/audio.rs`) and the wall-clock stamp `replay/recorder.rs`
+# puts on the replay HEADER are never named. Lines carrying `allow-app-clock`
+# are skipped, so a read a port has already justified does not nag on every
+# upgrade. Like the other three advisories this is a grep, not a verdict:
+# a `.elapsed()` on a game-owned Timer or Stopwatch the sim itself ticks is
+# fine, and presentation may read whatever it likes.
+app_clock_reads() {
+  local root="$1" f
+  [ -d "$root/src/game" ] || return 0
+  while read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in */autopilot.rs) continue ;; esac
+    grep -hv 'allow-app-clock' "$f" 2>/dev/null \
+      | grep -ohE '\.elapsed_secs_f64\(\)|\.elapsed_secs\(\)|\.elapsed\(\)|elapsed_wrapping|Instant::now|SystemTime|Date\.now' \
+      | sort -u \
+      | while read -r call; do printf '%s:%s\n' "${f#"$root/"}" "$call"; done
+  done < <(find "$root/src/game" -name '*.rs' 2>/dev/null | sort)
+}
+if [ -d "$GAME/src/game" ]; then
+  CLOCK_ADVISORY="$(comm -13 \
+    <(app_clock_reads "$TEMPLATE" | sort -u) \
+    <(app_clock_reads "$GAME" | sort -u) | tr '\n' ' ')"
+  CLOCK_ADVISORY="${CLOCK_ADVISORY% }"
+  if [ -n "$CLOCK_ADVISORY" ]; then
+    echo "HAND EDIT (advisory): sim code reads a clock the replay does not carry — ${CLOCK_ADVISORY}. See port-checklist.md rule 7, \"a sim system may read only what the replay carries\". Inside FixedUpdate Res<Time> is Time<Fixed>, and Time<Fixed>::elapsed() counts from APP start: nothing resets it when a run begins, so a sim system that drives a drift, weave, orbit or lunge phase off it gives the player a different world depending on how long they sat in the menu, while replay::run_verify_app enters Playing on its second update and always re-simulates at offset ZERO. Dive Rise shipped that in nine sim systems and a real run came back UNVERIFIED: 11 877 ticks claiming score 144, re-simulating to 56 in three independent verifiers, with one extra tick of menu time enough to change the whole run. Replace the read with sim::RunClock (.secs / .ticks), which sim::sync_run_clock restates from sim::SimTick at the head of SimSet — keep that system second in the chain, right after sim::advance_tick. delta_secs() is fine and is not matched here. This is a grep: a wall-clock stamp outside SimSet, a dev harness or a presentation system may read any of these, and the marker allow-app-clock on the line silences it once you have checked. The tests that answer it are sim::tests::no_app_lifetime_clock_in_sim_code and tests/windowed_shape.rs::a_run_does_not_depend_on_how_long_the_app_was_up_before_it — and that row must be LONG and BUSY, because a 1 720-tick run that ate nothing verified green on the broken build at eight different clock offsets."
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # Copy the feature files verbatim. A file that already exists and isn't
 # byte-identical to the template's is left alone (HAND EDIT), never
@@ -1022,6 +1067,42 @@ sub spit {
                 # the registration list, and two hand edits saying the same
                 # thing is how a list stops being read.
                 hand_edit("src/game/mod.rs: add .init_resource::<sim::SpawnCounter>() to GamePlugin::build (no .init_resource::<sim::RunOver>() line to hang it off). sim::begin_run takes ResMut<SpawnCounter>; without the registration OnEnter(Playing) dies with Bevy's nameless \"Parameter ... failed validation: Resource does not exist\". SpawnOrder/SpawnCounter is the stable sorting key determinism rule 1 asks order-sensitive sim systems to use.");
+            }
+        }
+
+        # ---- .init_resource::<sim::RunClock>() and sim::sync_run_clock ----
+        #
+        # Same hazard as SpawnCounter above, and the same shape: `sim::begin_run`
+        # takes `ResMut<RunClock>`, so a game that picks up the current sim.rs
+        # without registering the resource dies on OnEnter(Playing) with
+        # Bevy's nameless "Parameter ... failed validation".
+        #
+        # The system is the other half, and the half that fails SILENTLY:
+        # without `sim::sync_run_clock` chained at the head of SimSet the
+        # clock stays at 0 for the whole run, so a system ported to read it
+        # gets a frozen phase instead of a desync. Inserted right after
+        # `sim::advance_tick,` where that line is recognisable, HAND EDIT
+        # where it is not. See docs/replay-verification.md rule 7.
+        if ($c !~ /init_resource::<sim::RunClock>/) {
+            my $anchor = ".init_resource::<sim::SimTick>()";
+            my $idx = index($c, $anchor);
+            if ($idx < 0) {
+                $anchor = ".init_resource::<sim::RunOver>()";
+                $idx = index($c, $anchor);
+            }
+            if ($idx >= 0) {
+                my $line_start = rindex($c, "\n", $idx) + 1;
+                my $indent = substr($c, $line_start, $idx - $line_start);
+                substr($c, $idx + length($anchor), 0) = "\n$indent.init_resource::<sim::RunClock>()";
+            } elsif ($upgrade && $suppress_ported_noise) {
+                hand_edit("src/game/mod.rs: add .init_resource::<sim::RunClock>() to GamePlugin::build (no .init_resource::<sim::SimTick>() or .init_resource::<sim::RunOver>() line to hang it off). sim::begin_run takes ResMut<RunClock>; without the registration OnEnter(Playing) dies with Bevy's nameless \"Parameter ... failed validation: Resource does not exist\".");
+            }
+        }
+        if ($c !~ /sim::sync_run_clock/) {
+            if ($c =~ s/^(\s*)sim::advance_tick,$/$1sim::advance_tick,\n$1sim::sync_run_clock,/m) {
+                hand_edit("src/game/mod.rs: sim::sync_run_clock was chained straight after sim::advance_tick at the head of SimSet — check it landed inside the CHAINED tuple, and keep it second whatever else this game puts there. It restates sim::RunClock from sim::SimTick, which is what any phase-like sim system must read instead of Time::elapsed_secs() (app-lifetime, not run-lifetime — see rule 7). Anything in this game still reading Time::elapsed_secs() inside SimSet is a production UNVERIFIED waiting to happen; the advisory above names them.");
+            } else {
+                hand_edit("src/game/mod.rs: chain sim::sync_run_clock straight after sim::advance_tick at the head of the SimSet tuple (this script could not find a plain 'sim::advance_tick,' line to hang it off). Without it sim::RunClock stays 0 for the whole run — a SILENT failure, not a loud one — and any sim system ported onto it gets a frozen phase. See docs/replay-verification.md rule 7.");
             }
         }
 

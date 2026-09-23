@@ -9,6 +9,16 @@
 //! is this template's example. See docs/replay-verification.md, determinism
 //! rule 6.
 //!
+//! [`RunClock`] is the third: **the sim owns its own clock**. Inside
+//! `FixedUpdate`, `Res<Time>` is `Time<Fixed>`, and `Time<Fixed>::elapsed()`
+//! counts from *app* start — nothing resets it when a run begins — so a sim
+//! system that reads it forks on how long the player watched the studio
+//! logo and the menu before pressing Start. In a sim system `Res<Time>` may
+//! be used for [`Time::delta_secs`] **only**, which inside `FixedUpdate` is
+//! always the fixed timestep; anything phase-like reads [`RunClock`], which
+//! [`sync_run_clock`] restates from [`SimTick`] at the head of `SimSet`. See
+//! docs/replay-verification.md, determinism rule 7.
+//!
 //! [`RunOver`] is the other fleet-wide piece here: a windowed game leaves
 //! `Playing` through a 0.4 s `ScreenFade`, which runs in `Update` on the
 //! *frame* delta, so the sim would keep ticking (and recording) for a
@@ -42,6 +52,76 @@ pub fn tick_duration() -> Duration {
 /// Sim ticks since the run began (0 before the first tick).
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SimTick(pub u32);
+
+/// Seconds since this run's first sim tick — **the sim's own clock**, and
+/// the only clock a `SimSet` system may read.
+///
+/// Inside `FixedUpdate`, `Res<Time>` is `Time<Fixed>`, and
+/// `Time<Fixed>::elapsed()` counts from **app start**. Nothing resets it
+/// when a run begins, so its value on the run's first tick is however many
+/// fixed ticks the app had already run: the studio logo, the title screen,
+/// the how-to-play card, every second the player spent deciding. A sim
+/// system that drives a drift, a weave, an orbit or a lunge phase off it
+/// therefore gives the player a different world depending on how long they
+/// sat in the menu — while `replay::run_verify_app` enters `Playing` on its
+/// second `app.update()` under a zero-delta `TimeUpdateStrategy`, so in the
+/// verifier that offset is always **zero**.
+///
+/// That is what cost Dive Rise a production `UNVERIFIED / mismatch`: 11 877
+/// ticks claiming score 144, re-simulating to 56 in the deployed verifier,
+/// in a locally rebuilt wasm one and natively alike — three verifiers
+/// agreeing with each other and disagreeing with the browser. Nine sim
+/// systems read `Time::elapsed_secs()`. **One extra tick of menu time is
+/// enough to change the whole run**: re-simulating that replay with the
+/// pre-run `Time<Fixed>` advanced by 0/1/2/3 ticks gives scores 56/38/36/40
+/// and four different checksums.
+///
+/// Every probe in this repo was blind to it for one reason — they all enter
+/// `Playing` in the app's first frames, exactly like the verifier does, so
+/// their offset agreed with it by accident: `selftest::record_scripted_run`,
+/// both committed `.gxr` fixtures, `tests/windowed_shape.rs`'s
+/// `record_windowed` and the `--playtest` harness. The row that is not blind
+/// is `tests/windowed_shape.rs::a_run_does_not_depend_on_how_long_the_app_was_up_before_it`,
+/// which dwells in `Menu` first.
+///
+/// So the sim owns the clock. [`sync_run_clock`] derives it from [`SimTick`]
+/// at the head of `SimSet`, which makes it exactly reproducible from the
+/// replay — the tick index is the one thing a recorded run and its replay
+/// always agree on — and impossible to drift from the tick count.
+/// `Time::delta_secs()` stays fine and is deliberately not forbidden: inside
+/// `FixedUpdate` it is always the fixed timestep.
+///
+/// `ticks` is the same number as [`SimTick`], carried here so a game whose
+/// phases are integer (every 90 ticks, alternate on parity) never has to
+/// reach for a float at all.
+///
+/// The greppable half of this is enforced by the
+/// `no_app_lifetime_clock_in_sim_code` test below (`cargo test`) and advised
+/// on by `tools/rollout-replay.sh`; see docs/replay-verification.md,
+/// determinism rule 7.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq)]
+pub struct RunClock {
+    /// Seconds since the run's first tick.
+    pub secs: f32,
+    /// Ticks since the run began — the same number as [`SimTick`].
+    pub ticks: u64,
+}
+
+/// Head of `SimSet`, chained right after [`advance_tick`]: restates
+/// [`RunClock`] as "ticks so far x the fixed timestep", before anything can
+/// read it.
+///
+/// Computed from the `Duration` rather than from a `TICK_DT` constant so it
+/// carries the same scale `Time<Fixed>::elapsed_secs()` did
+/// (`Duration::as_secs_f32` is plain IEEE f32 arithmetic on the nanosecond
+/// count, so it is bit-exact on every platform this fleet builds for), and
+/// **recomputed rather than accumulated** so it cannot drift from [`SimTick`]
+/// however many ticks a run lasts. [`begin_run`] zeroes it, so a second run
+/// in the same app starts where the first one did.
+pub fn sync_run_clock(tick: Res<SimTick>, mut clock: ResMut<RunClock>) {
+    clock.secs = (tick_duration() * tick.0).as_secs_f32();
+    clock.ticks = u64::from(tick.0);
+}
 
 /// The ordered fixed-tick chain. Everything that mutates run state goes
 /// here, in order; nothing in `Update` writes run state.
@@ -278,8 +358,9 @@ impl Checksum {
 
 /// `OnEnter(Playing)`: take the pending host seed (or draw a local one),
 /// reseed the RNG, zero the tick, checksum and [`SpawnCounter`], reset the
-/// tick-input press-edge tracker, and clear the [`RunOver`] latch the
-/// previous run may have left set. Without the tick-input reset, `collect_tick_input` would
+/// tick-input press-edge tracker, zero [`RunClock`], and clear the
+/// [`RunOver`] latch the previous run may have left set. Without the
+/// tick-input reset, `collect_tick_input` would
 /// derive tick 1's `just_pressed` against whatever was held in the menu
 /// (live play) or nothing at all (`verify()`'s fresh `App`) — two different
 /// starting points that would make the same first tick reproduce different
@@ -294,6 +375,7 @@ pub fn begin_run(
     mut sim_prev: ResMut<SimPrev>,
     mut over: ResMut<RunOver>,
     mut spawn: ResMut<SpawnCounter>,
+    mut clock: ResMut<RunClock>,
 ) {
     *seed = match pending.0.take() {
         Some(bytes) => RunSeed {
@@ -304,6 +386,10 @@ pub fn begin_run(
     };
     *rng = GameRng::from_seed(&seed.bytes);
     *tick = SimTick(0);
+    // Zeroed here as well as restated by `sync_run_clock`, so a system that
+    // reads it between `OnEnter(Playing)` and the run's first tick sees this
+    // run's zero rather than the previous run's last value.
+    *clock = RunClock::default();
     *sum = Checksum::default();
     *frame = TickFrame::default();
     *sim_prev = SimPrev::default();
@@ -314,7 +400,7 @@ pub fn begin_run(
     *spawn = SpawnCounter::default();
 }
 
-/// First in `SimSet`.
+/// First in `SimSet`, with [`sync_run_clock`] chained straight after it.
 pub fn advance_tick(mut tick: ResMut<SimTick>) {
     tick.0 += 1;
 }
@@ -441,6 +527,7 @@ mod tests {
         world.init_resource::<TickFrame>();
         world.init_resource::<SimPrev>();
         world.init_resource::<RunOver>();
+        world.init_resource::<RunClock>();
         world.insert_resource(SpawnCounter(17));
         world.run_system_once(begin_run).unwrap();
         assert_eq!(world.resource_mut::<SpawnCounter>().stamp(), SpawnOrder(0));
@@ -481,6 +568,7 @@ mod tests {
             .init_resource::<SimPrev>()
             .init_resource::<RunOver>()
             .init_resource::<SpawnCounter>()
+            .init_resource::<RunClock>()
             .add_systems(
                 FixedPreUpdate,
                 collect_tick_input.in_set(TickInputSet::Collect),
@@ -568,6 +656,78 @@ mod tests {
             *world.resource::<NextState<GameState>>(),
             NextState::Unchanged
         ));
+    }
+
+    #[test]
+    fn run_clock_is_the_tick_index_not_the_app_lifetime_clock() {
+        use bevy::ecs::system::RunSystemOnce;
+        // The whole point: the same tick number always means the same
+        // seconds, whatever the app happened to be doing beforehand.
+        let mut world = World::new();
+        world.init_resource::<RunClock>();
+        world.insert_resource(SimTick(0));
+        world.run_system_once(sync_run_clock).unwrap();
+        assert_eq!(world.resource::<RunClock>().secs, 0.0);
+        assert_eq!(world.resource::<RunClock>().ticks, 0);
+        world.insert_resource(SimTick(60));
+        world.run_system_once(sync_run_clock).unwrap();
+        let one_second = world.resource::<RunClock>().secs;
+        assert!(
+            (one_second - 1.0).abs() < 1e-4,
+            "60 ticks should be ~1 s, got {one_second}"
+        );
+        assert_eq!(world.resource::<RunClock>().ticks, 60);
+        // And it is a restatement of the tick, not an accumulator: running
+        // it twice on the same tick must not advance it. An accumulator
+        // would drift from `SimTick` the moment a tick ran it twice or not
+        // at all, which is the failure mode this shape removes.
+        world.run_system_once(sync_run_clock).unwrap();
+        assert_eq!(world.resource::<RunClock>().secs, one_second);
+        assert_eq!(world.resource::<RunClock>().ticks, 60);
+    }
+
+    #[test]
+    fn no_app_lifetime_clock_in_sim_code() {
+        // `Time::elapsed_secs()` inside `FixedUpdate` is `Time<Fixed>`'s
+        // elapsed, which counts from app start and not from run start — see
+        // [`RunClock`]. A sim system that reads it forks on how long the
+        // player sat in the menu, which no fixture can see (they all begin
+        // their run in the app's first frames, exactly as the verifier
+        // does) and which cost Dive Rise a production `UNVERIFIED`. Read
+        // `sim::RunClock` instead.
+        //
+        // `delta_secs()` is fine and deliberately not listed: inside
+        // `FixedUpdate` it is always the fixed timestep.
+        //
+        // Each needle below is itself an instance of what it forbids, so
+        // this line carries the marker the per-line skip honours — which
+        // exempts exactly this list and nothing else. `allow-app-clock` is
+        // also the opt-out for a genuine non-sim read (a dev harness, a
+        // wall-clock stamp on the replay header); write why on the line.
+        let forbidden = [".elapsed_secs()", ".elapsed_secs_f64()", ".elapsed()"]; // allow-app-clock
+        let mut hits = Vec::new();
+        for entry in walk(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/game"
+        ))) {
+            let text = std::fs::read_to_string(&entry).unwrap();
+            for (n, line) in text.lines().enumerate() {
+                let code = line.trim_start();
+                if code.starts_with("//") || line.contains("allow-app-clock") {
+                    continue;
+                }
+                for needle in forbidden {
+                    if code.contains(needle) {
+                        hits.push(format!("{}:{}: {}", entry.display(), n + 1, code.trim()));
+                    }
+                }
+            }
+        }
+        assert!(
+            hits.is_empty(),
+            "app-lifetime clock read in sim code (use sim::RunClock):\n{}",
+            hits.join("\n")
+        );
     }
 
     #[test]

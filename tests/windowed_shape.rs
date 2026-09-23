@@ -110,7 +110,7 @@ use bevy::shader::Shader;
 use gamebient_game::game::replay::recorder::ReplayRecorder;
 use gamebient_game::game::replay::selftest::{SELFTEST_SEED, SELFTEST_TICKS, script};
 use gamebient_game::game::replay::{Replay, build_headless_app, verify};
-use gamebient_game::game::sim::{PendingSeed, RunOver, SimTick};
+use gamebient_game::game::sim::{PendingSeed, RunOver, SimTick, tick_duration};
 use gamebient_game::game::states::GameState;
 use gamebient_game::ui::transition::ScreenFade;
 use gamebient_input::{Buttons, VirtualInput};
@@ -257,6 +257,31 @@ fn count_fade_busy(mut frames: ResMut<FadeBusyFrames>, fade: Res<ScreenFade>) {
 /// This is where a port adds its own presentation systems — see the module
 /// comment.
 fn record_windowed(bot: Bot) -> Replay {
+    record_windowed_after_menu(bot, 0)
+}
+
+/// [`record_windowed`], but with `menu_ticks` fixed ticks of **app life**
+/// burned in `Menu` before the run starts — the shape a real player's run
+/// has, and the one shape no other probe in this repo had.
+///
+/// It is here because that gap cost Dive Rise a production `UNVERIFIED`.
+/// `Time<Fixed>::elapsed()` counts from **app start**, not from run start,
+/// and nine of its sim systems drove a drift, a weave, an orbit or a lunge
+/// phase off it. Every probe the fleet had — `record_windowed` itself,
+/// `selftest::record_scripted_run`, both committed `.gxr` fixtures, the
+/// `--playtest` harness — enters `Playing` in the app's first frames,
+/// exactly like `replay::run_verify_app` does, so all of them agreed with
+/// the verifier by accident. A player who watched the studio logo, read the
+/// menu and then pressed Start did not: their run started with a different
+/// clock and re-simulated into a different game.
+///
+/// `build_headless_app` steps exactly one fixed tick per `update()`
+/// (`TimeUpdateStrategy::ManualDuration(tick_duration())`), so the dwell
+/// loop below is `menu_ticks` ticks of app life with no run in progress.
+///
+/// See `sim::RunClock` and
+/// [`a_run_does_not_depend_on_how_long_the_app_was_up_before_it`].
+fn record_windowed_after_menu(bot: Bot, menu_ticks: u32) -> Replay {
     let mut app = build_headless_app();
     // The real `src/assets/` decorators, on hand-made asset stores.
     // `build_headless_app` is `MinimalPlugins`, so none of this exists by
@@ -308,6 +333,20 @@ fn record_windowed(bot: Bot) -> Replay {
     app.add_systems(Update, (tick_fade, count_fade_busy));
     app.world_mut().resource_mut::<PendingSeed>().0 = Some(SELFTEST_SEED);
     app.update();
+    // The menu dwell: the studio logo, the title, the how-to-play screen.
+    for _ in 0..menu_ticks {
+        app.update();
+    }
+    // Proved, not assumed. If this app ever stopped advancing `Time<Fixed>`
+    // outside `Playing` — a different `TimeUpdateStrategy`, a run condition
+    // on the fixed loop — the dwell would cost 1 319 updates and probe
+    // nothing, and the row below would go green for the wrong reason.
+    let elapsed_before_run = app.world().resource::<Time<Fixed>>().elapsed();
+    assert!(
+        menu_ticks == 0 || elapsed_before_run >= tick_duration() * menu_ticks,
+        "the menu dwell did not advance Time<Fixed>, so this row probes \
+         nothing: {elapsed_before_run:?} after {menu_ticks} ticks"
+    );
     app.world_mut()
         .resource_mut::<NextState<GameState>>()
         .set(GameState::Playing);
@@ -363,6 +402,72 @@ fn record_windowed(bot: Bot) -> Replay {
         .last_run()
         .cloned()
         .expect("run sealed on OnExit(Playing)")
+}
+
+/// **The production bug this file had no row for.**
+///
+/// A real run on colecovisiongx.com came back `UNVERIFIED / mismatch`:
+/// 11 877 ticks claiming score 144, re-simulating to 56 in the site's
+/// verifier, in a locally rebuilt wasm one and natively alike. Nothing was
+/// wrong with the replay — the *recording* side was reading a clock the
+/// verifier does not have. `Time<Fixed>::elapsed()` inside `FixedUpdate`
+/// counts from **app start**, and nine of that game's sim systems drove
+/// their drift, weave, orbit and lunge phases off it, so a run's whole world
+/// depended on how long the player had been staring at the menu.
+/// `replay::run_verify_app` enters `Playing` on its second `update()`; a
+/// player does not.
+///
+/// The property this asserts is the general one: **a run's outcome does not
+/// depend on how long the app was up before it started.** It is the mutation
+/// check for `sim::RunClock` — reverting a single one of Dive Rise's nine
+/// sites failed it (score 39 against 33), and on this template planting a
+/// `time.elapsed_secs()` read in `player::move_player` fails it while every
+/// other row in this file stays green.
+///
+/// Two things about the number. 1 319 ticks is ~22 s of menu and
+/// deliberately not round: a multiple of anything in the sim could agree by
+/// luck. And it is longer than `SELFTEST_TICKS`, so the offset it introduces
+/// is larger than the run it perturbs.
+///
+/// **A short, quiet run will not reproduce this class of bug**, on this
+/// probe or in a browser. Measured on Dive Rise: a 1 720-tick browser run
+/// that ate nothing and took no damage verified `matches: true` on the
+/// *broken* build, and re-simulating it at eight different clock offsets
+/// gave the same checksum every time — nothing the clock drove had reached
+/// anything the checksum folds. So when a port adapts this file, point the
+/// dwell at a bot that actually plays: a long run that scores, spawns and
+/// collides, not one that idles.
+#[test]
+fn a_run_does_not_depend_on_how_long_the_app_was_up_before_it() {
+    const MENU_TICKS: u32 = 1319;
+    let cold = record_windowed(Bot::Selftest);
+    let warm = record_windowed_after_menu(Bot::Selftest, MENU_TICKS);
+    assert_eq!(
+        (warm.ticks, warm.score, warm.checksum),
+        (cold.ticks, cold.score, cold.checksum),
+        "the same seed and the same inputs produced a different run after \
+         {MENU_TICKS} ticks in the menu. Some sim system is reading a clock \
+         that starts with the app rather than with the run — almost always \
+         `Time::elapsed_secs()` inside `FixedUpdate`, which is \
+         `Time<Fixed>`'s app-lifetime elapsed. Read `sim::RunClock` instead; \
+         see its doc comment and determinism rule 7."
+    );
+    assert_eq!(
+        warm.runs, cold.runs,
+        "sanity: the bot pressed different buttons in the two recordings, so \
+         the comparison above was never about the clock. The scripts are \
+         driven by SimTick, which begin_run rewinds, so this should be \
+         impossible — check what the menu dwell left in VirtualInput."
+    );
+    let v = verify(&warm);
+    assert!(
+        v.matches,
+        "a run recorded after {MENU_TICKS} ticks of menu did not reproduce in \
+         a bare verifier app, which starts its run immediately.\n{v:?} vs \
+         claimed score {} checksum {}",
+        warm.score, warm.checksum
+    );
+    assert_eq!(v.ticks, SELFTEST_TICKS);
 }
 
 #[test]
