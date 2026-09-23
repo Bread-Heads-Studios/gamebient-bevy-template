@@ -111,15 +111,23 @@ pub struct RunClock {
 /// [`RunClock`] as "ticks so far x the fixed timestep", before anything can
 /// read it.
 ///
-/// Computed from the `Duration` rather than from a `TICK_DT` constant so it
-/// carries the same scale `Time<Fixed>::elapsed_secs()` did
-/// (`Duration::as_secs_f32` is plain IEEE f32 arithmetic on the nanosecond
-/// count, so it is bit-exact on every platform this fleet builds for), and
-/// **recomputed rather than accumulated** so it cannot drift from [`SimTick`]
-/// however many ticks a run lasts. [`begin_run`] zeroes it, so a second run
-/// in the same app starts where the first one did.
+/// `secs` is **`ticks as f32 / TICK_HZ as f32`**, exactly that expression and
+/// nothing cleverer. It is the formula the fleet's ports had already written
+/// by hand (`tick.0 as f32 / sim::TICK_HZ as f32` in Sundae Shooter and
+/// Gulper), so a game can migrate its own phase clock onto this one without
+/// moving a single folded bit. The obvious alternative,
+/// `(tick_duration() * n).as_secs_f32()`, differs from it by one f32 ulp on
+/// about a quarter of all tick indices (first at tick 23), which changed a
+/// folded bowl position and broke a committed fixture when it was tried. A
+/// game whose committed fixtures were recorded against a *different*
+/// formula keeps its own clock and leaves this one unread; a new port uses
+/// this one. Plain IEEE f32 division, so it is bit-exact on every platform
+/// the fleet builds for, and **recomputed rather than accumulated** so it
+/// cannot drift from [`SimTick`] however many ticks a run lasts.
+/// [`begin_run`] zeroes it, so a second run in the same app starts where
+/// the first one did.
 pub fn sync_run_clock(tick: Res<SimTick>, mut clock: ResMut<RunClock>) {
-    clock.secs = (tick_duration() * tick.0).as_secs_f32();
+    clock.secs = tick.0 as f32 / TICK_HZ as f32;
     clock.ticks = u64::from(tick.0);
 }
 
@@ -684,6 +692,23 @@ mod tests {
         world.run_system_once(sync_run_clock).unwrap();
         assert_eq!(world.resource::<RunClock>().secs, one_second);
         assert_eq!(world.resource::<RunClock>().ticks, 60);
+        // The formula is a contract, not an implementation detail: ports
+        // migrate hand-written `tick as f32 / TICK_HZ as f32` clocks onto
+        // this resource on the promise that every bit stays the same. And
+        // the doc comment's ulp warning must stay true: the Duration-based
+        // alternative really does disagree somewhere in a normal run.
+        let mut differs = false;
+        for n in 0..=3600u32 {
+            world.insert_resource(SimTick(n));
+            world.run_system_once(sync_run_clock).unwrap();
+            let secs = world.resource::<RunClock>().secs;
+            assert_eq!(secs.to_bits(), (n as f32 / TICK_HZ as f32).to_bits());
+            differs |= secs.to_bits() != (tick_duration() * n).as_secs_f32().to_bits();
+        }
+        assert!(
+            differs,
+            "the Duration formula now agrees everywhere; the doc's ulp warning is stale"
+        );
     }
 
     #[test]
