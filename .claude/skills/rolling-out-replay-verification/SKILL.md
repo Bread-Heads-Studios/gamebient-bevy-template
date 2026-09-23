@@ -383,6 +383,6 @@ so run the suite **without** the flag before pushing a script change.
 | Banner | Cause | Check |
 |---|---|---|
 | `No verifier for this game build yet` | The site's cached `BUILD` id doesn't match the replay's `build` field | Step 6/7: re-run `unzip -p dist/verify.zip BUILD` against the deployed `verify.zip`; confirm `build_verify.sh` and the game binary were built from the same commit (a dirty tree or a stale Vercel cache breaks this) |
-| `Couldn't reproduce this run` | Nondeterminism in the sim | Re-run step 5; walk the port checklist's rule-by-rule "usual suspects" (a system still in `Update`, `rand::rng()`, wall-clock reads, a `HashMap`, a transcendental-function ulp drift between native and wasm) |
+| `Couldn't reproduce this run` | Nondeterminism in the sim | Re-run step 5; walk the port checklist's rule-by-rule "usual suspects" (a system still in `Update`, `rand::rng()`, a `Time::elapsed*` read (rule 7 — it is app-lifetime, and it is what a mismatch on a *long* production run usually is), a `HashMap`, a transcendental-function ulp drift between native and wasm) |
 | `This run's seed was already used — start a new run` | The player restarted faster than the host could issue a fresh seed, or replayed an already-submitted run | Start a new run from the title screen; not a bug to fix in the game |
 | `Verifier unavailable, try again later` | The site failed to load or run the verifier module | Check the site's logs for the `verifier_error` detail (see `docs/replay-verification.md` §Server contract, "Versioning") |

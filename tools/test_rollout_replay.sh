@@ -109,6 +109,18 @@
 #       for one fixture from three libms), while the audio synth palette
 #       every game inherits from the template must not, or the advisory is
 #       noise on every game for ever.
+#   (u) the run-clock wiring: --upgrade on an already-ported copy whose
+#       mod.rs has neither .init_resource::<sim::RunClock>() nor
+#       sim::sync_run_clock must put BOTH back (exactly once, in the builder
+#       chain and second in the SimSet tuple). The resource is the loud
+#       failure (begin_run takes ResMut<RunClock>, so OnEnter(Playing) dies
+#       with Bevy's nameless "Resource does not exist"); the system is the
+#       SILENT one (RunClock stays 0 for the whole run).
+#   (t) the app-clock advisory: a sim file reading Time::elapsed_secs() must
+#       be named with a pointer to rule 7 (Dive Rise shipped that in nine sim
+#       systems and lost a production run to it), while the template's own
+#       benign wall-clock hits — the dev recorder and the replay header stamp
+#       — must not be, and an `allow-app-clock` marker must silence it.
 #
 # Usage: tools/test_rollout_replay.sh [--no-game]
 #
@@ -1368,5 +1380,92 @@ fi
 grep -q "src/game/audio/synth.rs" "$SCRATCH_ROOT/s-output.txt" \
   && fail "(s) the inherited audio synth palette was named alongside the planted call"
 pass "(s) the inherited audio synth palette is not named"
+
+# ---------------------------------------------------------------------------
+# (t) The app-clock advisory.
+#
+# Inside FixedUpdate `Res<Time>` is `Time<Fixed>`, whose `elapsed()` counts
+# from APP start and is never reset per run. Dive Rise drove nine sim systems
+# off it and a real run came back UNVERIFIED: 11 877 ticks claiming score
+# 144, re-simulating to 56 in three independent verifiers, with one extra
+# tick of menu time enough to change the whole run. See port-checklist.md
+# rule 7.
+# ---------------------------------------------------------------------------
+COPY_T="$SCRATCH_ROOT/template-copy-t"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_T"
+perl -pi -e 's/let dir = Vec2::new\(input\.move_x, input\.move_y\);/let phase = time.elapsed_secs();\n    let dir = Vec2::new(input.move_x + phase, input.move_y);/' \
+  "$COPY_T/src/game/player.rs"
+grep -q 'time\.elapsed_secs()' "$COPY_T/src/game/player.rs" \
+  || fail "(t) setup: move_player did not get an app-lifetime clock read"
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_T" >"$SCRATCH_ROOT/t-output.txt" 2>&1
+grep -q "src/game/player.rs:.elapsed_secs()" "$SCRATCH_ROOT/t-output.txt" \
+  || fail "(t) a sim file reading Time::elapsed_secs() was not named by the advisory"
+grep -q "rule 7" "$SCRATCH_ROOT/t-output.txt" \
+  || fail "(t) the advisory does not point at the rule it is about"
+grep -q "sim::RunClock" "$SCRATCH_ROOT/t-output.txt" \
+  || fail "(t) the advisory does not name the replacement"
+pass "(t) a sim file reading an app-lifetime clock is named, with the rule and the fix"
+
+# The template's own hits are a dev recorder (`src/game/record/audio.rs`) and
+# the wall-clock stamp `replay/recorder.rs` puts on the replay HEADER, which
+# no sim system reads. Naming either would make the advisory noise on every
+# game for ever. (a)'s output is the template against itself.
+if grep -q "sim code reads a clock the replay does not carry" "$SCRATCH_ROOT/a-output.txt"; then
+  fail "(t) the advisory fires on the template's own checkout (the inherited wall-clock hits must be subtracted)"
+fi
+grep -q "src/game/record/audio.rs" "$SCRATCH_ROOT/t-output.txt" \
+  && fail "(t) the inherited dev recorder was named alongside the planted read"
+grep -q "src/game/replay/recorder.rs" "$SCRATCH_ROOT/t-output.txt" \
+  && fail "(t) the replay header's wall-clock stamp was named alongside the planted read"
+pass "(t) the template's own benign wall-clock hits are not named"
+
+# A read a port has justified must not nag on every later upgrade.
+COPY_T2="$SCRATCH_ROOT/template-copy-t2"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_T2"
+perl -pi -e 's/let dir = Vec2::new\(input\.move_x, input\.move_y\);/let phase = time.elapsed_secs(); \/\/ allow-app-clock: dev only\n    let dir = Vec2::new(input.move_x + phase, input.move_y);/' \
+  "$COPY_T2/src/game/player.rs"
+grep -q 'allow-app-clock' "$COPY_T2/src/game/player.rs" \
+  || fail "(t) setup: the marked read was not planted"
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_T2" >"$SCRATCH_ROOT/t2-output.txt" 2>&1
+if grep -q "sim code reads a clock the replay does not carry" "$SCRATCH_ROOT/t2-output.txt"; then
+  fail "(t) an allow-app-clock marked read was still flagged"
+fi
+pass "(t) an allow-app-clock marker silences the advisory"
+
+# ---------------------------------------------------------------------------
+# (u) The run-clock wiring, on --upgrade.
+#
+# `sim.rs` is a verbatim copy, so an upgrade hands an already-ported game a
+# `begin_run` that takes `ResMut<RunClock>` and a `sync_run_clock` its chain
+# has never heard of. Missing resource = Bevy's nameless "Parameter ...
+# failed validation" on OnEnter(Playing). Missing system = RunClock frozen at
+# 0 for the whole run, which is silent. See docs/replay-verification.md rule 7.
+# ---------------------------------------------------------------------------
+COPY_U="$SCRATCH_ROOT/template-copy-u"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_U"
+perl -0pi -e 's/\n\s*\.init_resource::<sim::RunClock>\(\)//' "$COPY_U/src/game/mod.rs"
+perl -0pi -e 's/\n\s*\/\/ The sim.s own clock.*?\n\s*sim::sync_run_clock,//s' "$COPY_U/src/game/mod.rs"
+grep -q 'sim::RunClock' "$COPY_U/src/game/mod.rs" \
+  && fail "(u) setup: the RunClock registration was not removed"
+grep -q 'sim::sync_run_clock' "$COPY_U/src/game/mod.rs" \
+  && fail "(u) setup: the sync_run_clock system was not removed"
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_U" >"$SCRATCH_ROOT/u-output.txt" 2>&1
+[ "$(grep -c 'init_resource::<sim::RunClock>()' "$COPY_U/src/game/mod.rs")" = "1" ] \
+  || fail "(u) --upgrade did not put .init_resource::<sim::RunClock>() back exactly once"
+[ "$(grep -c 'sim::sync_run_clock,' "$COPY_U/src/game/mod.rs")" = "1" ] \
+  || fail "(u) --upgrade did not chain sim::sync_run_clock exactly once"
+grep -A1 'sim::advance_tick,' "$COPY_U/src/game/mod.rs" | grep -q 'sim::sync_run_clock,' \
+  || fail "(u) sim::sync_run_clock did not land directly after sim::advance_tick"
+(cd "$COPY_U" && cargo fmt --all -- --check >/dev/null 2>&1) \
+  || fail "(u) the rewritten builder chain is not rustfmt-clean"
+pass "(u) --upgrade restores both halves of the run-clock wiring"
+
+# Idempotent: a second --upgrade must not double either half.
+bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_U" >"$SCRATCH_ROOT/u2-output.txt" 2>&1
+[ "$(grep -c 'init_resource::<sim::RunClock>()' "$COPY_U/src/game/mod.rs")" = "1" ] \
+  || fail "(u) a second --upgrade duplicated the RunClock registration"
+[ "$(grep -c 'sim::sync_run_clock,' "$COPY_U/src/game/mod.rs")" = "1" ] \
+  || fail "(u) a second --upgrade duplicated sim::sync_run_clock"
+pass "(u) the run-clock wiring is idempotent under a re-run"
 
 echo "test_rollout_replay: all checks passed"

@@ -88,7 +88,13 @@ the rules for game code:
    `bevy::platform::collections::HashMap` or `BTreeMap` instead.
 5. **Fold extra state into `Checksum`** via `Checksum::fold(&mut self, u64)`
    whenever a score could be reached through different in-game states.
-6. **No `Instant`/`SystemTime`/frame count in sim logic.**
+6. **A sim system may read only what the replay carries**: `TickInput`,
+   `RunSeed`/`GameRng`, its own run state, and the tick-derived clock
+   (`sim::RunClock`). Never `Time::elapsed*` (inside `FixedUpdate` that is
+   `Time<Fixed>`'s **app**-lifetime elapsed, so a run forks on how long the
+   player sat in the menu), never a wall clock, never a frame count.
+   `Time::delta_secs()` is fine — inside `FixedUpdate` it is the fixed
+   timestep.
 
 The greppable ones are enforced by the forbidden-names test in
 `src/game/sim.rs` (`cargo test`); the rest need review.

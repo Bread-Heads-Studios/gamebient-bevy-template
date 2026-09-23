@@ -47,6 +47,7 @@ impl Plugin for GamePlugin {
             .init_resource::<scoring::GameData>()
             .init_resource::<states::Paused>()
             .init_resource::<sim::SimTick>()
+            .init_resource::<sim::RunClock>()
             .init_resource::<sim::RunSeed>()
             .init_resource::<sim::PendingSeed>()
             .init_resource::<sim::GameRng>()
@@ -92,6 +93,13 @@ impl Plugin for GamePlugin {
                 FixedUpdate,
                 (
                     sim::advance_tick,
+                    // The sim's own clock, restated from the tick index
+                    // before anything can read it. `Time<Fixed>::elapsed()`
+                    // is app-lifetime, not run-lifetime, so a sim system
+                    // that reads it forks on how long the player sat in the
+                    // menu — see `sim::RunClock` and determinism rule 7.
+                    // Keep this second, whatever else a port chains here.
+                    sim::sync_run_clock,
                     player::move_player,
                     scoring::handle_score_events,
                     sim::checksum_tick,

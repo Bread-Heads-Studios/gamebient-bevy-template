@@ -984,16 +984,134 @@ pub fn checksum_tick(data: Res<GameData>, tick: Res<SimTick>, mut sum: ResMut<Ch
 Everything game-specific goes in the game's own system from rule 5,
 registered immediately after this one.
 
-## Rule 7 — no wall-clock reads in sim logic
+## Rule 7 — a sim system may read only what the replay carries
 
-No `Instant::now`, `SystemTime`, or frame-count reads inside `SimSet` —
-they aren't reproducible under the verifier's
-`TimeUpdateStrategy::ManualDuration`. The survey found none in any game's
-gameplay code (`src/` excluding `ui/`, `record/`, `autopilot.rs`, tests,
-dev harnesses), so this is usually already satisfied; the games with large
-`Timer`/`delta_secs`/`elapsed_secs` counts in the catalog use Bevy's
-`Time`/`Timer` API, which is fine — `Res<Time>` inside `FixedUpdate` is the
-fixed delta, not wall-clock.
+`TickInput`, `RunSeed`/`GameRng`, its own run state, and the tick-derived
+clock (`sim::RunClock`). **Never** `Time::elapsed*`, never a wall clock
+(`Instant::now`, `SystemTime`, `Date.now`), never an app-lifetime counter (a
+frame count, a resource that only ever increments in `Update`). A replay
+carries a seed and a stream of ticks; anything else a sim system reads is a
+number the verifier has to guess, and it guesses whatever a fresh app
+happens to hold.
+
+### `Time::elapsed_secs()` is the one that has shipped
+
+The old wording of this rule said the games with large
+`Timer`/`delta_secs`/`elapsed_secs` counts "use Bevy's `Time`/`Timer` API,
+which is fine". **That was wrong about `elapsed_secs`, and it cost Dive
+Rise a production `UNVERIFIED`.**
+
+Inside `FixedUpdate` `Res<Time>` is `Time<Fixed>`, and
+`Time<Fixed>::elapsed()` counts from **app** start. Nothing resets it when a
+run begins. So a sim system that drives a drift, a weave, an orbit or a
+lunge phase off it gives the player a different world depending on how long
+they watched the studio logo and the menu — while `replay::run_verify_app`
+enters `Playing` on its second `app.update()` under a zero-delta
+`TimeUpdateStrategy`, so the verifier always re-simulates at offset **zero**.
+
+`delta_secs()` really is fine, and it is why the `Res<Time>` parameter
+itself is still allowed: inside `FixedUpdate` it is always the fixed
+timestep. The split to make during a port is per *call*, not per parameter:
+
+```rust
+// before
+pub fn move_food(time: Res<Time>, /* .. */) {
+    let t = time.elapsed_secs();   // app-lifetime: forks on menu dwell
+    let dt = time.delta_secs();    // fixed timestep: fine
+```
+```rust
+// after
+pub fn move_food(time: Res<Time>, run_clock: Res<sim::RunClock>, /* .. */) {
+    let t = run_clock.secs;        // tick-derived: the replay carries it
+    let dt = time.delta_secs();
+```
+
+`sim::RunClock` ships in `src/game/sim.rs` (so `tools/rollout-replay.sh`
+copies it into every game — there is nothing to write) and carries both
+`secs: f32` and `ticks: u64`, for games whose phases are integer.
+`sim::sync_run_clock` restates it from `sim::SimTick`, chained straight
+after `sim::advance_tick` at the head of `SimSet`, so it is a pure function
+of the tick index and cannot drift from the tick count. **Keep it second in
+the chain when you adapt `GamePlugin::build`**, whatever else a game puts
+there.
+
+### The worked example: Dive Rise, 2026-09-23
+
+A real run submitted from colecovisiongx.com came back `UNVERIFIED /
+mismatch`: 11 877 ticks claiming score 144 / checksum 12403613233478535731,
+re-simulating to 56 / 3579674314491009272 in the deployed `verify.zip`, in a
+`verify.zip` rebuilt from the same commit, and natively. Three independent
+verifiers agreeing with each other and disagreeing with the browser is what
+says the **recording** side is the outlier — not the verifier, not wasm vs
+native, not `wasm-opt`.
+
+Nine sim systems read `Time::elapsed_secs()`:
+
+| file | system |
+|---|---|
+| `food.rs` | `move_food` |
+| `hunters/comb_jelly.rs` | `jelly_drift` |
+| `hunters/amphipod.rs` | `amphipod_motion` |
+| `hunters/cutlassfish.rs` | `cutlass_motion` |
+| `hunters/viperfish.rs` | `viper_attack` |
+| `companions/krill_swarm.rs` | `update` |
+| `companions/jellyfish.rs` | `update` |
+| `behaviors/schooling.rs` | `orbit_mates` |
+| `events/squid_pack.rs` | `update` |
+
+**One extra tick of menu time is enough to change the whole run.**
+Re-simulating that production replay with the pre-run `Time<Fixed>` advanced
+by n ticks:
+
+| n | score | checksum |
+|---|---|---|
+| 0 | 56 | 3579674314491009272 |
+| 1 | 38 | 2417170221437104101 |
+| 2 | 36 | 16660832847819869030 |
+| 3 | 40 | 7089853007083866402 |
+| 60 | 50 | 7333754789622012940 |
+| 600 | 54 | 11077146209439900004 |
+| 1800 | 43 | 10685355994512897587 |
+
+Reverting a single one of the nine sites after the fix re-fails the probe
+(`food::move_food` alone: score 39 against 33).
+
+### The probe, and the blind spot it has to avoid
+
+`tests/windowed_shape.rs::a_run_does_not_depend_on_how_long_the_app_was_up_before_it`
+is the row: `record_windowed_after_menu` burns 1 319 fixed ticks (~22 s) in
+`Menu` before entering `Playing`, and the recorded run must equal the cold
+one *and* verify bare.
+
+Everything else was blind for the same reason — they all enter `Playing` in
+the app's first frames, exactly like the verifier, so their offset agreed
+with it by accident: `selftest::record_scripted_run`, both committed `.gxr`
+fixtures, `record_windowed` itself and the `--playtest` harness.
+
+**A short, quiet run does not reproduce it either.** A 1 720-tick browser
+run of the broken Dive Rise build that ate nothing and took no damage
+verified `matches: true`, and re-simulating it at eight different clock
+offsets gave the same checksum every time — nothing the clock drove had
+reached anything `checksum_dive_rise` folds. So the after-menu row must be
+**long and busy**: point the dwell at a bot that scores, spawns and
+collides, not one that idles. The same warning applies to a browser
+re-proof: a quiet smoke run is not evidence.
+
+### What enforces it
+
+* `sim::tests::no_app_lifetime_clock_in_sim_code` (`cargo test`) scans
+  `src/game/` for `.elapsed()`, `.elapsed_secs()` and `.elapsed_secs_f64()`
+  and fails on any hit not marked `allow-app-clock` — the same shape as
+  `no_forbidden_randomness_or_hashmaps_in_game_code`. Use the marker only
+  for a genuine non-sim read (a dev harness, the wall-clock stamp
+  `replay::recorder` puts on the replay header) and write why on the line.
+* `tools/rollout-replay.sh` prints an advisory for the wider family the Rust
+  test leaves to review — `elapsed_wrapping`, `Instant::now`, `SystemTime`,
+  `Date.now` — subtracting the template's own known-benign hits
+  (`src/game/record/audio.rs`, `src/game/replay/recorder.rs`).
+* The after-menu row above is the behavioural check, and the only one that
+  can see a clock read the greps miss (a helper that takes `f32` seconds, a
+  `Timer` fed from elapsed).
 
 ## Rule 8 — never read `pause_just_pressed` in a sim system
 
