@@ -1035,6 +1035,25 @@ of the tick index and cannot drift from the tick count. **Keep it second in
 the chain when you adapt `GamePlugin::build`**, whatever else a game puts
 there.
 
+#### The formula, and what migrating onto it costs
+
+`secs` is **`ticks as f32 / TICK_HZ as f32`** and nothing cleverer
+(template#25). That matters during a port, because "the same clock" is not
+the same `f32`:
+
+| the game's clock | migrating onto `sim::RunClock.secs` |
+|---|---|
+| a hand-written `tick as f32 / TICK_HZ as f32` | **bit-neutral** — same expression, nothing to regenerate. Sundae Shooter's `juice::update_bobs` and Gulper's `sim_secs` are this shape |
+| a `Duration`-based `(tick_duration() * ticks).as_secs_f32()` | **regenerate both fixtures.** The two agree to within one ulp and disagree in the last bit on about a quarter of all tick indices (Sundae Shooter measured 899 of the 3 601 a run visits, first at tick 7; Gulper 146 910 of the first 600 000, 24.5%). One ulp into a folded `Transform` field is a different checksum. Dive Rise is the fleet's case: it invented the clock in the `Duration` form, nine of its sim systems read it, and its fixtures were recorded against it |
+| a **domain** clock — `pace::RunClock` (Dough.io), `hazards::TiltClock` (Cannonball Putt), `city::lights::AmpelClock` and `run::RunStats::elapsed` (Grand Theft Otto) | **keep it, leave `sim::RunClock` wired and unread.** These are already run-scoped, they predate the rule, and they carry meaning the tick index does not (a shift timer the HUD counts down, a traffic-light phase the attract mode runs). Rule 7 is about *app-lifetime* clocks; a run-scoped domain clock was never the bug. Moving one shifts a folded float for no behavioural gain and invalidates every replay already submitted |
+
+So: migrate a clock when the expression is already identical, and otherwise
+**wire `sim::RunClock` and leave it unread**, with a line in
+`docs/replay-notes.md` saying which of the three rows above this game is and
+why. A resource that is initialised and synced but read by nothing is not
+dead code here — `sim::begin_run` requires it, and it is what the *next*
+phase-like sim system reads instead of `Time`.
+
 ### The worked example: Dive Rise, 2026-09-23
 
 A real run submitted from colecovisiongx.com came back `UNVERIFIED /
@@ -1164,14 +1183,123 @@ the real `OnExit`/`OnEnter` systems — not a hand-reset world), dwells in
 requires its `(ticks, score, checksum)` to equal a cold recording from a
 fresh app *and* to `verify()` bare.
 
-One thing to know before adapting it: if the game's bot is a pure function
-of `SimTick` (the template's selftest script is), rewind `SimTick` in
-`play_one_run` before entering `Playing`, as the template does. `PreUpdate`
-runs before `StateTransition`, so on the transition frame the bot would
-still see the *previous* run's final tick index and press the wrong button
-for exactly one tick — an artifact of standing a `SimTick`-driven bot in for
-a player, which shifts the whole recorded input stream by a tick and fails
-the row for a reason that has nothing to do with carried-over state.
+#### Six things the fleet rollout taught this row
+
+All six were found by porting it to ten games (the 17ea13b wave), and all
+six are now in the template's own `tests/windowed_shape.rs`. Read them
+before adapting the file, not after.
+
+1. **A tapping bot makes the row blind. Add a holder.** This is the big
+   one: ported straight across with a bot that only taps, the row **does
+   not catch Grand Theft Auto-Reply's own `Local<Repeat>` with the fix
+   reverted**. `desk_input` holds a direction on one tick in sixty and
+   `Repeat::step` zeroes the timer on the released tick, so the repeat
+   never reaches its `held >= REPEAT_DELAY` branch, run 1 ends with it at
+   `Default`, and run 2 inherits nothing. Sundae Shooter's
+   `launcher::aim_launcher` angle integrator and Gulper's
+   `digest::TuneMenu::repeat_cooldown` measured the same. State that only
+   accumulates *while an input is held* has decayed back to rest by the time
+   a tapping bot's run ends. So the template ships `Bot::Holder` — the
+   fixture script **plus** a direction held on every tick — and runs the
+   second-run row under it as well.
+2. **Write `virt.held`, not `virt.latched`, for a holder.**
+   `gamebient_input::input::collect_input` *consumes* `latched` every
+   frame, so a `latched |= DOWN` bot presses and releases on every tick and
+   is a tapping bot wearing a holder's name. Ladder Legend wrote that
+   version first. Guard the row with a vacuity assertion — the **last
+   recorded tick must still carry the bit in `held`** — or the row quietly
+   decays into a duplicate of the one above it. And OR the hold in *after*
+   the fixture script rather than replacing it: `set_held` overwrites, and
+   a hold-only bot usually stops reaching the game (Gulper measured three
+   shapes; hold-DOWN-only reached the tuning screen on 0 of 5 400 ticks,
+   fixture-plus-held-A on 3 818).
+3. **Measure hold-dependent state by planting a hold-only accumulator.**
+   The mutation the row above documents — a `Local<u32>` counting every tick
+   a `SimSet` system has ever run — is visible to *both* bots and proves
+   nothing about the holder. The mutation that does is a `Local<u32>`
+   incremented **only on ticks where the direction is held**, perturbing the
+   sim once it passes a threshold one run cannot reach. It must fail the
+   holder row and **may pass** the tapping one; that asymmetry is the
+   finding. Measured on the template itself in `player::move_player`
+   (Holder `9694877801539603050` against the cold run's
+   `2990299833934868250`, same 600 ticks, same score; `Bot::Selftest`
+   green), and independently on Gulper, Sundae Shooter and Ladder Legend.
+   Games whose fixture bot is *already* a holder — Dive Rise's continuous
+   forager, Dough.io's normalised axis — find both mutations red under both
+   rows; keep the row anyway and say so in `docs/replay-notes.md` rather
+   than claiming it proves more.
+4. **Put the `second.runs == cold.runs` vacuity guard AFTER the
+   `(ticks, score, checksum)` comparison.** It reads like a setup check that
+   belongs first, and it must not be, as soon as the bot reads the world to
+   decide what to press — which is every interesting bot. A closed-loop bot
+   turns any sim divergence into an input divergence, so a real
+   carried-over-state failure trips it too, and first: the row then reports
+   *"the bot pressed different buttons on run 2"*, which is true, is a
+   consequence, and sends the reader to look at `VirtualInput` instead of at
+   the `Local<_>` that caused it. Five of the ten upgrades moved this line
+   independently before the template did (cannonball-putt#10,
+   pack-the-ripper#7, dough-io#8, grand-theft-otto#6, dive-rise#6).
+5. **`play_one_run` rewinds the harness, not just the sim.** Three things,
+   each of which failed a real port:
+   * **the bot's own state** — every `Local` or resource its script uses.
+     `PreUpdate` runs before `StateTransition`, so run `StateTransition` by
+     hand before the bot's next `PreUpdate` (this subsumes the old
+     `SimTick(0)` rewind, and unlike it, it also covers a bot that reads the
+     *world* — Cannonball Putt's reads `Shot`/`GameData`, Ladder Legend's
+     the live note field, Dive Rise's the nearest morsel). **A bot script's
+     counters must be resources, not `Local`s**, for the same reason a sim
+     system's must: nothing can reset a `Local` from outside its own system,
+     so run 2 starts with run 1's counter and the row fails on the harness
+     rather than on the game. Pack The Ripper moved its grading counter to
+     `selftest::ScriptGrades` (it picks the two deliberate misgrades out of
+     a run, so run 2 played clean and the row failed on an artifact), Sundae
+     Shooter its shot cadence to `BotState`, Grand Theft Otto its frame
+     counter to `RecklessFrame`;
+   * **`VirtualInput`** — clear it between runs. A bot gated
+     `run_if(in_state(Playing))` leaves its last press sitting there through
+     the whole game-over screen and into run 2's first tick
+     (grand-theft-otto#6);
+   * **the fade** — re-stage `ScreenFade::boot()` (and zero the
+     fade-busy counter) per run, where the game consumes it. The single boot
+     fade is long exhausted by run 2, so the "was this app windowed-shaped"
+     assertion passes on run 1's frames and measures nothing (gulper#7).
+     Gulper also had to register its `OnEnter(GameOver)` `restore_time` in
+     the probe app: without it an app whose first run ended in death keeps
+     `Time<Virtual>` slowed for ever, changing how many fixed ticks a later
+     frame carries — invisible to a one-run app.
+6. **`OnExit(Menu)` cleanup belongs in the common half of
+   `GamePlugin::build`, not the `!headless` branch.** The second-run row's
+   dwell goes through `Menu`, and the probe app is built on
+   `build_headless_app()`, so a `GameEntity` sweep registered only for the
+   windowed build never runs there and run 2 starts among run 1's
+   leftovers. Grand Theft Otto moved exactly that line; it is a no-op in the
+   verifier, which registers no `OnEnter(Menu)` spawns at all, and both its
+   fixtures verified unchanged with it moved. Check where your game
+   registers both `Menu` edges. (The template itself has no attract mode —
+   its only `Menu`-edge systems are `UiPlugin`'s menu spawn/despawn, which
+   touch nothing the sim owns — so there is nothing to move here; that is
+   not evidence about your game.) If the game *does* have an attract mode,
+   register its `OnEnter(Menu)` chain in the probe's `windowed_app()` too
+   and assert the dwell actually moved something, or the dwell probes
+   nothing (ladder-legend#8).
+
+#### Don't compare presentation counters between two recordings
+
+The "did this bot actually reach the mechanic" counters the row above asks
+for are the right technique, and **equality between two recordings is the
+wrong assertion for them unless the counter is sim-derived.** Gulper's probe
+compared `Reached`'s `tune`/`decor` frame counts across two recordings of
+the same run and got 74, 75 or 76 for one and 5 395 or 5 396 for the other:
+the systems behind them spawn through `Commands` in an **unordered `Update`
+tuple**, and `measure` sees the result a frame later or not depending on
+which sync point the scheduler reached first. That is a flaky test, not a
+finding, and it will go red on someone else's machine.
+
+So: compare only *mechanics* counters — which mechanics a run reached, what
+`SimSet` folded, anything derived from the sim — for equality, keep
+`(ticks, score, checksum)` exact, and give presentation counters `> 0` or
+"did it reach this at all" assertions. If a presentation count really must
+be exact, `.chain()` the tuple that produces it and write down why.
 
 Enforcement, the same pair as the clock:
 

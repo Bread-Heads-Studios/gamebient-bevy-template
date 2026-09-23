@@ -899,7 +899,12 @@ if [ -n "$PKG" ]; then
       # Adapted here, so it was not refreshed -- and this copy predates the
       # second-run row, which is the one row a port cannot get for free.
       # Self-limiting: the day the row is in, this stops printing.
-      echo "HAND EDIT: $SHAPE_REL: adapted here, so --upgrade left it alone — and this copy predates a_second_run_in_the_same_app_reproduces_the_first. Port that row across from $TEMPLATE/$SHAPE_REL (it needs windowed_app() and play_one_run(), the split the template made to record two runs through one App). It is the only probe in the kit that plays a SECOND run: the verifier is always a fresh app that plays exactly one, a browser is not, and anything a run leaves behind — a Local<_> in a SimSet system, a static, a resource OnEnter(Playing) forgets — is invisible to every other test here. Grand Theft Auto-Reply's cursor auto-repeat lived in a Local<Repeat> for six weeks for exactly that reason."
+      echo "HAND EDIT: $SHAPE_REL: adapted here, so --upgrade left it alone — and this copy predates a_second_run_in_the_same_app_reproduces_the_first. Port that row across from $TEMPLATE/$SHAPE_REL (it needs windowed_app() and play_one_run(), the split the template made to record two runs through one App). It is the only probe in the kit that plays a SECOND run: the verifier is always a fresh app that plays exactly one, a browser is not, and anything a run leaves behind — a Local<_> in a SimSet system, a static, a resource OnEnter(Playing) forgets — is invisible to every other test here. Grand Theft Auto-Reply's cursor auto-repeat lived in a Local<Repeat> for six weeks for exactly that reason. Port the HOLDER row beside it (see below) while you are in the file."
+    elif ! grep -q 'Bot::Holder' "$SHAPE_DST"; then
+      # Has the second-run row, but from before the fleet upgrade to
+      # 17ea13b taught that row it was blind under a tapping bot.
+      # Self-limiting in the same way: once Bot::Holder is in, this stops.
+      echo "HAND EDIT: $SHAPE_REL: has a_second_run_in_the_same_app_reproduces_the_first but no Bot::Holder, so that row is BLIND to hold-dependent carried-over state. Measured across the fleet: ported with a tapping bot the row does NOT catch Grand Theft Auto-Reply's own Local<Repeat> with the fix reverted — a tapping bot ends its run with every hold-dependent accumulator decayed back to rest, so run 2 inherits nothing. Sundae Shooter's aim integrator and Gulper's tuning-cursor repeat measured the same. Port Bot::Holder and a_second_run_in_the_same_app_reproduces_the_first_with_a_direction_held from $TEMPLATE/$SHAPE_REL: the fixture script PLUS a direction OR-ed into virt.held every tick (held, NOT latched — collect_input consumes latched every frame, so a latching bot is still a tapping bot), and a vacuity assertion that the last recorded tick still carries the bit. Point the hold at whatever this game's hold-dependent mechanic reads, and check it with a Local<u32> that counts ONLY held ticks: it must fail the holder row and may pass the tapping one. While you are there, three more things that wave taught the row — put the second.runs == cold.runs guard AFTER the (ticks, score, checksum) comparison (a bot that reads the world turns a sim divergence into an input one, and the guard then reports the symptom); make play_one_run rewind the BOT's state (its counters belong in resources, not Locals), clear VirtualInput, re-stage the boot fade per run and run StateTransition before the bot's next PreUpdate; and make sure any OnExit(Menu) cleanup is registered in the COMMON half of GamePlugin::build, not the !headless branch, because this probe is built on build_headless_app() and its dwell goes through Menu. See port-checklist.md rule 7, \"Six things the fleet rollout taught this row\"."
     fi
   fi
   # Unadapted is a usable state here (the shipped file already covers
@@ -1246,9 +1251,40 @@ sub spit {
             }
         }
         # The `Mute` arm then has to cope with the Option.
-        if ($c !~ /global_volume\.as_deref_mut\(\)/) {
-            unless ($c =~ s/^([ \t]*)global_volume\.volume = ([^\n]*);\n/${1}if let Some(volume) = global_volume.as_deref_mut() {\n${1}    volume.volume = ${2};\n${1}}\n/m) {
-                hand_edit("src/game/host.rs: the Mute arm's 'global_volume.volume = ...;' line not found; guard it with 'if let Some(volume) = global_volume.as_deref_mut()' by hand");
+        #
+        # The idempotency question is "is that assignment already guarded",
+        # NOT "did THIS script write the guard". Keying on our own
+        # `as_deref_mut()` was the bug Grand Theft Otto hit
+        # (grand-theft-otto#6): that game had hand-written
+        #
+        #     if let Some(global_volume) = global_volume.as_mut() {
+        #         global_volume.volume = ..;
+        #     }
+        #
+        # long before this script existed, so `--upgrade` wrapped the inner
+        # line a SECOND time and produced `global_volume.as_deref_mut()`
+        # inside a binding that is already a `&mut GlobalVolume` — which does
+        # not compile, on a file the script had left alone on every previous
+        # run. Recognise every `Option` guard shape a port might have written
+        # and skip; where the shape is not recognisable, HAND EDIT rather
+        # than rewrite, because a wrong edit here costs a red build and a
+        # revert while a HAND EDIT costs one read.
+        my $already_guarded =
+               $c =~ /global_volume\s*\.\s*as_deref_mut\s*\(\s*\)/
+            || $c =~ /global_volume\s*\.\s*as_mut\s*\(\s*\)/
+            || $c =~ /global_volume\s*\.\s*as_deref\s*\(\s*\)/
+            || $c =~ /if\s+let\s+Some\s*\(.*?\)\s*=\s*(?:&mut\s+)?\*?\s*global_volume\b/s
+            || $c =~ /let\s+Some\s*\(.*?\)\s*=\s*(?:&mut\s+)?\*?\s*global_volume\b[^;]*?else\b/s;
+        if (!$already_guarded) {
+            # More than one assignment and this script cannot tell which one
+            # is the Mute arm's, so it guards none of them.
+            my $assignments = () = ($c =~ /^[ \t]*global_volume\.volume\s*=/mg);
+            if ($assignments > 1) {
+                hand_edit("src/game/host.rs: $assignments 'global_volume.volume = ...;' lines and no Option guard on any of them; guard each one by hand (the headless verifier has no AudioPlugin, so GlobalVolume is Option<ResMut<_>> there). This script only rewrites an unambiguous single assignment.");
+            } else {
+                unless ($c =~ s/^([ \t]*)global_volume\.volume = ([^\n]*);\n/${1}if let Some(volume) = global_volume.as_deref_mut() {\n${1}    volume.volume = ${2};\n${1}}\n/m) {
+                    hand_edit("src/game/host.rs: the Mute arm's 'global_volume.volume = ...;' line not found and no existing Option guard on global_volume; guard the Mute arm with 'if let Some(volume) = global_volume.as_deref_mut()' by hand");
+                }
             }
         }
 
