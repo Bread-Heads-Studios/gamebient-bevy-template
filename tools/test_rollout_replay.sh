@@ -1649,4 +1649,51 @@ diff -q "$SCRATCH_ROOT/w3-host-before.rs" "$COPY_W3/src/game/host.rs" >/dev/null
   || fail "(w) an unclassifiable Mute arm was rewritten anyway"
 pass "(w) an ambiguous Mute arm draws a HAND EDIT and is left untouched"
 
+# ---------------------------------------------------------------------------
+# (x) The pre-run-choice advisory.
+#
+# Beat Bender's title screen wrote song::SelectedSong/SelectedDifficulty and
+# driver::setup_match read them on OnEnter(Playing). A replay carries a seed
+# and a stream of ticks and no title screen, so the verifier re-simulated
+# EVERY run on song 0 at NORMAL: 4 705 recorded ticks against 4 477
+# re-simulated. No fixture and no probe can see this — they all start from a
+# fresh App and pick the same default the verifier does.
+# ---------------------------------------------------------------------------
+COPY_X="$SCRATCH_ROOT/template-copy-x"
+snapshot_as_git_baseline "$TEMPLATE" "$COPY_X"
+cat >>"$COPY_X/src/game/player.rs" <<'RS'
+
+/// Planted by test_rollout_replay.sh part (x): Beat Bender's shape.
+#[derive(Resource, Default)]
+pub struct SelectedSong(pub usize);
+
+pub fn setup_match_planted(_song: Res<SelectedSong>) {}
+RS
+cat >>"$COPY_X/src/ui/menu.rs" <<'RS'
+
+/// Planted by test_rollout_replay.sh part (x): the title screen writes it.
+pub fn pick_song_planted(mut song: ResMut<crate::game::player::SelectedSong>) {
+    song.0 = 1;
+}
+RS
+bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_X" >"$SCRATCH_ROOT/x-output.txt" 2>&1
+grep -q "src/ui/menu.rs:SelectedSong" "$SCRATCH_ROOT/x-output.txt" \
+  || fail "(x) a resource written by the menu and read by src/game/ was not named by the advisory"
+pass "(x) a pre-run choice written outside src/game/ is named"
+
+# The template's own inherited shape (src/ui/hud.rs writes AudioCapture, which
+# is declared under src/game/) must stay quiet, or the advisory fires on every
+# game for ever and nobody reads it.
+if grep -q "a resource src/game/ reads is written from outside it" "$SCRATCH_ROOT/a-output.txt"; then
+  fail "(x) the advisory fires on the template's own checkout (the inherited AudioCapture shape is not subtracted)"
+fi
+pass "(x) the template's own inherited resource writers are subtracted"
+
+# Sim code owning its own resource is the normal case and must not print, or
+# the real hits are buried: every game writes GameData from src/game/.
+if grep -qE "src/game/[a-z_/]*\.rs:GameData" "$SCRATCH_ROOT/x-output.txt"; then
+  fail "(x) a resource written from INSIDE src/game/ was flagged"
+fi
+pass "(x) writers inside src/game/ are not flagged"
+
 echo "test_rollout_replay: all checks passed"

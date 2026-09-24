@@ -247,6 +247,27 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
    `GameOver` → `Menu` path, dwells, then plays run 2 with the same seed
    and script and requires it to equal a cold recording and to verify bare
    — and `sim::tests::no_local_state_in_sim_systems` is the greppable half.
+
+   **And a choice made before the run is not carried either.** The clock
+   above is what the app did *before* the run and the `Local` is what it
+   kept *from the last one*; this is what the **player** decided before tick
+   1. A replay carries a seed and a stream of ticks and no title screen, so
+   anything `OnEnter(Playing)` reads that the player chose or earned outside
+   the run — a song, a difficulty, a starting kit, a loadout, a saved
+   profile, a `localStorage` blob — is a number the verifier has to guess,
+   and a fresh app guesses the `Default`. Beat Bender's title screen wrote
+   `SelectedSong`/`SelectedDifficulty` and the verifier therefore
+   re-simulated every run on song 0 at NORMAL: 4 705 recorded ticks against
+   4 477 re-simulated, which is a different song's length. Dive Rise's
+   `MetaSave` decided the draft pool and the starting kit off a save file,
+   so no replay of a real run could ever have verified. **Anything that
+   configures a run must be a build constant or an in-run phase inside
+   `Playing`** — offered from `GameRng`, chosen through `TickInput`, with
+   its ticks recorded like any other — and a persisted profile may hold
+   stats but nothing a `SimSet` system reads. No probe in the kit can see
+   this class: every fixture and every probe starts from a fresh `App` and
+   so picks the same default the verifier does. Only a real recording made
+   with a **non-default** choice can, which is why the rollout plays one.
 8. **Never read `pause_just_pressed` in a sim system.** The recorder masks
    `Buttons::PAUSE` out of every recorded tick (a replayed pause would
    freeze the sim it is meant to reproduce), so it is the one bit a replay

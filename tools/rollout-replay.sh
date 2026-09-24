@@ -581,6 +581,57 @@ if [ -d "$GAME/src/game" ]; then
   fi
 fi
 
+# Advisory, and the third sibling of the two scans above: a run may not be
+# configured by a choice made BEFORE it starts. A replay carries a seed and a
+# stream of ticks and no title screen, so a resource a menu writes and
+# `OnEnter(Playing)` reads is a number the verifier has to guess, and a fresh
+# app guesses the Default. Beat Bender shipped it: `src/ui/menu.rs` wrote
+# `song::SelectedSong`/`SelectedDifficulty` and `driver::setup_match` read
+# them, so the verifier re-simulated every run on song 0 at NORMAL — 4 705
+# recorded ticks against 4 477 re-simulated. Nothing local can see this: every
+# fixture and both probes start from a fresh App and so pick the same default
+# the verifier picks.
+#
+# Emits one `<path>:<Resource>` pair per (file, resource) where a resource the
+# game DECLARES under src/game is written (ResMut/insert_resource/
+# init_resource) from a file OUTSIDE src/game, and is read anywhere under
+# src/game. Writers inside src/game are excluded on purpose — sim code owning
+# its own resource is the normal case and would bury the hits that matter —
+# and the template's own set is subtracted, so the inherited `AudioCapture`
+# shape every game gets from src/ui/hud.rs never prints.
+#
+# Known blind spot, stated in the HAND EDIT text: a profile deserialised off
+# disk or out of localStorage (Dive Rise's `meta::MetaSave`) is not a resource
+# anybody writes with a ResMut, so this scan cannot see it. The checklist
+# section asks for OnEnter(Playing)'s setup systems to be read by hand too.
+pre_run_choice_pairs() {
+  local root="$1" res f r rel
+  [ -d "$root/src/game" ] || return 0
+  res="$(grep -rhE -A4 '#\[derive\([^)]*\bResource\b' "$root/src/game" --include='*.rs' 2>/dev/null \
+    | grep -oE '^(pub )?(struct|enum) [A-Z][A-Za-z0-9_]*' \
+    | awk '{print $NF}' | sort -u)"
+  [ -n "$res" ] || return 0
+  while read -r f; do
+    [ -n "$f" ] || continue
+    rel="${f#"$root/"}"
+    case "$rel" in src/game/*) continue ;; esac
+    for r in $res; do
+      grep -qE "ResMut<([A-Za-z0-9_]+::)*${r}>|insert_resource\(([A-Za-z0-9_]+::)*${r}\b|init_resource::<([A-Za-z0-9_]+::)*${r}>" "$f" || continue
+      grep -rqE "Res(Mut)?<([A-Za-z0-9_]+::)*${r}>" "$root/src/game" --include='*.rs' 2>/dev/null || continue
+      printf '%s:%s\n' "$rel" "$r"
+    done
+  done < <(find "$root/src" -name '*.rs' 2>/dev/null)
+}
+if [ -d "$GAME/src/game" ]; then
+  PRERUN_ADVISORY="$(comm -13 \
+    <(pre_run_choice_pairs "$TEMPLATE" | sort -u) \
+    <(pre_run_choice_pairs "$GAME" | sort -u) | tr '\n' ' ')"
+  PRERUN_ADVISORY="${PRERUN_ADVISORY% }"
+  if [ -n "$PRERUN_ADVISORY" ]; then
+    echo "HAND EDIT (advisory): a resource src/game/ reads is written from outside it — ${PRERUN_ADVISORY}. See port-checklist.md, \"A choice made before Playing is not carried either\". Where the writer is a menu or a title screen and the reader is OnEnter(Playing), that choice is NOT in the replay: a replay carries a seed and a stream of ticks and no title screen, so the verifier guesses the Default. Beat Bender wrote song::SelectedSong/SelectedDifficulty from src/ui/menu.rs and driver::setup_match read them, so every run re-simulated on song 0 at NORMAL — 4 705 recorded ticks against 4 477 re-simulated, a different song's length. The fix is the same one phases get: delete the pre-run state and make the choice an in-run phase inside Playing, driven by TickInput and offered from GameRng, with its ticks recorded like any other (do not gate record_tick/checksum_tick on it), or make it a build constant. Then fold the result so a wrong pick is still caught. This is a grep — a resource a menu writes and only src/ui/ reads back is fine, and so is one OnEnter(Playing) overwrites unconditionally. It has a blind spot it cannot cover: a profile read off disk or out of localStorage (Dive Rise's meta::MetaSave, which decided the draft pool and the starting kit) is not a ResMut anywhere, so read OnEnter(Playing)'s setup systems by hand and ask whether a fresh app with no save file would compute the same number. NO probe or fixture can see this class — they all start from a fresh App and pick the same default the verifier does — so the check is skill step 5: record a real run with every choice moved OFF its default."
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # Copy the feature files verbatim. A file that already exists and isn't
 # byte-identical to the template's is left alone (HAND EDIT), never

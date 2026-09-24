@@ -188,6 +188,72 @@ cheap and belongs on the presentation side: react to the phase change from
 `Update` (a fade-in on the screen's root node, a cosmetic overlay), never by
 routing the phase back through `GameState`.
 
+### A choice made before `Playing` is not carried either
+
+The section above moves a phase *out* of `GameState`. This one is about a
+choice the player makes **before** the run starts, and it is the wave-4
+finding that nothing in the kit can see.
+
+A replay carries a seed and a stream of ticks. It does not carry a title
+screen. So anything `OnEnter(Playing)` reads that the player chose or earned
+outside the run — a song, a difficulty, a starting kit, a loadout, a saved
+profile, a `localStorage` blob — is a number the verifier has to guess, and
+`replay::run_verify_app` guesses the `Default`. Two games have shipped it:
+
+* **Beat Bender, 2026-09-24.** `ui::menu` wrote `song::SelectedSong` and
+  `song::SelectedDifficulty`; `driver::setup_match` read them on
+  `OnEnter(Playing)`. The verifier re-simulated **every** run on song 0
+  (EMBER WALTZ, 100 BPM, 12 rounds) at NORMAL whatever the player picked:
+  a different BPM, a different segment count, different charts, different
+  AI, from tick one. The first real recording came back
+  `4 705 recorded ticks -> 4 477 re-simulated, matches: false` — that is a
+  different song's length, not a rounding error.
+* **Dive Rise, 2026-09-23.** `meta::MetaSave` decided the draft pool
+  (`draft_pool_for`, filtered by what the player had bought) and the
+  starting kit (`save.creature.kit()`), both read at `OnEnter(Playing)` off
+  a save file the verifier does not have. **No replay of a real Dive Rise
+  run could ever have verified.**
+
+**The rule.** Anything that configures a run is either a **build constant**
+(Dive Rise's `OPENING_PICKS = 3`) or an **in-run phase inside `Playing`** —
+offered from `sim::GameRng`, chosen through `TickInput`, exactly like the
+phases in the section above. A persisted profile may keep stats, bestiaries,
+wins and best times, but **nothing under `src/game/` may read it inside
+`SimSet`**. Beat Bender's picker became a "CHOOSE YOUR FIGHT" card third in
+the chain; Dive Rise's shop became `levelup::OpeningShop` at the head of it.
+In both, the picker's ticks are recorded like any other tick — do **not**
+gate `record_tick`/`checksum_tick`/`sync_game_data` on the phase being over,
+because those ticks are precisely what makes the choice replayable.
+
+Then **fold the result**, so a replay that reproduced the score with the
+wrong song or the wrong animal is still caught: Dive Rise folds
+`PlayerBuild.creature`, and Beat Bender's game-owned `tests/selection.rs`
+asserts the verifier lands on the song and difficulty the fixture script
+*picks* (song 1 / HARD, neither of them the default), with
+`a_different_pick_is_a_different_run` keeping that assertion from being
+vacuous.
+
+**Why nothing local catches it.** On Beat Bender every fixture, both probes,
+`--selftest` and all three source scans were green. They are green for one
+reason: they all start from a fresh `App` and therefore pick the **default**
+— the same default the verifier picks — so recorder and verifier agree by
+accident, exactly as they agreed by accident about the app clock and about
+the second run in rule 7. The only thing that can see this class is a
+**real recording made with a non-default choice**, which is why skill step 5
+says to play the real run with the choices moved off their defaults: a
+different song, a different difficulty, a different creature, a bought
+upgrade.
+
+`tools/rollout-replay.sh` prints an advisory for the half a grep can reach:
+`<file>:<Resource>` pairs where a resource declared under `src/game/` is
+written from a file **outside** `src/game/` (a menu, a title screen, a
+settings page) and read by `src/game/`. That is Beat Bender's shape exactly
+(`src/ui/menu.rs:SelectedSong`, `src/ui/menu.rs:SelectedDifficulty`). It
+cannot see Dive Rise's — a profile deserialised off disk is not a resource
+anyone writes with a `ResMut` — so read `OnEnter(Playing)`'s setup systems
+by hand as well, and ask of every input it takes: *would a fresh app with no
+save file and no `localStorage` compute the same number?*
+
 ### Attract mode: systems that run in `Menu` as well as `Playing`
 
 A title screen over a living world (Grand Theft Otto's city keeps driving
@@ -994,6 +1060,15 @@ carries a seed and a stream of ticks; anything else a sim system reads is a
 number the verifier has to guess, and it guesses whatever a fresh app
 happens to hold.
 
+Three things have shipped under this rule, and they are the same mistake at
+three different distances from tick 1: what the app did **before** the run
+(the clock, below), what it kept **from the last one** ("Run state may not
+outlive the run", below), and what the **player** decided before the run
+started — a song, a difficulty, a starting kit, a saved profile. That third
+one lives under rule 1 with the other `GameState` work, as
+["A choice made before `Playing` is not carried either"](#a-choice-made-before-playing-is-not-carried-either),
+because the fix is the same as the phases fix; read it as part of this rule.
+
 ### `Time::elapsed_secs()` is the one that has shipped
 
 The old wording of this rule said the games with large
@@ -1639,7 +1714,7 @@ fn script(
     virt.latched |= tapped;
 }
 ```
-Three things worth copying.
+Five things worth copying.
 
 **Vary the plan per attempt.** `AIM_OFFSETS` and `POWER_TARGETS` are indexed
 by the stroke number, so a hole the bot can't sink gets eight different shots
@@ -1656,6 +1731,37 @@ and `shot.celebrate(…)` directly to fit a 90 s screenshot budget.
 **Pick `SELFTEST_TICKS` so the run does not finish.** `record_scripted_run`
 loops `while SimTick < SELFTEST_TICKS`, and a run that ends early stops
 advancing the tick and hangs that loop for ever.
+
+**Break the bot's own ties on `sim::SpawnOrder`.** The sorting discipline
+under rule 1 reads like a rule about sim systems; it binds the **bot** just
+as hard. Voidrunner is the worked example, and it cost a day: its script
+picked a target with `min_by(z)`, the corridor's mixed cluster spawns a
+sentinel and a relay at exactly the same `z`, and `min_by` resolved that tie
+on whatever order the query handed it — archetype order. So
+`tests/archetype_order.rs` failed on its first run with the **sim
+innocent**: the decorated app simply made the bot press different buttons.
+A probe failure in the bot is indistinguishable from a probe failure in the
+sim until you bisect it, and the way to bisect it is to decorate one entity
+kind at a time. Any `min_by` / `max_by` / "nearest target" / "first within
+range" in `selftest::script` **or** `autopilot::drive_autopilot` gets
+`.then_with(|| a.spawn_order.cmp(&b.spawn_order))`.
+
+**Hold, do not latch, in a game that fires on release.**
+`virt.latched |= Buttons::A` is the skeleton's one-tick press, and
+`edges()` derives `held` from the *held set only* — so in a game that acts
+on `primary_just_released` (BeerPong throws on the release of a charge) a
+latched A is a press that is never released, and the bot does nothing at
+all. Both of BeerPong's replacement probe bots gave **zero throws in 1 800
+ticks** and went green without ever putting a ball in the air. In such a
+game every bot — the fixture script, `reckless_script`, `coaster_script`
+and `holder_script` alike — must `set_held` the charge and clear it to
+fire, and the row must assert something only a *completed* action can
+produce (BeerPong's Selftest and Holder rows assert the run scored, which
+is the only way `animate_sinking_cups` ever gets an entity). This is what
+the per-system counters are for: a bot with a zero counter has tested
+nothing, however green the row is. Note the knock-on, because it is easy to
+miss — BeerPong's `holder_script` therefore holds `DOWN` rather than A,
+since holding A would mean never releasing it and so never throwing.
 
 Check what the script actually reached before committing the fixture — a
 throwaway integration test that runs `build_verify_app`/`run_verify_app` and
@@ -1822,6 +1928,32 @@ do not, write the dependency down as a targeted unit test instead — Attic's
 `a_vacated_cell_changes_where_the_next_heavy_lands` are the pattern — and say
 so in `docs/replay-notes.md`, so nobody later reads the green probe as
 evidence the sorts can go.
+
+Wave 4 measured four more, and they are worth reading as a set, because in
+every one of them the sort was *right* and the probe simply could not reach
+it:
+
+| game | why the probe cannot reach the sort |
+|---|---|
+| Tire Stack | 0.7-2.2 s between spawns, so no two tires in a scripted run are ever catchable, or reach the floor, on the same tick |
+| BeerPong | capture radius 0.28 against 0.642 between the closest cup centres, so no point is inside two cup mouths and "first match wins" is never ambiguous |
+| Voidrunner | one projectile overlapping two obstacles on one tick does not happen at this hitbox size in 7 200 ticks of this bot's play (and it is the *obstacle* sort only — deleting the *projectile* sort in the same system failed 3 of 12 under `split`) |
+| Beat Bender | the sim owns no entities at all, so there is no sort to delete; the probe's stand-ins model the shape the game would have if one came back |
+
+**When the probe cannot reach a sort, pin the *measurement* with a targeted
+unit test** — not a test that the sort exists, which is circular, but a test
+of the fact that makes the sort unreachable, so a re-tune says so out loud.
+BeerPong shipped the pattern in its clearest form, as a pair:
+`the_rack_never_puts_two_cup_mouths_within_reach_of_one_ball` asserts the
+geometry (a re-rack or a wider mouth breaks it), and
+`overlapping_cups_capture_in_spawn_order_not_archetype_order` hands the
+system two co-located cups in descending key order and is the only test in
+that repo that fails with the sort deleted. Tire Stack did the same with two
+tests that drop two tires which interact on one tick, decorating one of
+them. Then write it down in `docs/replay-notes.md`; the sentence to write is
+**"the sort stays because the class is real, not because this probe sees
+it"**, and the thing not to write is anything that reads as licence to
+delete it.
 
 **`tests/windowed_shape.rs` is the other half of this test, and it asks the
 resource question.** `archetype_order` adds components; `windowed_shape`
