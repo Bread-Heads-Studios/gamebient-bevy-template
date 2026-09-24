@@ -100,6 +100,22 @@ reproduce ([spec](superpowers/specs/2026-09-15-replay-verification-design.md)):
    `TickInput` into a sim-owned component or resource and let presentation
    *paint* it, one-directionally.
 
+   The same hole is wider than a decorator that flips a sign: it also covers
+   a field that presentation **animates** every frame — a head bob, a hover,
+   a breathing scale, a recoil kick — on an entity the sim owns. Hunted's
+   `weapon::fire_staff` built its auto-aim direction from the player's own
+   `Transform.translation`, and `player::headbob_camera` is a windowed-only
+   `Update` system writing a sinusoidal offset into the very `translation.y`
+   that the sim pins to a constant every tick. Because the aim is a full
+   `Vec3` normalize, the bob moved the whole direction and not just its
+   height, so every auto-aimed shot left on a different vector in the
+   browser and in the verifier — and a projectile's velocity is folded run
+   state. So: **a sim system reads sim-owned positions, never a transform
+   field that presentation is free to move.** Where the sim decides the value,
+   latch it as above; where the sim already knows it (a constant, or an
+   integrator of its own), rebuild it rather than reading the rendered one
+   back.
+
    *Sorting discipline*, the same hazard from the other end: any sim system
    that iterates a `Query` and accumulates **order-sensitively** — a running
    multiplier, pushing into a `Vec` the sim later reads in order, a
@@ -410,6 +426,17 @@ drift.
    `unverified`.
 6. **Runtime.** The verifier module is wasm-bindgen's `nodejs` target and
    `require()`s an ESM snippet: Node 20.19+ or 22.12+ (CI pins Node 22).
+7. **Ranking order is the site's, per game.** A replay carries one `u32`
+   (rule 9's `leaderboard_score()`); it does not say which direction is
+   better, and the board sorts descending. Games whose native number is
+   **lower-is-better** — a speedrun or survival clock, golf strokes —
+   therefore have to invert it inside `leaderboard_score()` today, which
+   makes the submitted integer something no player recognises. The site
+   should carry `score_order: "asc"` (with a unit) per game, from
+   `assets/info.json` through to the leaderboard renderer, after which such
+   a game reports its native number. **Changing it invalidates every score
+   already submitted** under the inverted scheme, so it wants doing before a
+   board fills rather than after.
 
 Module API, called once per verification:
 
