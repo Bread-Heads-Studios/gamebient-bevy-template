@@ -85,6 +85,15 @@ attic-excavator, grand-theft-otto).
    up too and is fine. Read the files, then let `tests/archetype_order.rs`
    answer it.
 
+   The other `HAND EDIT (advisory)` lines are the same kind of reading list
+   for the rules that have shipped bugs: a sim system reading `ScreenFade`,
+   a sim call to `libm`, an app-lifetime clock read, a `Local` in a sim
+   file, and `<file>:<Resource>` pairs where a resource `src/game/` reads is
+   **written from outside it** — a menu or a title screen deciding
+   something about the run, which no replay carries (see the checklist's
+   "A choice made before `Playing` is not carried either"). Each line names
+   the rule and the test that answers it.
+
 3. **Port the determinism rules.** Work through
    `references/port-checklist.md` rule by rule against the game's actual
    systems. Commit once it compiles:
@@ -165,7 +174,19 @@ attic-excavator, grand-theft-otto).
    that the probe's script actually reaches the mechanics", has the
    measurement and the two constraints on the bot (pure input; no RNG).
 
-5. **Play a real run and verify it two ways.**
+5. **Play a real run and verify it two ways — with non-default choices.**
+   **Play it the way a player would, not the way a test does.** If the game
+   lets the player decide anything before or during the run — a song, a
+   difficulty, a character, a loadout, a shop purchase — set every one of
+   them **away from its default** for this recording. That is the only
+   check in the whole rollout that can see a pre-`Playing` choice the replay
+   does not carry: every fixture, both probes and `--selftest` start from a
+   fresh `App` and pick the same default the verifier picks, so they agree
+   with it by accident. Beat Bender's title-screen song/difficulty and Dive
+   Rise's profile-driven starting kit were both found here and nowhere else
+   — see the checklist's "A choice made before `Playing` is not carried
+   either". A mismatch whose **tick count** differs from the recording is
+   the signature.
    ```bash
    GX_REPLAY_DIR=build/replays cargo run   # play to game over
    cargo run --features verify --bin verify -- build/replays/<ms>.gxr
