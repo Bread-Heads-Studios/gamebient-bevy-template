@@ -56,9 +56,12 @@ either negate/invert consistently or (preferred) rank ascending on the
 site side as a documented follow-up; for this rollout, expose
 `leaderboard_score()` as `u32::MAX - tenths_survived` or similar so the
 existing higher-is-better leaderboard ranks correctly, and say so clearly
-in a doc comment because it's surprising). No `Paused`-gated `ScreenFade`
-usage was confirmed in this pass — check `screens.rs`/`transition.rs` for
-the game-over path before assuming it already calls `ScreenFade::request`.
+in a doc comment because it's surprising — **superseded 2026-09-24: the
+port rejected `u32::MAX - tenths`, which ranks an instant death as the best
+run there is, and shipped a two-band inversion instead; see
+`port-checklist.md` rule 9, "Lower-is-better games"**). No `Paused`-gated
+`ScreenFade` usage was confirmed in this pass — check
+`screens.rs`/`transition.rs` for the game-over path before assuming it already calls `ScreenFade::request`.
 
 ## Moleman Racing
 

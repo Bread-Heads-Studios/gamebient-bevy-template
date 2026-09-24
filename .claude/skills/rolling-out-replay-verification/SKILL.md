@@ -57,6 +57,11 @@ attic-excavator, grand-theft-otto).
    `references/catalog-2026-09-16.md` unless told otherwise. Read that row
    in full (layout, RNG sites, transcendental count, published PDA) and,
    if the game is listed there, its section in `references/irregular-games.md`.
+   **The fleet rollout is complete as of 2026-09-24** — 17 of the 18 Bevy
+   0.18 games are ported, and the one unchecked row (`moleman-racing`) is
+   deferred by the owner and needs its input bridge first. So this skill is
+   now mostly for a **new** game: it has no catalog row, so survey it
+   against the catalog's cross-cutting sections yourself before step 2.
 
 2. **Branch and roll out.**
    ```bash

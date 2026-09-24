@@ -12,6 +12,88 @@ in its physics, and a screenshot tour that writes run state. Read them as one
 worked example, not a template: the shapes to copy are the rule's prose and
 this template's own `after` blocks.
 
+## Before rule 1: a game with no `src/game/` (a flat layout)
+
+`tools/rollout-replay.sh` copies `src/game/sim.rs` and `src/game/replay/`
+**unconditionally** — it has no flat-layout branch. Hunted is the fleet's
+one such game (every feature module sits directly under `src/`), and the
+procedure it used is the one to repeat. Settle all of this *before* rule 1:
+it decides where every later `use` points.
+
+**1. Move the copied files to the crate root.** `src/game/sim.rs` →
+`src/sim.rs`, `src/game/replay/` → `src/replay/`, beside `src/record/`,
+which is where `tools/rollout-record.sh` already puts the footage recorder.
+
+**2. Retarget the imports, and write down every one you touched.** The edits
+are mechanical — `use super::scoring::…` → `use crate::scoring::…`,
+`crate::game::sim` → `crate::sim`, `crate::ui::transition::ScreenFade` →
+wherever the fade actually lives — but there is one that is not an import:
+`sim.rs`'s three source scans (`no_app_lifetime_clock_in_sim_code`,
+`no_local_state_in_sim_systems`,
+`no_forbidden_randomness_or_hashmaps_in_game_code`) walk
+`concat!(env!("CARGO_MANIFEST_DIR"), "/src/game")`, a directory that does
+not exist here. Point them at `/src`. That is **stricter**, not looser: the
+scans now cover the presentation modules too, which is why a flat game ends
+up with more `// allow-app-clock` and `// allow-forbidden-rng` markers than
+its neighbours. `src/bin/verify.rs` and `tests/selftest.rs` need one
+substitution the script cannot know about on top of its own
+`gamebient_game::` → `<crate>::` pass: `<crate>::game::replay` →
+`<crate>::replay`.
+
+**3. `build.rs`, `docs/replay-verification.md`, `tools/build_verify.sh` and
+`tools/verify_fixture.mjs` stay byte-identical** to the template's. Nothing
+about the layout reaches them.
+
+**4. The verifier builds from the *library*, so the sim has to live there.**
+`replay::build_headless_app` constructs `game::GamePlugin { headless: true }`.
+A binary's items are not reachable from a library, so anything a flat game
+declared in `main.rs` — Hunted had `GameState`, its sub-state, `Paused` and
+`not_paused` there — has to move into modules the library exposes, and a
+real `src/game.rs` has to exist. Hunted added three files: `src/states.rs`,
+`src/scoring.rs` (`GameData` + `LeaderboardScore`, which `sim.rs`,
+`replay/mod.rs` and `replay/recorder.rs` all `use`, so the crate does not
+compile without it) and `src/game.rs`.
+
+> **`GamePlugin` must own the whole run, and be the same sim the browser
+> ran.** Not a second headless copy that can drift: the point of the
+> verifier is that it re-simulates *this* code. So `GamePlugin` takes the
+> state machine, every run resource, the `sim::SimSet` chain, the
+> `OnEnter(Playing)` spawns and the recorder, and everything behind
+> `!self.headless` is presentation. `main.rs` keeps only what a window needs
+> (`DefaultPlugins`, the canvas policy, the UI scale, the dev harnesses),
+> and each feature module keeps a `…PresentationPlugin` for its windowed
+> half. The rollout script moves the `mod x;` lines out of `main.rs` into a
+> generated `src/lib.rs` as `pub mod x;` for you; the split above is by
+> hand.
+
+**5. No `assets::AssetsPlugin` means `tests/windowed_shape.rs` is
+hand-written.** The script **refuses** to copy its version rather than hand
+over a file that cannot compile (test part (p) pins that refusal), because
+the template's `record_windowed` builds `assets::AssetsPlugin`. Budget for
+it — it is the probe that catches the fade and app-clock classes, so
+skipping it is not an option. Write it against whatever this game's real
+`!headless` shape *is*: in Hunted the decorators live inside the sim's own
+spawn systems behind `Option<ResMut<Assets<..>>>`, so the windowed
+fingerprint is **the asset stores themselves** (`AssetPlugin` +
+`Assets<Mesh>` / `<StandardMaterial>` / `<Image>`) plus `ScreenFade::boot()`
+and the fade tick, plus every `…PresentationPlugin`. Leave a plugin out only
+with the reason in the file — Hunted leaves two, one that writes
+`~/.hunted_best_time` on victory (a test that scribbles in `$HOME` is not a
+test) and one whose `menu_input` would eat the bot's `A` press. Keep the
+shipped row set and the reach counters; they are not layout-specific.
+
+**6. `--upgrade` cannot refresh any of this, and will not tell you twice.**
+The script classifies a copied file by byte-identity against a committed
+template version, so `sim.rs` and `replay/*` are permanently "locally
+modified" in a flat game and a later `--upgrade` will skip or mangle them.
+**The port's job is to make the redo mechanical**: put the retarget list
+from step 2 in the game's `docs/replay-notes.md` as a table — template path,
+game path, and every changed line with its reason — so a future upgrade is
+"re-copy the template's current file, apply this list". Hunted's is the
+model, including the one non-path change it records (a template test
+asserting `score: 0` for a 120-tick run, which is wrong in a game whose
+leaderboard integer *is* the run clock).
+
 ## Rule 1 — `SimSet` only
 
 Everything that mutates run state moves from `Update` into the
@@ -539,6 +621,55 @@ in `src/assets/` and `src/ui/` that can match a sim entity, and then
 `grep -rn 'scale\|rotation' src/game/` for reads of them. Survivors are
 fine as long as nothing in `src/game/` reads them back.
 
+##### The same trap from the other axis: a field that presentation *animates*
+
+Dive Rise's `scale.x` was written by a decorator that only ever flips a
+sign. The wider and more common shape is a field that presentation **animates
+every frame** — a head bob, a hover, a breathing scale, a recoil kick — on
+an entity the sim owns, and a sim system reading that field back.
+
+Hunted shipped it. `player::headbob_camera` is an `Update` system in the
+windowed build alone, writing a sinusoidal offset into the very
+`translation.y` that `move_player` pins to `HEAD_HEIGHT` on every fixed
+tick. `weapon::fire_staff`'s auto-aim blended the aim vector towards the
+nearest creature:
+
+```rust
+let player_pos = player_tf.translation;                       // the bug
+let aim_dir = (forward * 0.7
+    + (creature_pos - player_pos).normalize_or_zero() * 0.3).normalize_or_zero();
+```
+
+That is a full three-component `normalize`, so the bobbed `y` moves the
+**whole** direction, not just its height — and the projectile's velocity is
+run state the checksum folds. Every auto-aimed shot left on a different
+vector in the browser and in the verifier. The fix is the same
+one-directional discipline, applied to a constant rather than a latch:
+
+```rust
+let player_pos = Vec3::new(tf.translation.x, player::HEAD_HEIGHT, tf.translation.z);
+```
+
+**The rule, stated so it covers both:** a sim system reads *sim-owned
+positions*, never a transform field that presentation is free to move. Where the
+sim decides the value, latch it into sim-owned state and let presentation
+paint it (Dive Rise's `player::Facing`); where the sim already knows it as a
+constant or an integrator of its own, rebuild it (Hunted's `HEAD_HEIGHT`,
+made `pub` with the explanation on it). Apply it **preventively** to
+anything that publishes a position other systems consume — Hunted's
+`audio::update_player_sound` publishes the noise position the whole creature
+AI hunts by, and it got the same treatment before anything had gone wrong
+with it.
+
+The grep is the same two-pass audit, widened past `scale`/`rotation`:
+mutable `Transform` queries in every `Update`-only module that can match a
+sim entity, then reads of those fields inside the sim. `normalize` on a
+`Vec3` built from a transform is the specific line to look at twice. And the
+probe row that sees it is a `windowed_shape` **counter** on the animation
+itself: Hunted asserts `headbob_frames` — frames on which the player's `y`
+was off `HEAD_HEIGHT` — non-zero for every bot, so the windowed-only write
+the port neutralised can never go inert unnoticed.
+
 **And carry the real `AssetsPlugin` in the probe**, on hand-made asset
 stores, so the decorators run for real:
 
@@ -1028,6 +1159,69 @@ native-recorded run — a cabinet run, or your own `GX_REPLAY_DIR` recording
 in step 5 — may legitimately fail under the Node verifier after long
 enough. Record the measurement in the game's `docs/replay-notes.md`, never
 in `docs/replay-verification.md`.
+
+#### When the folded value is essential: give the sim its own trig
+
+The two halves above assume you can either drop the libm result from the
+fold or freeze its argument. **Prefer this third option whenever neither is
+true** — when the argument genuinely varies tick to tick *and* the value it
+produces is something the checksum has to fold to be worth having. Ship a
+pure-`f32` `sin_cos` and let the sim call **no `libm` at all**.
+
+Pizza Pinball is the worked example and
+`games/pizza-pinball/src/game/trig.rs` is the file to copy (a workspace
+path, not a repo-relative one — this document ships inside every game).
+That game has 33 call sites, three of them in the collision path: two with
+constant arguments (the playfield's wall set, the flipper pivot) that the
+literal rule covers, and `Flipper::world_segment` — the bat's rotation,
+which the player moves every tick, and for which there is no literal. The
+alternative was not folding the ball's position, which in a pinball game is
+most of what a checksum is *for*: the ball's path through a bumper cluster
+amplifies one ulp into a different score within a few bounces.
+
+The module is ~160 lines and has no dependencies:
+
+* **Cody-Waite reduction** onto `[-pi/4, pi/4]` plus a quadrant index —
+  `k = (x * 2/pi).round()`, then `r = (x - k*PI_2_HI) - k*PI_2_LO`, the two
+  steps being what keeps the low bits a single subtraction would throw away.
+  `f32::round` is not a libm call: its result is an exactly representable
+  integer, so every platform returns the same one.
+* **Two short minimax polynomials** in `r`, evaluated with `+`, `-` and `*`
+  only, then re-signed by quadrant. Those three operations are pinned
+  bit-exactly by IEEE-754 on every platform the fleet builds for, and Rust
+  never contracts them into an FMA — so every platform computes the same
+  bits.
+* `sin`, `cos`, `tan` (as `s / c`) and `unit(a) -> Vec2` on top of it, the
+  last being the deterministic replacement for `Vec2::from_angle`, which
+  calls `f32::sin_cos`.
+
+Accuracy is ~1e-7 absolute, far inside the tuning tolerance of anything a
+game collides with. **Unit-test it against `libm` with a tolerance and never
+bit-exactly** — a bit-exact assertion pins whichever libm the test machine
+ships, which is the dependency the module exists to remove. Pizza Pinball's
+four tests are the set to keep: 1e-6 around the whole circle, 1e-6 on the
+specific arguments the sim feeds it, `|unit(a)| == 1` within 1e-6, and one
+asserting the same argument always returns the same **bits**, which is the
+property the checksum is folded against.
+
+What it buys, measured: identical checksums from the native and Node
+verifiers on both fixtures and on a real rendered run, and therefore a
+`checksum_pizza_pinball` that folds the ball's own position and velocity and
+both flipper angles bit-exactly, instead of settling for integers. There is
+no drift section in that game's `docs/replay-notes.md` because there is no
+drift.
+
+**Presentation keeps using `f32::sin`/`cos`/`atan2` and always will** — the
+ball's roll, the bat's yaw, the garnish scatter, the particles, the shake.
+The module is for the sim, and swapping it in everywhere would be noise.
+
+*Not copied into the template, deliberately.* `tools/rollout-replay.sh`
+writes no `trig.rs`: it is game-specific numerical code most games never
+call, and a module nothing calls is a maintenance cost plus a temptation.
+Copy Pizza Pinball's file into the game that needs it, adapt the doc comment
+to name that game's varying-argument site, and say in
+`docs/replay-notes.md` which call sites moved onto it and which stayed on
+`libm` because they are presentation.
 
 **Greppable:** `grep -rnE '\.sin\(\)|\.cos\(\)|\.exp\(\)|\.powf\(|\.atan2\(' src/game/`.
 `tools/rollout-replay.sh` runs that scan for you and prints a
@@ -1527,6 +1721,49 @@ impl LeaderboardScore for GameData {
 it a hole played past `2 × par` would wrap to a colossal score. The HUD still
 shows strokes; only the host event, the replay seal and the checksum switch to
 points.
+
+### Lower-is-better games: the two-band inversion, and its expiry date
+
+Golf strokes and a speedrun clock are the same problem: the number the game
+is *about* gets **smaller** as the player gets better, and
+`leaderboard_score()` feeds a board that sorts descending. Cannonball Putt
+solved it by changing units (strokes → points). A game whose number has no
+natural positive form — a survival or speedrun timer — needs an inversion,
+and the naive one is wrong.
+
+**Do not write `u32::MAX - tenths`.** `irregular-games.md` suggests it and
+Hunted rejected it for a reason that shows up on the first board: it ranks
+an instant death as the best run there is.
+
+**Write two bands instead**, so the range is a total order that means what a
+player expects. Hunted's, for a run that either ends in capture or in an
+escape through the gate:
+
+| outcome | value | ranks |
+|---|---|---|
+| caught, or still running | `tenths`, capped at 36 000 | `0 ..= 36_000` — longer survived is better |
+| escaped | `36_001 + (36_000 - tenths)` | `36_001 ..= 72_001` — faster escape is better |
+
+Three properties to check in whatever you write: every *winning* outcome
+outranks every losing one (the bands do not overlap); the value moves in
+**both** bands with every tick of the clock, so `sim::checksum_tick` stays
+sensitive to the timer on its own without extra folding; and the cap is
+explicit, so a very long run saturates instead of crossing into the band
+above. Put the table in `docs/replay-notes.md` — it is the first thing
+anyone reading a leaderboard number will need.
+
+**Say out loud that it is temporary.** The honest fix is site-side: a
+per-game `score_order: "asc"` (with a unit, e.g. `"time"`) in
+`assets/info.json` and in the leaderboard renderer, after which
+`leaderboard_score()` becomes plain `tenths` and the bands disappear.
+Two things follow. It is a **website** change, not a port change, so it does
+not belong in the game's PR — raise it as its own item (it is in the
+catalog's "Next"). And it has to land **before the game's board fills**:
+switching the order invalidates every score already submitted under the
+inverted scheme, so the cost grows with every run played. Two games would
+report a number a player recognises the day it lands: Hunted (the bands
+above become plain `tenths`) and Cannonball Putt (golf points become
+strokes, which is what its own HUD has shown all along).
 
 ## Rule 10 — end the run through `sim::end_run`
 
