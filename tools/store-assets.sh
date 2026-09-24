@@ -58,13 +58,13 @@ rm -f assets/screenshots/0[1-6].png
 i=0; urls=()
 for f in "${picked[@]}"; do
   i=$((i+1)); n=$(printf '%02d' "$i")
-  ffmpeg -v error -y -i "$f" -vf "scale=1280:720:flags=lanczos" -frames:v 1 "assets/screenshots/$n.png"
+  ffmpeg -nostdin -v error -y -i "$f" -vf "scale=1280:720:flags=lanczos" -frames:v 1 "assets/screenshots/$n.png"
   urls+=("$n.png")
 done
 
 trailer_written=0
 if [ -n "$trailer_src" ]; then
-  ffmpeg -v error -y -i "$trailer_src" -t "$MAX_TRAILER_SECONDS" \
+  ffmpeg -nostdin -v error -y -i "$trailer_src" -t "$MAX_TRAILER_SECONDS" \
     -vf "scale=1280:720:flags=lanczos" -c:v libx264 -preset slow -crf 23 -pix_fmt yuv420p \
     -c:a aac -b:a 96k -movflags +faststart -f mp4 assets/trailer.mp4.tmp
   size=$(stat -f%z assets/trailer.mp4.tmp 2>/dev/null || stat -c%s assets/trailer.mp4.tmp)
