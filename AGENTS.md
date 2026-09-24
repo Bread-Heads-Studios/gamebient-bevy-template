@@ -64,7 +64,9 @@ one-responsibility files.
   `clips/<beat>.mp4`. `cut_clips.py` also renders `banner.png` from
   `tools/vertical-banner.svg` via `rsvg-convert` and reframes the tour and
   clips to 1080x1920 (`tour-vertical.mp4`, `clips/vertical/<beat>.mp4`) for
-  vertical-format posting. The `recording-game-footage` skill rolls this out
+  vertical-format posting. `tools/store-assets.sh` turns a `record.sh` capture
+  into the store screenshots, trailer and v2 metadata the website renders
+  (see `docs/build-and-release.md`). The `recording-game-footage` skill rolls this out
   and writes `docs/video-notes.md`.
 - **The box cover and mint metadata:** `assets/cartridge.png` (768x1024) and
   `assets/info.json` are what the marketplace mints. Both ship as placeholders:

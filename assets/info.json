@@ -6,7 +6,10 @@
     "attributes": [
         { "trait_type": "Genre", "value": "Arcade" },
         { "trait_type": "Platform", "value": "Web" },
-        { "trait_type": "Players", "value": "1" }
+        { "trait_type": "Players", "value": "1" },
+        { "trait_type": "Developer", "value": "PLACEHOLDER: studio or developer name, e.g. \"Bread Heads Studios\". Replace before publishing." },
+        { "trait_type": "Developer URL", "value": "PLACEHOLDER: https URL for the developer, e.g. \"https://ColecoVisionGX.com\". Replace before publishing." },
+        { "trait_type": "Tags", "value": "PLACEHOLDER: 3-5 lowercase tags, comma-separated, include arcade. Replace before publishing." }
     ],
     "properties": {
         "files": [
@@ -17,6 +20,8 @@
         "demo_url": "https://gamebient-game.vercel.app",
         "verify_url": "https://gamebient-game.vercel.app/verify.zip",
         "binary_url": "https://gamebient-game.vercel.app/assets/gamebient-game.tar.gz",
-        "binary_type": "bevy-tar"
+        "binary_type": "bevy-tar",
+        "screenshots": [],
+        "version": "0.1.0+unknown"
     }
 }

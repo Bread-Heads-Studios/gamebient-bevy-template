@@ -22,6 +22,19 @@ How this template builds for three targets and ships releases. See
 - **`package.sh <pi|x86>`** — bundles `target/<triple>/release/gamebient-game` +
   `assets/` + a generated `run.sh` launcher into `build/gamebient-game-<target>.tar.gz`.
   The Pi launcher sets `WINIT_UNIX_BACKEND=x11`; x86 lets winit auto-select.
+- **`store-assets.sh [--released-at YYYY-MM-DD] [--set-developer NAME] [--set-developer-url URL] [--set-tags "a, b"] [--dry-run]`**
+  — the step between `record.sh` and publishing: turns a `tools/record.sh`
+  capture into the store metadata the website renders. Inputs:
+  `build/record/shots/{04,05,06,07}-*.png` and `build/record/clips/signature.mp4`
+  (falling back to `05-mid-play.mp4`, then `04-early-play.mp4`). Outputs:
+  `assets/screenshots/01.png…04.png` (1280x720), `assets/trailer.mp4` (H.264/AAC,
+  1280x720, `+faststart`, ≤20s, refuses to write one over 8 MB), and rewrites
+  `assets/info.json`'s `properties.screenshots`/`trailer_url`/`version` plus
+  `released_at`/`Developer`/`Developer URL`/`Tags` (only via the matching flag
+  or when still a `PLACEHOLDER:` value; otherwise reports what's still missing).
+  The website's `scripts/game-release-date.mjs` supplies the exact
+  `--released-at` date from the game's on-chain release transaction.
+  `tools/rollout-store-assets.sh <game-dir>` copies it into a game checkout.
 - **`fetch-cartridge.sh`** — downloads the flat `gamebient-game.tar.gz` from the
   latest GitHub release into `dist/assets/`. Non-fatal and private-repo-safe
   (resolves the asset through the GitHub API with `GH_TOKEN`).
