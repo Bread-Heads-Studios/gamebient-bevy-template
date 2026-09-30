@@ -99,6 +99,12 @@ one-responsibility files.
   tests/fixtures/selftest.gxr`. See `docs/replay-verification.md`.
 - **Rolling replay verification into a game:** `tools/rollout-replay.sh <game>`
   then the `rolling-out-replay-verification` skill.
+- **Converting a game to 4:3 / 1:1 / 3:4 with the cabinet frame:**
+  `tools/rollout-aspect.sh <game> <4:3|1:1|3:4>` copies the verbatim files,
+  pins the size, writes `tests/display_contract.rs` and prints `HAND EDIT:`
+  lines for the rest. `tools/frame-accept.sh --check-copies <game>` proves the
+  copies are still verbatim; `tools/frame-accept.sh --shots <dir> --window WxH
+  --ratio <r>` checks kept screenshots. Neither is copied into a game.
 - **A marquee highlight:** write `frame::Highlight::rgb(r, g, b)` with a
   `MessageWriter<frame::Highlight>`. The frame (`src/frame/`, native only,
   added in `main.rs`) and web hosts both react. See "Cabinet frame" in
