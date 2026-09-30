@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Copies the record feature (src/game/record/ folder module, tools/record.sh,
-# tools/cut_clips.py, tools/vertical-banner.svg) from this template into a game
-# checkout and wires it: feature flag, `pub mod record`, the RecordPlugin block
-# in GamePlugin, the RecordBeat branch in the autopilot's shot(), Debug on
-# SfxEvent. Idempotent. Games whose layout differs from the template (autopilot
-# under src/, no GameData, SfxEvent elsewhere) print what still needs a hand edit.
+# tools/game-size.sh, tools/cut_clips.py, tools/vertical-banner.svg) from this
+# template into a game checkout and wires it: feature flag, `pub mod record`,
+# the RecordPlugin block in GamePlugin, the RecordBeat branch in the
+# autopilot's shot(), Debug on SfxEvent. Idempotent. Games whose layout differs
+# from the template (autopilot under src/, no GameData, SfxEvent elsewhere)
+# print what still needs a hand edit. record.sh takes the game's size from
+# src/display.rs through game-size.sh; a game with no src/display.rs yet
+# records as GAME_SIZE=1280x720 tools/record.sh.
 #
 # Usage: tools/rollout-record.sh <game-dir>
 set -euo pipefail
@@ -19,9 +22,10 @@ fi
 
 # Copy record feature and tools
 mkdir -p "$GAME/tools"
-cp "$TEMPLATE/tools/record.sh" "$TEMPLATE/tools/cut_clips.py" "$TEMPLATE/tools/test_cut_clips.py" \
-   "$TEMPLATE/tools/vertical-banner.svg" "$GAME/tools/"
-chmod +x "$GAME/tools/record.sh"
+cp "$TEMPLATE/tools/record.sh" "$TEMPLATE/tools/game-size.sh" "$TEMPLATE/tools/cut_clips.py" \
+   "$TEMPLATE/tools/test_cut_clips.py" "$TEMPLATE/tools/vertical-banner.svg" "$GAME/tools/"
+chmod +x "$GAME/tools/record.sh" "$GAME/tools/game-size.sh"
+[ -f "$GAME/src/display.rs" ] || echo "note: no src/display.rs in $GAME; until the game is converted, record with GAME_SIZE=1280x720 tools/record.sh"
 
 if [ "$FLAT_LAYOUT" = true ]; then
   # Flat layout: record goes into src/record/. Only replace a src/record/
