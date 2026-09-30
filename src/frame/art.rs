@@ -134,7 +134,13 @@ pub fn load_frame_art(mut commands: Commands, mut images: ResMut<Assets<Image>>)
     if let Some(data) = bezel.data.as_mut() {
         desaturate_rgba8(data, BEZEL_SATURATION);
     }
-    let (marquee, marquee_is_fallback) = read_art("marquee.png", FALLBACK_MARQUEE, false);
+    // After the bake, nothing in the main world reads the pixels: the frame's
+    // sprites all set `custom_size`, so Bevy sizes them from the descriptor.
+    // Keeping only the render-world copy drops a CPU duplicate of every
+    // texture (about 14.7 MB for a 1920 x 1920 bezel) once it is uploaded.
+    bezel.asset_usage = RenderAssetUsages::RENDER_WORLD;
+    let (mut marquee, marquee_is_fallback) = read_art("marquee.png", FALLBACK_MARQUEE, false);
+    marquee.asset_usage = RenderAssetUsages::RENDER_WORLD;
     let mut sweep = Image::new(
         Extent3d {
             width: SWEEP_TEXTURE_WIDTH,
@@ -144,7 +150,7 @@ pub fn load_frame_art(mut commands: Commands, mut images: ResMut<Assets<Image>>)
         TextureDimension::D2,
         sweep_pixels(SWEEP_TEXTURE_WIDTH),
         TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::default(),
+        RenderAssetUsages::RENDER_WORLD,
     );
     sweep.sampler = ImageSampler::linear();
     commands.insert_resource(FrameArt {
@@ -259,6 +265,29 @@ mod tests {
         assert!(art_problem(1920, 1080, true).unwrap().contains("square"));
         assert!(art_problem(4097, 4097, true).unwrap().contains("4096"));
         assert!(art_problem(1080, 5000, false).unwrap().contains("4096"));
+    }
+
+    /// The frame's textures are only ever drawn by sprites with a
+    /// `custom_size` (Bevy 0.18.0's sprite bounds read `Image::size_f32`,
+    /// which is the descriptor, never the pixels), so the main world does not
+    /// need its CPU copy after the bake: a 1920 x 1920 bezel is 14.7 MB.
+    #[test]
+    fn frame_textures_live_on_the_gpu_only() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.init_resource::<Assets<Image>>();
+        world.run_system_once(load_frame_art).unwrap();
+        let art = world.remove_resource::<FrameArt>().unwrap();
+        let images = world.resource::<Assets<Image>>();
+        for (name, handle) in [
+            ("bezel", &art.bezel),
+            ("marquee", &art.marquee),
+            ("sweep", &art.sweep),
+        ] {
+            let image = images.get(handle).unwrap();
+            assert_eq!(image.asset_usage, RenderAssetUsages::RENDER_WORLD, "{name}");
+        }
     }
 
     #[test]

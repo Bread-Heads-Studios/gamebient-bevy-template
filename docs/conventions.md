@@ -286,6 +286,9 @@ together (`src/lib/cabinetFrame/` in the website repo).
 - **Art geometry.** The frame writes the score line in rows 288 to 360 of
   the marquee, so lettering stays above row 288. The bezel's central
   1080x1080 is one flat colour; texture goes in the four arms.
+- **`src/frame/art/colecovision-gx-logo.png` is a source asset.** It is the
+  logo used to regenerate `fallback-marquee.png` and is not read at build
+  or run time; leave it in place.
 - **Brightness is the frame's job, not the artist's.** Draw the art at full
   strength. The frame multiplies the bezel by 0.35 (0.20 during play) and
   its saturation by 0.6, and the marquee by 1.0 (0.45 during play), fading

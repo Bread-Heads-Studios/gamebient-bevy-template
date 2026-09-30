@@ -2,6 +2,9 @@
 # Guards the tooling, its comments and the skills against stale 16:9 claims.
 # Each block names strings that must be gone and strings that must be there.
 # Plain grep on tracked files; needs no media tools.
+# TEMPLATE-ONLY: it asserts the template's own assets/info.json and docs, which
+# a game rewrites (its own aspect, marquee and bezel URLs). No rollout script
+# copies it into a game (tools/test_rollouts.sh checks that).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SKILLS=.claude/skills

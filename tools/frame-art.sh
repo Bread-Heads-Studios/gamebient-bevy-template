@@ -7,6 +7,7 @@
 #   - exact sizes;
 #   - the bezel's central 1080x1080, which the game covers, holds no detail;
 #   - the bezel is low-contrast.
+# It refuses, before rendering, an SVG that still contains the word PLACEHOLDER.
 # The frame dims both at runtime (bezel 0.35 idle, 0.20 in play, saturation
 # 0.6; marquee 1.00 idle, 0.45 in play), so the art is drawn at full
 # brightness. See frame-art.md in the `designing-cartridge-covers` skill.
@@ -22,6 +23,15 @@ command -v ffmpeg >/dev/null 2>&1 || { echo "frame-art: ffmpeg not on PATH (brew
 command -v ffprobe >/dev/null 2>&1 || { echo "frame-art: ffprobe not on PATH (brew install ffmpeg)" >&2; exit 1; }
 for f in tools/marquee.svg tools/bezel.svg; do
   [ -f "$f" ] || { echo "frame-art: $f not found (tools/rollout-frame-art.sh in the template copies the placeholders)" >&2; exit 1; }
+done
+
+# A template still marked PLACEHOLDER is a draft. Refuse it before anything is
+# rendered, so tools/store-assets.sh never publishes it from assets/.
+for f in tools/marquee.svg tools/bezel.svg; do
+  if grep -q PLACEHOLDER "$f"; then
+    echo "frame-art: $f still contains PLACEHOLDER; design the art (see the designing-cartridge-covers skill) and remove the word" >&2
+    exit 1
+  fi
 done
 
 # Luma levels, max minus min, as ffmpeg's signalstats reports them.

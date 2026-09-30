@@ -13,6 +13,11 @@
 #   (g) a bezel whose viewBox is 1920x1080 is refused, naming 1920x1920, and an
 #       earlier good bezel.png is left untouched.
 #   (h) an ffmpeg that succeeds but prints no YMIN/YMAX is refused, not passed.
+#   (i) a marquee.svg or a bezel.svg that still says PLACEHOLDER is refused,
+#       naming the file, before anything is rendered or written to assets/.
+# The shipped templates say PLACEHOLDER (they are for a game author to fill
+# in), so `mk` copies them with the word replaced; `mk_raw` copies them as they
+# are.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 command -v rsvg-convert >/dev/null || { echo "rsvg-convert required"; exit 1; }
@@ -21,9 +26,14 @@ command -v ffprobe >/dev/null || { echo "ffprobe required"; exit 1; }
 
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 
-mk() {  # mk <dir>: scratch game with the tool and both templates
+mk_raw() {  # mk_raw <dir>: scratch game with the tool and both templates as shipped
   mkdir -p "$1/tools"
   cp "$HERE/tools/frame-art.sh" "$HERE/tools/marquee.svg" "$HERE/tools/bezel.svg" "$1/tools/"
+}
+mk() {  # mk <dir>: like mk_raw, with the templates de-placeholdered so they render
+  mk_raw "$1"
+  sed -i.bak 's/PLACEHOLDER/DRAFT/g' "$1/tools/marquee.svg" "$1/tools/bezel.svg"
+  rm -f "$1/tools/marquee.svg.bak" "$1/tools/bezel.svg.bak"
 }
 dims() { ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$1"; }
 centre_range() {  # centre_range <png>: luma max minus min inside the central 1080x1080
@@ -84,5 +94,17 @@ mkdir -p "$T/h.bin"; printf '#!/bin/sh\nexit 0\n' > "$T/h.bin/ffmpeg"; chmod +x 
 if ( cd "$T/h" && PATH="$T/h.bin:$PATH" tools/frame-art.sh ) >"$T/out" 2>"$T/err"; then echo "FAIL h: empty ffmpeg output should be refused"; exit 1; fi
 grep -qF -- "YMIN/YMAX" "$T/err" || { echo "FAIL h: message: $(cat "$T/err")"; exit 1; }
 [ ! -e "$T/h/assets/bezel.png" ] || { echo "FAIL h: wrote the bezel anyway"; exit 1; }
+
+# (i)
+for which in marquee bezel; do
+  mk_raw "$T/i.$which"
+  sed -i.bak 's/PLACEHOLDER//g' "$T/i.$which/tools/marquee.svg" "$T/i.$which/tools/bezel.svg"
+  grep -q PLACEHOLDER "$HERE/tools/$which.svg" || { echo "FAIL i: shipped $which.svg has no PLACEHOLDER to test with"; exit 1; }
+  cp "$HERE/tools/$which.svg" "$T/i.$which/tools/$which.svg"
+  refused "i ($which)" "$T/i.$which" "tools/$which.svg"
+  grep -qF PLACEHOLDER "$T/err" || { echo "FAIL i ($which): message does not say PLACEHOLDER: $(cat "$T/err")"; exit 1; }
+  [ ! -e "$T/i.$which/assets" ] || { echo "FAIL i ($which): wrote assets/ anyway"; exit 1; }
+  [ ! -e "$T/i.$which/build" ] || { echo "FAIL i ($which): rendered before refusing"; exit 1; }
+done
 
 echo "test_frame_art: OK"

@@ -43,6 +43,13 @@ cargo run                    # debug, native host
 cargo run --release          # release, native host
 ```
 
+A native window also draws the cabinet frame (dim bezel art, and a marquee on
+portrait displays) around the game. `GX_FRAME=off` turns it off,
+`GX_WINDOW_SIZE=1080x1920` opens a window of that size, and the score to beat
+is kept in `$GX_DATA_DIR/best-score` (else
+`~/.local/share/gamebient/<package>/best-score`). See "Cabinet frame" in
+`docs/conventions.md`.
+
 ### Visual check (autopilot)
 
 ```bash

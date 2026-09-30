@@ -45,4 +45,10 @@ printf '[package]\nname = "scratch-game"\nversion = "0.1.0"\n\n[features]\nautop
 [ -x "$T/c/tools/game-size.sh" ] || { echo "FAIL c: game-size.sh not copied"; exit 1; }
 same "$T/c" game-size.sh c
 
+# (d) template-only tests are never rolled out: no rollout script names them.
+if grep -n "test_aspect_docs" "$HERE"/tools/rollout-*.sh; then
+  echo "FAIL d: a rollout script copies or names test_aspect_docs.sh, which asserts the template's own info.json"
+  exit 1
+fi
+
 echo "test_rollouts: OK"
