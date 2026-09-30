@@ -86,7 +86,7 @@ rand = "0.9"
 rand_xoshiro = "0.7"
 # The Gamebient control canon + web glue (host protocol, touch overlay,
 # Gamepad API, legacy keyEvent bridge). Pin a tag; bump deliberately.
-gamebient-input = { git = "https://github.com/Bread-Heads-Studios/gamebient-input", branch = "main" }
+gamebient-input = { git = "https://github.com/Bread-Heads-Studios/gamebient-input", tag = "v0.4.0" }
 
 # Native-only Bevy features: linux window backends and gilrs gamepad support.
 # Excluded from the wasm build so they don't add dead code paths.
