@@ -81,7 +81,8 @@ Marquee:
    colours, same stroke-below-fill-above stack. Make it as large as fits
    inside x 60 to 1020.
 2. **Rows 288 to 360 hold no lettering.** The frame writes the score line
-   over the marquee and needs a quiet strip.
+   over the marquee and needs a quiet strip. `tools/frame-art.sh` does not
+   check this: it checks the size and the bezel only, so look at the render.
 3. **It must read at x0.45.** Light lettering on a darker field. Check the
    dimmed preview below.
 4. **At most two drawings from the cover**, at the sides, behind the title.

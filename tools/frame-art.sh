@@ -34,8 +34,45 @@ dims() {  # dims <png>: prints <width>x<height>
 }
 luma_range() {  # luma_range <png> <crop w:h:x:y>: luma max minus min inside the crop
   ffmpeg -nostdin -v error -i "$1" -vf "crop=$2,signalstats,metadata=print:file=-" -frames:v 1 -f null - \
-    | awk -F= '/YMIN/ {lo = $2} /YMAX/ {hi = $2} END {print hi - lo}'
+    | awk -F= '/YMIN/ {lo = $2; nlo++} /YMAX/ {hi = $2; nhi++} END {if (!nlo || !nhi) exit 3; print hi - lo}'
 }
+svg_size() {  # svg_size <svg> <WxH>: refuse unless the root viewBox (and width/height, when given) is exactly that
+  python3 - "$1" "$2" <<'PY'
+import re, sys
+import xml.etree.ElementTree as ET
+path, want = sys.argv[1], sys.argv[2]
+def fail(found):
+    sys.exit(f"frame-art: {path} is {found}, expected {want}")
+try:
+    root = ET.parse(path).getroot()
+except ET.ParseError as e:
+    sys.exit(f"frame-art: {path} is not valid SVG ({e})")
+def num(v):
+    m = re.fullmatch(r"\s*([0-9.]+)(px)?\s*", v or "")
+    return float(m.group(1)) if m else None
+sizes = []
+vb = root.get("viewBox")
+if vb:
+    p = re.split(r"[,\s]+", vb.strip())
+    if len(p) != 4:
+        fail(f"viewBox '{vb}'")
+    sizes.append((float(p[2]), float(p[3])))
+if root.get("width") and root.get("height"):
+    w, h = num(root.get("width")), num(root.get("height"))
+    if w is None or h is None:
+        fail(f"width/height '{root.get('width')}' x '{root.get('height')}'")
+    sizes.append((w, h))
+if not sizes:
+    fail("of unknown size (no viewBox or width/height)")
+ww, wh = (float(x) for x in want.split("x"))
+for w, h in sizes:
+    if (w, h) != (ww, wh):
+        fail(f"{w:g}x{h:g}")
+PY
+}
+
+svg_size tools/marquee.svg 1080x360
+svg_size tools/bezel.svg 1920x1920
 
 mkdir -p "$WORK"
 rsvg-convert -w 1080 -h 360 tools/marquee.svg -o "$WORK/marquee.png"
@@ -46,9 +83,10 @@ d="$(dims "$WORK/marquee.png")"
 d="$(dims "$WORK/bezel.png")"
 [ "$d" = "1920x1920" ] || { echo "frame-art: bezel rendered at $d, expected 1920x1920" >&2; exit 1; }
 
-r="$(luma_range "$WORK/bezel.png" 1080:1080:420:420)"
+ymm() { echo "frame-art: ffmpeg printed no YMIN/YMAX for $1; cannot check its brightness" >&2; exit 1; }
+r="$(luma_range "$WORK/bezel.png" 1080:1080:420:420)" || ymm "the bezel's centre"
 [ "$r" -le "$CENTRE_MAX_RANGE" ] || { echo "frame-art: the bezel has detail inside the central 1080x1080 (luma range $r, limit $CENTRE_MAX_RANGE). The game covers that region: keep it one flat colour." >&2; exit 1; }
-r="$(luma_range "$WORK/bezel.png" 1920:1920:0:0)"
+r="$(luma_range "$WORK/bezel.png" 1920:1920:0:0)" || ymm "the bezel"
 [ "$r" -le "$BEZEL_MAX_RANGE" ] || { echo "frame-art: the bezel has too much contrast (luma range $r, limit $BEZEL_MAX_RANGE). Bring its darkest and brightest colours closer together." >&2; exit 1; }
 
 mkdir -p assets

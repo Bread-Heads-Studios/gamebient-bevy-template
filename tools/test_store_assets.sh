@@ -18,6 +18,10 @@
 #       -> properties.marquee / properties.bezel point at them; absent (a)
 #       -> both keys are removed, so the site uses the shared art.
 #   (k) a marquee.png of the wrong size -> non-zero exit, nothing written.
+#   (m) info.json seeded with marquee/bezel URLs and no PNGs -> both keys removed,
+#       every other key unchanged.
+#   (n) a good marquee.png and no bezel.png -> marquee written with the game's
+#       host, bezel absent.
 #   (l) a game size that is not a sanctioned ratio -> non-zero exit.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -127,5 +131,32 @@ mk "$T/l" 1000x700 1500x1050
 if ( cd "$T/l" && "$TOOL" ) >/dev/null 2>"$T/l.err"; then echo "FAIL l: 10:7 should be refused"; exit 1; fi
 grep -q "10:7" "$T/l.err" || { echo "FAIL l: message: $(cat "$T/l.err")"; exit 1; }
 [ ! -d "$T/l/assets/screenshots" ] || { echo "FAIL l: wrote screenshots"; exit 1; }
+
+# (m)
+mk "$T/m"
+python3 - "$T/m/assets/info.json" <<'PY'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+d["properties"]["marquee"] = "https://old.example/marquee.png"
+d["properties"]["bezel"] = "https://old.example/bezel.png"
+json.dump(d, open(p, "w"), indent=2)
+PY
+cp "$T/m/assets/info.json" "$T/m.seed.json"
+( cd "$T/m" && "$TOOL" --released-at 2026-09-01 ) >/dev/null
+python3 - "$T/m.seed.json" "$T/m/assets/info.json" <<'PY' || { echo "FAIL m: frame art keys kept, or other keys changed"; exit 1; }
+import json, sys
+before = json.load(open(sys.argv[1])); after = json.load(open(sys.argv[2]))
+assert "marquee" not in after["properties"] and "bezel" not in after["properties"], after["properties"]
+for k in ("marquee", "bezel"): before["properties"].pop(k)
+for k in ("screenshots", "trailer_url", "version", "released_at", "aspect"):
+    after["properties"].pop(k, None); before["properties"].pop(k, None)
+assert before == after, "other keys changed"
+PY
+
+# (n)
+mk "$T/n"; ffmpeg -v error -y -f lavfi -i "color=c=navy:s=1080x360:d=0.1" -frames:v 1 "$T/n/assets/marquee.png"
+( cd "$T/n" && "$TOOL" ) >/dev/null
+[ "$(json "$T/n/assets/info.json" "d['properties']['marquee']")" = "https://gamebient-game.vercel.app/assets/marquee.png" ] || { echo "FAIL n: marquee url"; exit 1; }
+[ "$(json "$T/n/assets/info.json" "'bezel' in d['properties']")" = "False" ] || { echo "FAIL n: bezel written with no PNG"; exit 1; }
 
 echo "test_store_assets: OK"
