@@ -120,8 +120,9 @@ if [ -d "$PACK_SRC/.git" ]; then
   has 'report_highlight,' src/game/host.rs
   if [ ! -f "$T/e/tests/display_contract.rs" ] || [ ! -f "$T/e/tests/display_shape.rs" ]; then echo "FAIL e: tests not written"; exit 1; fi
   grep -q 'pack_the_ripper::display' "$T/e/tests/display_shape.rs" || { echo "FAIL e: display_shape.rs crate name not rewritten"; exit 1; }
-  [ -f "$T/e/.claude/skills/designing-cartridge-covers/SKILL.md" ] && [ -f "$T/e/.claude/skills/generating-cartridge-metadata/SKILL.md" ] \
-    || { echo "FAIL e: skill snapshots missing"; exit 1; }
+  if [ ! -f "$T/e/.claude/skills/designing-cartridge-covers/SKILL.md" ] || [ ! -f "$T/e/.claude/skills/generating-cartridge-metadata/SKILL.md" ]; then
+    echo "FAIL e: skill snapshots missing"; exit 1
+  fi
   stray="$(find "$T/e/tools" -maxdepth 1 \( -name 'test_*.sh' -o -name 'rollout-*.sh' \) | tr '\n' ' ')"
   [ -z "$stray" ] || { echo "FAIL e: template-only scripts left in the game: $stray"; exit 1; }
   [ -f "$T/e/tools/test_cut_clips.py" ] || { echo "FAIL e: the game's test_cut_clips.py was removed"; exit 1; }
