@@ -29,6 +29,13 @@ present "GX_FRAME=off" tools/record.sh
 present "GX_FRAME=off" make-cartridge.sh
 present "GAME_SIZE=1280x720" "$SKILLS/recording-game-footage/SKILL.md"
 
+# Vertical clips: plates are placed by the source's aspect.
+absent "centered 16:9 band" README.md
+absent "full 16:9 frame" "$SKILLS/recording-game-footage/SKILL.md"
+absent "16:9 gameplay" tools/vertical-banner.svg
+present "{{CTA_PLATE_Y}}" tools/vertical-banner.svg
+present "y 240-1680" "$SKILLS/recording-game-footage/SKILL.md"
+
 # --- end of checks ---
 [ "$fail" -eq 0 ] || exit 1
 echo "test_aspect_docs: OK"

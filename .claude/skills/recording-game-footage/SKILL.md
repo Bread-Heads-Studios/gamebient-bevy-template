@@ -16,8 +16,12 @@ game, 1080x1080 for 1:1, 1080x1440 for 3:4), cuts `clips/<beat>.mp4` and
 `manifest.json`, `chapters.md`. The cabinet frame is off in every capture.
 Recordings also carry a mixed audio track (`audio.wav`, muxed into
 `tour.mp4` at −16 LUFS) and 9:16 versions of everything (`clips/vertical/
-<beat>.mp4`, `tour-vertical.mp4`): the full 16:9 frame over a blurred fill
-with title/CTA banners. The skill's job is to get a
+<beat>.mp4`, `tour-vertical.mp4`): the whole frame, 1080 wide, centred over
+a blurred fill, with a title plate above it and a CTA plate below it. Where
+the gameplay lands depends on the game's ratio: y 555-1365 for 4:3,
+y 420-1500 for 1:1, y 240-1680 for 3:4. At 3:4 only 240 rows remain on each
+side, so both plates are drawn smaller (title capped at 72 px). The plates
+never cover gameplay. The skill's job is to get a
 game to that point, verify it, and turn the result plus a code read into
 `docs/video-notes.md` for whoever edits the video. The recorder lives in the
 template (`libs/gamebient-bevy-template/src/game/record/`, design specs
@@ -54,11 +58,15 @@ against the code before reuse).
      `audio.peak > 0` (a `null` audio field means no `AudioPlayer` played —
      check the game isn't muting itself under the harness);
    - `ls build/record/clips/vertical | wc -l` equals the beat count;
+   - `ffprobe` reports `tour.mp4` at 1.5x `tools/game-size.sh` (1440x1080,
+     1080x1080 or 1080x1440);
    - Read `shots/06-*.png` and `shots/05-mid-play.png` as images: gameplay
-     is visible, HUD shows a score or progress, no letterbox band. Also
+     is visible, HUD shows a score or progress, no letterbox band, no
+     marquee or bezel. Also
      extract and Read one frame from `clips/vertical/<beat>.mp4` to confirm
-     the full 16:9 frame sits centered over the blurred fill, between the
-     title/CTA banners. If the bot idles or the
+     the whole frame sits centred over the blurred fill, with the title
+     plate above it and the CTA plate below it, neither touching the
+     gameplay. If the bot idles or the
      signature beat never fires, fix `src/game/autopilot.rs` first (the
      `designing-cartridge-covers` skill's autopilot.md covers this) and
      re-record.

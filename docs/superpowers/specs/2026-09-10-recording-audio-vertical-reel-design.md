@@ -4,6 +4,12 @@
 **Builds on:** `2026-09-09-recording-harness-design.md` (the `record` feature,
 `tools/record.sh`, `tools/cut_clips.py`, the `recording-game-footage` skill).
 
+> **Update 2026-09-29:** recordings are no longer 16:9. Games are 4:3, 1:1 or
+> 3:4, so the fixed geometry below (a 16:9 band at y 656-1264, a forced
+> `scale` in the reel) is superseded: `banner_layout` in `tools/cut_clips.py`
+> places the plates by the source's aspect and `fit_filter` in the skill's
+> `reel.py` fits each clip over a blurred fill. The rest of this design stands.
+
 ## Goal
 
 Turn the silent 16:9 recordings into postable video: a real audio track in
