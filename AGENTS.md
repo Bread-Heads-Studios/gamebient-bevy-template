@@ -99,6 +99,10 @@ one-responsibility files.
   tests/fixtures/selftest.gxr`. See `docs/replay-verification.md`.
 - **Rolling replay verification into a game:** `tools/rollout-replay.sh <game>`
   then the `rolling-out-replay-verification` skill.
+- **A marquee highlight:** write `frame::Highlight::rgb(r, g, b)` with a
+  `MessageWriter<frame::Highlight>`. The frame (`src/frame/`, native only,
+  added in `main.rs`) and web hosts both react. See "Cabinet frame" in
+  `docs/conventions.md`.
 
 ## Build / CI / release model
 

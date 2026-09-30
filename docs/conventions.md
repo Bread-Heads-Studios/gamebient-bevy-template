@@ -268,6 +268,59 @@ so a host pause looks like a player pause) and mute/unmute (`GlobalVolume`
 plus live sinks). Report anything else with `HostEvent::Custom`. Hosts treat
 all of it as untrusted.
 
+## Cabinet frame
+
+On a cabinet the game is letterboxed, and the rest of the panel is filled by
+the frame (`src/frame/`, `FramePlugin`): dim bezel art behind the game, a
+black gap around it, and on portrait displays a marquee band across the top
+(height = width / 3). Landscape cabinets have a physical marquee, so none is
+drawn there. The website draws the same frame around the game on `/cabinet`;
+the two implementations share their numbers and test vectors, so change them
+together (`src/lib/cabinetFrame/` in the website repo).
+
+- **Native only, windowed only.** `FramePlugin` is added in `main.rs` and
+  nowhere else. Never add it to `GamePlugin`: the headless verifier builds
+  `GamePlugin` alone. On wasm the plugin does nothing.
+- **Art.** `assets/marquee.png` (1080x360) and `assets/bezel.png`
+  (1920x1920, square, centre-cropped). Both optional; without them the
+  shared art embedded in the binary is used. The shared marquee carries the
+  ColecoVision GX logo, and the game's name is drawn in a box to the logo's
+  right (uppercase, one line, sized to fit; the formula is `title_box` in
+  `src/frame/layout.rs`). A game's own `marquee.png` gets no title drawn over
+  it. `tools/frame-art.sh` renders them from `tools/marquee.svg`
+  and `tools/bezel.svg`.
+- **Art geometry.** The frame writes the score line in rows 288 to 360 of
+  the marquee, so lettering stays above row 288. The bezel's central
+  1080x1080 is one flat colour; texture goes in the four arms.
+- **Brightness is the frame's job, not the artist's.** Draw the art at full
+  strength. The frame multiplies the bezel by 0.35 (0.20 during play) and
+  its saturation by 0.6, and the marquee by 1.0 (0.45 during play), fading
+  over one second. The bezel never exceeds 0.35.
+- **Highlight.** For a boss, a level clear or a big combo, write one message:
+
+  ```rust
+  fn boss_defeated(mut highlights: MessageWriter<frame::Highlight>) {
+      highlights.write(frame::Highlight::rgb(0xff, 0xcc, 0x00));
+  }
+  ```
+
+  The native marquee pulses in that colour and web hosts receive
+  `HostEvent::Highlight`. The frame allows one pulse per ten seconds and
+  drops the rest, so there is no need to ration calls. It is safe to write
+  from a sim system: it is write-only and exists in headless builds.
+- **Score to beat.** Native builds keep the best `leaderboard_score()` in
+  `$GX_DATA_DIR/best-score`, else
+  `$XDG_DATA_HOME/gamebient/<package>/best-score`, else
+  `$HOME/.local/share/gamebient/<package>/best-score`. Delete the file to
+  reset it.
+- **Switches.** `GX_FRAME=off` disables the frame and gives the game the
+  whole window. Under `--features autopilot` or `record` the frame is off
+  unless `GX_FRAME=on`, so captures never include it.
+  `GX_WINDOW_SIZE=1080x1920` (see "Screen shape") opens a window of that
+  size for checking a cabinet layout on a desk.
+- **A new `GameState` variant** is treated as attract by the frame unless
+  you add it to `frame::driver::phase_for`.
+
 ## Audio
 
 The kit is asset-free by default: SFX are synthesized at startup
