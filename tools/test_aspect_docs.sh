@@ -75,7 +75,9 @@ present "properties.marquee" docs/build-and-release.md
 present "properties.bezel" docs/build-and-release.md
 absent "(1280x720)" docs/build-and-release.md
 present '"aspect": "4:3"' "$SKILLS/generating-cartridge-metadata/SKILL.md"
+# shellcheck disable=SC2016  # literal backticks, not a command substitution
 present '`marquee`' "$SKILLS/generating-cartridge-metadata/SKILL.md"
+# shellcheck disable=SC2016
 present '`bezel`' "$SKILLS/generating-cartridge-metadata/SKILL.md"
 
 # --- end of checks ---
