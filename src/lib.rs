@@ -3,5 +3,6 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 pub mod assets;
+pub mod display;
 pub mod game;
 pub mod ui;
