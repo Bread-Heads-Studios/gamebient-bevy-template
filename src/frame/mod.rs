@@ -3,6 +3,8 @@
 //! frame".
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod art;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod best_score;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod brightness;

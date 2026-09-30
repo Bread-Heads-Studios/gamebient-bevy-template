@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1920" viewBox="0 0 1920 1920">
+  <!-- Shared ColecoVision GX fallback bezel. Square, cover-fitted and
+       centre-cropped by the frame: a landscape display shows rows 420 to
+       1500, a portrait display shows columns 420 to 1500, the four 420 x 420
+       corners are never shown. The central 1080 x 1080 is one flat colour;
+       texture lives in the four arms and fades toward the centre.
+       The frame dims and desaturates this at run time; draw it at full
+       strength here. No <text>: rsvg-convert swaps fonts silently. -->
+  <defs>
+    <pattern id="grid" width="96" height="96" patternUnits="userSpaceOnUse">
+      <path d="M96 0H0V96" fill="none" stroke="#4a4a62" stroke-width="2"/>
+    </pattern>
+    <!-- each arm fades from its outer edge (opaque) to the centre's edge (clear) -->
+    <linearGradient id="fadeL" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="fadeR" x1="1" y1="0" x2="0" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="fadeT" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="fadeB" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="1"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="arms" maskUnits="userSpaceOnUse" x="0" y="0" width="1920" height="1920">
+      <rect x="0" y="0" width="420" height="1920" fill="url(#fadeL)"/>
+      <rect x="1500" y="0" width="420" height="1920" fill="url(#fadeR)"/>
+      <rect x="0" y="0" width="1920" height="420" fill="url(#fadeT)"/>
+      <rect x="0" y="1500" width="1920" height="420" fill="url(#fadeB)"/>
+    </mask>
+    <!-- seven stripes, 420 long and 196 across in total -->
+    <g id="stripes">
+      <rect y="0" width="420" height="28" fill="#ff2b2b"/>
+      <rect y="28" width="420" height="28" fill="#ff7a00"/>
+      <rect y="56" width="420" height="28" fill="#ffd400"/>
+      <rect y="84" width="420" height="28" fill="#33cc33"/>
+      <rect y="112" width="420" height="28" fill="#00a4c7"/>
+      <rect y="140" width="420" height="28" fill="#8b5cf6"/>
+      <rect y="168" width="420" height="28" fill="#c026d3"/>
+    </g>
+  </defs>
+
+  <!-- base colour; the central 1080 x 1080 shows only this -->
+  <rect width="1920" height="1920" fill="#1c1c28"/>
+
+  <!-- everything in this group is confined to the arms by the mask -->
+  <g mask="url(#arms)">
+    <rect width="1920" height="1920" fill="#262638"/>
+    <rect width="1920" height="1920" fill="url(#grid)"/>
+    <use href="#stripes" transform="translate(0 862)"/>
+    <use href="#stripes" transform="translate(1500 862)"/>
+    <use href="#stripes" transform="translate(1058 0) rotate(90)"/>
+    <use href="#stripes" transform="translate(1058 1500) rotate(90)"/>
+  </g>
+</svg>

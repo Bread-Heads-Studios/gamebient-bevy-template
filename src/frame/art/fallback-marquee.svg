@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="360" viewBox="0 0 1080 360">
+  <!-- Shared ColecoVision GX fallback marquee, 3:1. The frame draws the
+       game's title over the plate and the score line in rows 288 to 360 at
+       run time, so there is no <text> here (rsvg-convert swaps fonts
+       silently) and rows 288 to 360 are one plain colour. -->
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c1c28"/>
+      <stop offset="0.5" stop-color="#0a0a0f"/>
+      <stop offset="1" stop-color="#1c1c28"/>
+    </linearGradient>
+  </defs>
+  <rect width="1080" height="288" fill="url(#plate)"/>
+  <rect y="0" width="1080" height="8" fill="#ff2b2b"/>
+  <rect y="8" width="1080" height="8" fill="#ff7a00"/>
+  <rect y="16" width="1080" height="8" fill="#ffd400"/>
+  <rect y="24" width="1080" height="8" fill="#33cc33"/>
+  <rect y="32" width="1080" height="8" fill="#00a4c7"/>
+  <rect y="40" width="1080" height="8" fill="#8b5cf6"/>
+  <rect y="48" width="1080" height="8" fill="#c026d3"/>
+  <rect x="24" y="72" width="1032" height="200" rx="18" fill="none"
+        stroke="#aab3c0" stroke-opacity="0.5" stroke-width="3"/>
+  <!-- the score line's strip: rows 288 to 360 -->
+  <rect y="288" width="1080" height="72" fill="#05070f"/>
+</svg>
