@@ -36,8 +36,8 @@ if [ -n "${GAME_SIZE:-}" ]; then
 else
   [ -f "$FILE" ] || { echo "game-size: $FILE not found (run from the game repo root; a game not converted yet sets GAME_SIZE=1280x720)" >&2; exit 1; }
   W="$(constant GAME_WIDTH)"; H="$(constant GAME_HEIGHT)"
-  [ -n "$W" ] && [ "$W" -gt 0 ] || { echo "game-size: no 'pub const GAME_WIDTH: u32 = <number>;' line in $FILE" >&2; exit 1; }
-  [ -n "$H" ] && [ "$H" -gt 0 ] || { echo "game-size: no 'pub const GAME_HEIGHT: u32 = <number>;' line in $FILE" >&2; exit 1; }
+  if [ -z "$W" ] || [ "$W" -le 0 ]; then echo "game-size: no 'pub const GAME_WIDTH: u32 = <number>;' line in $FILE" >&2; exit 1; fi
+  if [ -z "$H" ] || [ "$H" -le 0 ]; then echo "game-size: no 'pub const GAME_HEIGHT: u32 = <number>;' line in $FILE" >&2; exit 1; fi
 fi
 
 if [ -z "$SCALE" ]; then

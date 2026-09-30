@@ -29,7 +29,7 @@ const LUMA_B: f32 = 0.072;
 /// Multiplies the saturation of RGBA8 pixels in place. Works on the encoded
 /// (sRGB) values, as the CSS filter does. Alpha is left alone.
 pub fn desaturate_rgba8(data: &mut [u8], saturation: f32) {
-    for px in data.chunks_exact_mut(4) {
+    for px in data.as_chunks_mut::<4>().0 {
         let rgb = [f32::from(px[0]), f32::from(px[1]), f32::from(px[2])];
         let luma = LUMA_R * rgb[0] + LUMA_G * rgb[1] + LUMA_B * rgb[2];
         for (channel, value) in rgb.into_iter().enumerate() {
