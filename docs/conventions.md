@@ -163,8 +163,12 @@ The short side is always 720, and `cargo test` fails on any other size.
   is caught at run time instead: `tests/display_shape.rs` and
   `tests/windowed_shape.rs` record a run under a letterboxed display and
   require it to equal the bare run. The scanned directory is the constant
-  `SIM_SOURCE_DIR` in that test; a game with a flat `src/` layout points it
-  at the directory holding its sim files, never at `src/` itself.
+  `SIM_SOURCE_DIR` in that test. A game with a flat `src/` layout has no
+  directory that holds only its sim files (`src/` holds `display.rs`), so it
+  adds a `sim-sources.txt` at the crate root instead of editing the verbatim
+  `src/display.rs`: one `.rs` path per line, relative to the crate root, `#`
+  comments and blank lines allowed. When that file exists the scan reads the
+  files it lists and ignores `SIM_SOURCE_DIR`.
 - **The `allow-display` marker.** The grep walks `src/game/` only. Code in
   `src/ui/`, `src/assets/` and `src/main.rs` may call into `display` freely
   and needs no marker. Presentation code that lives under `src/game/` (a
