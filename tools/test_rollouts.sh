@@ -102,7 +102,7 @@ git -C "$T/d" checkout -q README.md
 # (e)
 PACK_SRC="${PACK_SRC:-$HERE/../../games/pack-the-ripper}"
 if [ -d "$PACK_SRC/.git" ]; then
-  git clone -q "$PACK_SRC" "$T/e"
+  git clone -q --branch main "$PACK_SRC" "$T/e"
   # Stale template-only files a copy step may have left behind.
   cp "$HERE/tools/test_rollouts.sh" "$HERE/tools/rollout-record.sh" "$T/e/tools/"
   commit_all "$T/e" stale
@@ -216,7 +216,7 @@ fi
 # (i)
 GULPER_SRC="${GULPER_SRC:-$HERE/../../games/gulper}"
 if [ -d "$GULPER_SRC/.git" ]; then
-  git clone -q "$GULPER_SRC" "$T/i"
+  git clone -q --branch main "$GULPER_SRC" "$T/i"
   "$HERE/tools/rollout-aspect.sh" "$T/i" 4:3 > "$T/i.out" 2>&1 || { echo "FAIL i: rollout-aspect.sh exited non-zero"; cat "$T/i.out"; exit 1; }
   (cd "$T/i" && cargo fmt --all)
   "$HERE/tools/frame-accept.sh" --check-copies "$T/i" > "$T/i2.out" 2>&1 || { echo "FAIL i: --check-copies failed on gulper after rollout-aspect.sh and cargo fmt"; cat "$T/i2.out"; exit 1; }
@@ -229,7 +229,7 @@ fi
 # (j)
 HUNTED_SRC="${HUNTED_SRC:-$HERE/../../games/Hunted}"
 if [ -d "$HUNTED_SRC/.git" ] && [ ! -f "$HUNTED_SRC/src/game/mod.rs" ]; then
-  git clone -q "$HUNTED_SRC" "$T/j1"
+  git clone -q --branch main "$HUNTED_SRC" "$T/j1"
   "$HERE/tools/rollout-aspect.sh" "$T/j1" 4:3 > "$T/j1.out" 2>&1 || { echo "FAIL j: rollout-aspect.sh failed on the flat layout"; cat "$T/j1.out"; exit 1; }
   grep -q '^HAND EDIT: sim-sources.txt: list the sim .rs files (one per line)' "$T/j1.out" || { echo "FAIL j: no sim-sources.txt HAND EDIT for a flat layout"; cat "$T/j1.out"; exit 1; }
 else
@@ -237,7 +237,7 @@ else
 fi
 MOLEMAN_SRC="${MOLEMAN_SRC:-$HERE/../../games/moleman-racing}"
 if [ -d "$MOLEMAN_SRC/.git" ] && [ ! -f "$MOLEMAN_SRC/src/lib.rs" ]; then
-  git clone -q "$MOLEMAN_SRC" "$T/j2"
+  git clone -q --branch main "$MOLEMAN_SRC" "$T/j2"
   "$HERE/tools/rollout-aspect.sh" "$T/j2" 4:3 > "$T/j2.out" 2>&1 || { echo "FAIL j: rollout-aspect.sh failed without src/lib.rs"; cat "$T/j2.out"; exit 1; }
   grep -q '^HAND EDIT: src/lib.rs: this crate needs a lib target' "$T/j2.out" || { echo "FAIL j: no lib target HAND EDIT"; cat "$T/j2.out"; exit 1; }
 else
