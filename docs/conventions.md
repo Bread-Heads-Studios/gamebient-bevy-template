@@ -145,8 +145,8 @@ The short side is always 720, and `cargo test` fails on any other size.
   with `ui::fit::fit_font_size` when it could be wider than that.
 - **A camera of your own.** Any extra camera that renders to the window is
   letterboxed too. One that must not be (the cabinet frame) carries
-  `display::FrameCamera`. A camera that sets its own viewport carries
-  `FrameCamera` and places itself inside `GameViewport`.
+  `FrameCamera` (`crate::frame::FrameCamera`). A camera that sets its own
+  viewport carries `FrameCamera` and places itself inside `GameViewport`.
 - **Projecting world positions into UI.** `Camera::world_to_viewport`
   returns window pixels that include the letterbox offset; UI nodes are
   relative to the viewport. Subtract `camera.logical_viewport_rect().min`
@@ -157,7 +157,7 @@ The short side is always 720, and `cargo test` fails on any other size.
   `FrameInsets`, `UiScale` or `Window`: the replay verifier has no window.
   Two checks guard this. `display::tests::game_code_does_not_read_display_state`
   scans `src/game/` for the display module's names only (`display::`,
-  `GameViewport`, `FrameInsets`, `FrameCamera`); it does not look for
+  `GameViewport`, `FrameInsets`); it does not look for
   `UiScale` or `Window`, it skips lines that start with `//`, and it skips
   any line containing `allow-display`. A sim read of `UiScale` or `Window`
   is caught at run time instead: `tests/display_shape.rs` and
@@ -171,7 +171,7 @@ The short side is always 720, and `cargo test` fails on any other size.
   follow camera, camera framing, a dev harness) and needs a display value
   must carry the marker as a trailing comment **on the same line** as the
   name, in the form `// allow-display: <reason>`. The needles are
-  `display::`, `GameViewport`, `FrameInsets` and `FrameCamera`, so mark the
+  `display::`, `GameViewport` and `FrameInsets`, so mark the
   `use` line and later bare uses of a constant need nothing:
 
   ```rust
@@ -317,28 +317,39 @@ together (`src/lib/cabinetFrame/` in the website repo).
   `GX_WINDOW_SIZE=1080x1920` (see "Screen shape") opens a window of that
   size for checking a cabinet layout on a desk.
 - **Camera queries exclude `FrameCamera`.** The frame adds a second
-  `Camera2d`. Any game system that queries cameras without excluding it
-  matches two cameras: `.single()` and `Single<..>` stop matching, and a loop
-  over `With<Camera2d>` (a screen shake) would move the bezel during play.
-  Every camera query in a game says `Without<FrameCamera>`, even one already
-  narrowed by `With<Camera3d>`:
+  `Camera2d`. A game system whose camera query could match it (with no other
+  marker narrowing it) matches two cameras: `.single()` and `Single<..>`
+  stop matching, and a loop over `With<Camera2d>` (a screen shake) would move
+  the bezel during play. Such a query says
+  `Without<crate::frame::FrameCamera>`:
 
   ```rust
   // before
   fn shake(mut cam: Single<&mut Transform, With<Camera2d>>) { .. }
   fn labels(cams: Query<(&Camera, &GlobalTransform)>) { .. }
   // after
-  use crate::display::FrameCamera;
+  use crate::frame::FrameCamera;
   fn shake(mut cam: Single<&mut Transform, (With<Camera2d>, Without<FrameCamera>)>) { .. }
   fn labels(cams: Query<(&Camera, &GlobalTransform), Without<FrameCamera>>) { .. }
   ```
 
-  Under `src/game/` the line also needs an `// allow-display: <reason>`
-  marker. The test `frame::tests::camera_queries_exclude_the_frame_camera`
-  scans `src/` (except `src/frame/` and `src/display.rs`) and fails naming
-  the file and line; a query that must see every camera carries
-  `// frame-camera-ok: <reason>`. Known fleet cases to fix when rolling the
-  frame out: beat-bender `src/ui/fighters.rs`, Gravestone Gauntlet
+  The path is `crate::frame::FrameCamera`, available on every target. Naming
+  it is not a read of display state, so no `allow-display` marker is needed,
+  even under `src/game/`.
+
+  The test `frame::tests::camera_queries_exclude_the_frame_camera` scans
+  `src/` (except `src/frame/` and `src/display.rs`) and fails naming the file
+  and line. The rule is `camera_query_flagged` in `src/frame/mod.rs`. A line
+  is flagged when it is a `Query<`, `Single<` or `Populated<` (on the line
+  or the three before) that has `With<Camera2d>` or `With<Camera>`, or that
+  has `&Camera` / `&mut Camera` (followed by `,`, `)` or `>`) with no
+  `With<` naming another type on the line or the two after. So
+  `With<Camera3d>` alone never flags, and neither does `&Camera` behind a
+  game's own marker (`With<MainCamera>`). It passes when `FrameCamera`
+  appears on the line or the two after, or the line carries
+  `// frame-camera-ok: <reason>` for a query that must see every camera.
+  The five real fleet cases to fix when rolling the frame out: beat-bender
+  `src/ui/fighters.rs` (two queries), Gravestone Gauntlet
   `src/game/effects.rs` and `src/ui/how_to_play.rs`, pizza-pinball
   `src/ui/how_to_play.rs`.
 - **What the frame reads from the game.** Frame files are copied into games

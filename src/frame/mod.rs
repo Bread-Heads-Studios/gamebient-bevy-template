@@ -30,6 +30,11 @@ pub mod marquee;
 
 pub use highlight::Highlight;
 
+/// The frame camera's marker, re-exported on every target so game code can
+/// write `Without<crate::frame::FrameCamera>` in a camera query. Naming the
+/// marker is not a read of display state.
+pub use crate::display::FrameCamera;
+
 use bevy::prelude::*;
 
 /// Render layer of every frame sprite and of the frame camera, so game
@@ -160,29 +165,14 @@ mod tests {
     /// exclude the frame camera, or a second `Camera2d` breaks `.single()`
     /// and moves the bezel along with the game camera.
     ///
-    /// The scan is literal, not a parser. A line is a camera query when it
-    /// contains one of the camera patterns below and a `Query<`, `Single<` or
-    /// `Populated<` appears on it or on one of the three lines before it.
-    /// It passes when `FrameCamera` appears on that line or the two after,
-    /// or when the line has `// frame-camera-ok: <reason>`. Limits: it
-    /// cannot see a query type split over more than four lines, a camera
-    /// type behind an alias, or a query built in a macro; comment lines are
-    /// skipped.
+    /// The scan is literal, not a parser; the rule is in
+    /// [`camera_query_flagged`]. Limits: it cannot see a query type split over
+    /// more than four lines, a camera type behind an alias, or a query built
+    /// in a macro.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn camera_queries_exclude_the_frame_camera() {
         use std::path::Path;
-
-        const PATTERNS: [&str; 7] = [
-            "With<Camera2d>",
-            "With<Camera3d>",
-            "With<Camera>",
-            "&Camera,",
-            "&Camera)",
-            "&mut Camera,",
-            "&mut Camera)",
-        ];
-        const KEYWORDS: [&str; 3] = ["Query<", "Single<", "Populated<"];
 
         fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(dir).unwrap() {
@@ -207,19 +197,7 @@ mod tests {
             let text = std::fs::read_to_string(&path).unwrap();
             let lines: Vec<&str> = text.lines().collect();
             for (i, line) in lines.iter().enumerate() {
-                if line.trim_start().starts_with("//") || line.contains("frame-camera-ok:") {
-                    continue;
-                }
-                if !PATTERNS.iter().any(|p| line.contains(p)) {
-                    continue;
-                }
-                let start = i.saturating_sub(3);
-                let in_query = lines[start..=i]
-                    .iter()
-                    .any(|l| KEYWORDS.iter().any(|k| l.contains(k)));
-                let end = (i + 2).min(lines.len() - 1);
-                let excluded = lines[i..=end].iter().any(|l| l.contains("FrameCamera"));
-                if in_query && !excluded {
+                if camera_query_flagged(&lines, i) {
                     offenders.push(format!("{}:{}: {}", rel.display(), i + 1, line.trim()));
                 }
             }
@@ -229,6 +207,89 @@ mod tests {
             "camera queries that do not exclude FrameCamera:\n{}",
             offenders.join("\n")
         );
+    }
+
+    /// The camera-query scan's rule for line `i` of `lines`. A line is
+    /// flagged when it is a camera query that could match the frame's
+    /// `Camera2d` with no other required marker, and neither the line nor
+    /// the two after it name `FrameCamera`:
+    /// - it has `With<Camera2d>` or `With<Camera>`, or
+    /// - it has `&Camera` or `&mut Camera` (followed by `,`, `)` or `>`) and
+    ///   neither it nor the two lines after have a `With<` naming some other
+    ///   type (`With<Camera3d>`, a game's own marker).
+    ///
+    /// A query keyword (`Query<`, `Single<`, `Populated<`) must appear on the
+    /// line or the three before. Comment lines and lines carrying
+    /// `// frame-camera-ok: <reason>` are never flagged.
+    fn camera_query_flagged(lines: &[&str], i: usize) -> bool {
+        const KEYWORDS: [&str; 3] = ["Query<", "Single<", "Populated<"];
+        let line = lines[i];
+        if line.trim_start().starts_with("//") || line.contains("frame-camera-ok:") {
+            return false;
+        }
+        let end = (i + 2).min(lines.len() - 1);
+        let near = &lines[i..=end];
+        let direct = line.contains("With<Camera2d>") || line.contains("With<Camera>");
+        let by_ref = ["&Camera", "&mut Camera"].iter().any(|needle| {
+            line.match_indices(needle).any(|(at, _)| {
+                matches!(
+                    line[at + needle.len()..].chars().next(),
+                    Some(',' | ')' | '>')
+                )
+            })
+        });
+        let other_marker = near.iter().any(|l| {
+            l.match_indices("With<").any(|(at, _)| {
+                let name = &l[at + "With<".len()..];
+                !(name.starts_with("Camera>") || name.starts_with("Camera2d>"))
+            })
+        });
+        if !(direct || (by_ref && !other_marker)) {
+            return false;
+        }
+        let start = i.saturating_sub(3);
+        let in_query = lines[start..=i]
+            .iter()
+            .any(|l| KEYWORDS.iter().any(|k| l.contains(k)));
+        let excluded = near.iter().any(|l| l.contains("FrameCamera"));
+        in_query && !excluded
+    }
+
+    /// Whether line 0 of `src` is flagged by the camera-query scan.
+    fn flagged(src: &str) -> bool {
+        let lines: Vec<&str> = src.lines().collect();
+        camera_query_flagged(&lines, 0)
+    }
+
+    #[test]
+    fn the_scan_flags_only_queries_that_can_match_the_frame_camera() {
+        assert!(flagged(
+            "fn f(c: Single<&mut Transform, With<Camera2d>>) {}"
+        ));
+        assert!(flagged("fn f(c: Query<(&Camera, &GlobalTransform)>) {}"));
+        assert!(flagged("fn f(c: Single<&Camera>) {}"));
+        assert!(flagged("fn f(c: Single<&mut Camera>) {}"));
+        assert!(flagged("fn f(c: Query<Entity, With<Camera>>) {}"));
+        assert!(!flagged(
+            "fn f(c: Query<&mut Transform, With<Camera3d>>) {}"
+        ));
+        assert!(!flagged(
+            "fn f(c: Query<(&Camera, &GlobalTransform), With<MainCamera>>) {}"
+        ));
+        assert!(!flagged(
+            "fn f(c: Query<(&Camera, &GlobalTransform),\n    With<MainCamera>>) {}"
+        ));
+        assert!(!flagged("fn f(c: Query<&CameraRig, With<Foo>>) {}"));
+        assert!(!flagged(
+            "fn f(c: Single<&mut Transform, With<Camera2d>>) {} // frame-camera-ok: shakes all"
+        ));
+        assert!(!flagged("// Single<&mut Transform, With<Camera2d>>"));
+        assert!(!flagged(
+            "fn f(c: Single<&mut Transform, With<Camera2d>>\n    Without<FrameCamera>) {}"
+        ));
+        assert!(!flagged(
+            "fn f(c: Query<(&Camera, &GlobalTransform)>,\n    Without<FrameCamera>) {}"
+        ));
     }
 
     /// The verifier's app. Nothing of the frame may be in it.

@@ -157,7 +157,7 @@ pub fn position_labels(
     // this query on the game camera. See "Cabinet frame" in docs/conventions.md.
     camera_q: Query<
         (&Camera, &GlobalTransform),
-        (With<Camera3d>, Without<crate::display::FrameCamera>),
+        (With<Camera3d>, Without<crate::frame::FrameCamera>),
     >,
     ui_scale: Res<UiScale>,
     items: Query<&GlobalTransform, (With<Spin>, Without<Camera3d>)>,

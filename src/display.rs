@@ -614,10 +614,13 @@ mod tests {
     /// The verifier has no window, so a sim system that reads the viewport
     /// forks on the display the run was played on. Comments are skipped; a
     /// dev harness or presentation system under `src/game/` that needs the
-    /// size carries `allow-display: <reason>` on the line.
+    /// size carries `allow-display: <reason>` on the line. `FrameCamera` is
+    /// not a needle: naming the frame camera's marker (through
+    /// `crate::frame::FrameCamera`) in a camera query is not a read of
+    /// display state.
     #[test]
     fn game_code_does_not_read_display_state() {
-        let needles = ["GameViewport", "FrameInsets", "FrameCamera", "display::"];
+        let needles = ["GameViewport", "FrameInsets", "display::"];
         let mut files = Vec::new();
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(SIM_SOURCE_DIR);
         rust_files(&dir, &mut files);
