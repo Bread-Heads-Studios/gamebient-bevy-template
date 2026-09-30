@@ -12,6 +12,7 @@
 //! | game → host | `gameover` + `score`   | entering `GameOver`                    |
 //! | game → host | `score`                | `GameData.score` changes               |
 //! | game → host | `paused`               | `Paused` changes (player or host)      |
+//! | game → host | `highlight`            | a game wrote `frame::Highlight`        |
 //! | game → host | run + replay           | leaving Playing (sealed GXR1, base64)  |
 //! | host → game | pause / resume         | only while `Playing`; overlay follows  |
 //! | host → game | mute / unmute          | `GlobalVolume` + live sinks            |
@@ -25,6 +26,7 @@ use bevy::audio::{AudioSinkPlayback, Volume};
 use bevy::prelude::*;
 use gamebient_input::{HostCommand, HostEvent};
 
+use crate::frame::Highlight;
 use crate::game::scoring::{GameData, LeaderboardScore};
 use crate::game::sim;
 use crate::game::states::{GameState, Paused};
@@ -40,6 +42,9 @@ pub struct HostBridgePlugin;
 impl Plugin for HostBridgePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Muted>()
+            // Registered here, in the half every build shares, so a sim
+            // system can write a highlight under the headless verifier.
+            .add_message::<Highlight>()
             .add_systems(
                 Update,
                 (
@@ -47,6 +52,7 @@ impl Plugin for HostBridgePlugin {
                     mute_new_sinks.run_if(|m: Res<Muted>| m.0),
                     report_score.run_if(resource_changed::<GameData>),
                     report_paused.run_if(resource_changed::<Paused>),
+                    report_highlight,
                 ),
             )
             .add_systems(OnEnter(GameState::Playing), report_started)
@@ -125,4 +131,63 @@ fn report_paused(paused: Res<Paused>, mut out: MessageWriter<HostEvent>) {
         return;
     }
     out.write(HostEvent::Paused(paused.0));
+}
+
+/// Relays the game's highlight beats to web hosts. The host applies its own
+/// rate limit; the native frame reads `Highlight` directly.
+fn report_highlight(mut highlights: MessageReader<Highlight>, mut out: MessageWriter<HostEvent>) {
+    for highlight in highlights.read() {
+        out.write(HostEvent::Highlight {
+            color: highlight.hex(),
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::input::InputPlugin;
+    use bevy::state::app::StatesPlugin;
+
+    use super::*;
+    use crate::frame::Highlight;
+
+    fn read_host_events(app: &App) -> Vec<HostEvent> {
+        let events = app.world().resource::<Messages<HostEvent>>();
+        let mut cursor = events.get_cursor();
+        cursor.read(events).cloned().collect()
+    }
+
+    #[test]
+    fn highlight_is_relayed_to_the_host_with_its_colour() {
+        let mut app = App::new();
+        app.add_message::<Highlight>()
+            .add_message::<HostEvent>()
+            .add_systems(Update, report_highlight);
+        app.world_mut()
+            .write_message(Highlight::rgb(0xff, 0xcc, 0x00));
+        app.world_mut().write_message(Highlight::plain());
+        app.update();
+        assert_eq!(
+            read_host_events(&app),
+            vec![
+                HostEvent::Highlight {
+                    color: Some("#ffcc00".into())
+                },
+                HostEvent::Highlight { color: None },
+            ]
+        );
+    }
+
+    /// A sim system may write `Highlight`, so the message must exist in the
+    /// headless build too or that system would panic in the verifier.
+    #[test]
+    fn headless_build_registers_the_highlight_message() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(StatesPlugin)
+            .add_plugins(InputPlugin)
+            .add_plugins(crate::game::GamePlugin { headless: true });
+        app.update();
+        assert!(app.world().contains_resource::<Messages<Highlight>>());
+    }
 }
