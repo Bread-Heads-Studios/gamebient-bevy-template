@@ -10,6 +10,10 @@
 #   properties.screenshots / trailer_url / version, released_at (only when
 #   absent or --released-at given). Developer / Developer URL / Tags are only
 #   written with --set-*; missing ones are reported so a human fills them in.
+#   properties.aspect    <- the game's size reduced to a ratio ("4:3", "1:1", "3:4", "16:9")
+#   properties.marquee   <- assets/marquee.png (1080x360) when it exists, else the key is removed
+#   properties.bezel     <- assets/bezel.png (1920x1920) when it exists, else the key is removed
+#   (a game with neither gets the shared ColecoVision GX art on cabinets)
 # Metadata contract: the website's docs/publish-api.md.
 #
 # Usage: tools/store-assets.sh [--released-at YYYY-MM-DD] [--set-developer NAME]
@@ -71,6 +75,23 @@ for f in "${picked[@]}" ${trailer_src:+"$trailer_src"}; do
   same_aspect "$d" || { echo "store-assets: $f is $d, which is not the game's ${W}x${H} ratio; re-run tools/record.sh" >&2; exit 1; }
 done
 
+# The ratio the site and the cabinets lay the game out with.
+ASPECT="$(python3 -c 'import math, sys; w, h = int(sys.argv[1]), int(sys.argv[2]); g = math.gcd(w, h); print(f"{w // g}:{h // g}")' "$W" "$H")"
+case "$ASPECT" in
+  4:3|1:1|3:4|16:9) ;;
+  *) echo "store-assets: the game is ${W}x${H}, a ratio of $ASPECT; only 4:3, 1:1, 3:4 and 16:9 are supported" >&2; exit 1 ;;
+esac
+
+frame_art() {  # frame_art <name> <WxH>: prints 1 when assets/<name>.png exists at that size, 0 when it is absent
+  local f="assets/$1.png" d
+  [ -f "$f" ] || { echo 0; return; }
+  d="$(dims "$f")"
+  [ "$d" = "$2" ] || { echo "store-assets: $f is $d, expected $2 (render it with tools/frame-art.sh)" >&2; exit 1; }
+  echo 1
+}
+MARQUEE="$(frame_art marquee 1080x360)"
+BEZEL="$(frame_art bezel 1920x1920)"
+
 if [ $DRY -eq 1 ]; then
   echo "would write ${#picked[@]} screenshots at ${W}x${H} from: ${picked[*]}"
   echo "would write trailer at ${W}x${H} from: ${trailer_src:-<none>}"
@@ -105,7 +126,8 @@ VERSION="${pkg_version:-0.0.0}+$sha"
 
 # Rewrite info.json. python3 keeps key order and 4-space indent to match the file.
 SCREENSHOTS="${urls[*]}" TRAILER="$trailer_written" VERSION="$VERSION" RELEASED_AT="$RELEASED_AT" \
-DEVELOPER="$DEVELOPER" DEVELOPER_URL="$DEVELOPER_URL" TAGS="$TAGS" python3 - <<'PY'
+DEVELOPER="$DEVELOPER" DEVELOPER_URL="$DEVELOPER_URL" TAGS="$TAGS" \
+ASPECT="$ASPECT" MARQUEE="$MARQUEE" BEZEL="$BEZEL" python3 - <<'PY'
 import json, os
 p = "assets/info.json"
 d = json.load(open(p))
@@ -119,6 +141,13 @@ if os.environ["TRAILER"] == "1":
 props["version"] = os.environ["VERSION"]
 if os.environ["RELEASED_AT"]:
     props["released_at"] = os.environ["RELEASED_AT"]
+props["aspect"] = os.environ["ASPECT"]
+# A URL only when the PNG is really there; a missing key means the shared art.
+for key in ("marquee", "bezel"):
+    if os.environ[key.upper()] == "1":
+        props[key] = f"{base}/assets/{key}.png"
+    else:
+        props.pop(key, None)
 attrs = d.setdefault("attributes", [])
 def set_attr(trait, value):
     for a in attrs:
@@ -144,7 +173,8 @@ missing = [k for k, v in (("released_at", props.get("released_at")), ("Developer
 with open(p, "w") as fh:
     json.dump(d, fh, indent=4, ensure_ascii=False)
     fh.write("\n")
-print(f"store-assets: wrote {len(props['screenshots'])} screenshots, trailer={'yes' if os.environ['TRAILER']=='1' else 'no'}, version={props['version']}")
+print(f"store-assets: wrote {len(props['screenshots'])} screenshots, trailer={'yes' if os.environ['TRAILER']=='1' else 'no'}, version={props['version']}, "
+      f"aspect={props['aspect']}, marquee={'yes' if 'marquee' in props else 'shared'}, bezel={'yes' if 'bezel' in props else 'shared'}")
 if missing:
     print("store-assets: still missing (fill by hand or with --set-*): " + ", ".join(missing))
 PY

@@ -62,6 +62,19 @@ present "x0.6" "$FRAME_ART"
 present "full brightness" "$FRAME_ART"
 present "Impact" "$FRAME_ART"
 
+# Metadata: aspect, marquee, bezel. The template ships only "aspect": a game with
+# no art of its own falls back to the shared art, so the template has no art URLs.
+present '"aspect": "4:3"' assets/info.json
+absent '"marquee"' assets/info.json
+absent '"bezel"' assets/info.json
+present "properties.aspect" docs/build-and-release.md
+present "properties.marquee" docs/build-and-release.md
+present "properties.bezel" docs/build-and-release.md
+absent "(1280x720)" docs/build-and-release.md
+present '"aspect": "4:3"' "$SKILLS/generating-cartridge-metadata/SKILL.md"
+present '`marquee`' "$SKILLS/generating-cartridge-metadata/SKILL.md"
+present '`bezel`' "$SKILLS/generating-cartridge-metadata/SKILL.md"
+
 # --- end of checks ---
 [ "$fail" -eq 0 ] || exit 1
 echo "test_aspect_docs: OK"

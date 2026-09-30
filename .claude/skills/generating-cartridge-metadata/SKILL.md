@@ -36,7 +36,10 @@ genre, hosts) and verifying every URL.
         "demo_url": "https://grand-theft-otto-five.vercel.app",
         "verify_url": "https://grand-theft-otto-five.vercel.app/verify.zip",
         "binary_url": "https://grand-theft-otto-five.vercel.app/assets/grand-theft-otto.tar.gz",
-        "binary_type": "bevy-tar"
+        "binary_type": "bevy-tar",
+        "aspect": "4:3",
+        "marquee": "https://grand-theft-otto-five.vercel.app/assets/marquee.png",
+        "bezel": "https://grand-theft-otto-five.vercel.app/assets/bezel.png"
     }
 }
 ```
@@ -51,6 +54,9 @@ genre, hosts) and verifying every URL.
 | `game_url`, `demo_url` | `https://<host>` — the host that actually serves the game. |
 | `verify_url` | `<host>/verify.zip` — `build_web.sh` publishes it alongside the game bundle; same host as `game_url`/`demo_url`. |
 | `binary_url` | `https://<host>/assets/<tarball>` where `<tarball>` is the flat cartridge name in `release.yml`'s Pi job and `fetch-cartridge.sh`'s `ASSET=`. All three must agree. |
+| `aspect` | `"4:3"`, `"1:1"` or `"3:4"`: the ratio of `tools/game-size.sh` (960x720, 720x720, 720x960). `"16:9"` only for a game not converted yet. The site sizes the player from this before the game loads, so a wrong value letterboxes the game. `tools/store-assets.sh` writes it; do not type it by hand. |
+| `marquee` | `https://<host>/assets/marquee.png`, a real 1080x360 PNG of this game's marquee. Omit the key when the game has no marquee of its own: the cabinets then show the shared ColecoVision GX marquee. The template ships without it. |
+| `bezel` | `https://<host>/assets/bezel.png`, a real 1920x1920 PNG of this game's bezel. Omit the key when the game has none. The template ships without it. |
 
 ## Process
 
@@ -64,11 +70,23 @@ genre, hosts) and verifying every URL.
 5. Check the cover: `file assets/cartridge.png` reports 768 x 1024 **and** the
    image, when Read, carries no "PLACEHOLDER" notice. Otherwise the cover is
    not done; use `designing-cartridge-covers` before calling the metadata ready.
-6. Report which URLs resolve and which still 404 (`binary_url` 404s until a
+6. Check the ratio and the cabinet art:
+   - `tools/game-size.sh` prints the game's size; `aspect` is that size as a
+     ratio. Run `tools/store-assets.sh` to write it rather than typing it.
+   - `grep -l PLACEHOLDER tools/marquee.svg tools/bezel.svg` prints nothing
+     once the art is designed. A file it prints is still the template's
+     placeholder: either design it (`designing-cartridge-covers`,
+     frame-art.md) or leave `assets/marquee.png` / `assets/bezel.png`
+     unwritten (delete them if present) and re-run `tools/store-assets.sh`,
+     which removes the key so the shared art is used.
+   - When the keys are present, `file assets/marquee.png assets/bezel.png`
+     reports 1080 x 360 and 1920 x 1920.
+7. Report which URLs resolve and which still 404 (`binary_url` 404s until a
    `v*` release exists and Vercel has `GH_TOKEN`; that is expected, say so).
    The marketplace mints what the *deployed* host serves, so also curl
    `https://<host>/assets/cartridge.png` and note whether the live cover is
-   the real one or still a stub awaiting a deploy.
+   the real one or still a stub awaiting a deploy. Curl `marquee` and `bezel`
+   too when they are set; a URL that 404s must not be minted.
 
 ## Common mistakes
 
@@ -78,5 +96,8 @@ genre, hosts) and verifying every URL.
 | Adding `Engine`, `Controls`, `Input`, `Developer`, `Lives`, `Mode` traits | Delete. The fixed trio plus at most one gameplay fact. "Built with Bevy" is never a selling point. |
 | Genre left as the template's "Arcade" | Name the actual genre. |
 | Host taken from the folder name | Curl it. Three of seventeen games had a suffixed host. |
-| `image` pointing at a marquee PNG or a title screenshot | Point at `cartridge.png`, the 768x1024 cover. |
+| `image` pointing at a marquee PNG or a title screenshot | Point at `cartridge.png`, the 768x1024 cover. The marquee goes in `properties.marquee`. |
 | Reformatting to 2-space or compact JSON | Keep the fleet's 4-space style so diffs stay small. |
+| `aspect` left at the template's `"4:3"` in a 1:1 or 3:4 game | Run `tools/store-assets.sh`; it writes the ratio from `src/display.rs`. |
+| `marquee` / `bezel` pointing at placeholder art | Design the art, or delete the PNGs and let `store-assets.sh` remove the keys. |
+| `marquee` / `bezel` set but the PNG is not in `assets/` | The URL will 404 and native cabinets will not find the file. Render with `tools/frame-art.sh` and commit the PNGs. |

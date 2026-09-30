@@ -21,6 +21,7 @@
         "verify_url": "https://gamebient-game.vercel.app/verify.zip",
         "binary_url": "https://gamebient-game.vercel.app/assets/gamebient-game.tar.gz",
         "binary_type": "bevy-tar",
+        "aspect": "4:3",
         "screenshots": [],
         "version": "0.1.0+unknown"
     }

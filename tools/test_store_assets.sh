@@ -13,6 +13,12 @@
 #   (h) stale 16:9 footage in a 4:3 game -> non-zero exit, nothing written.
 #   (i) no src/display.rs -> non-zero exit naming it; with GAME_SIZE=1280x720
 #       the same footage gives 1280x720 outputs (a game not converted yet).
+#   properties.aspect is written in every case: 4:3 (a), 3:4 (f), 1:1 (g), 16:9 (i).
+#   (j) assets/marquee.png and assets/bezel.png present at the right sizes
+#       -> properties.marquee / properties.bezel point at them; absent (a)
+#       -> both keys are removed, so the site uses the shared art.
+#   (k) a marquee.png of the wrong size -> non-zero exit, nothing written.
+#   (l) a game size that is not a sanctioned ratio -> non-zero exit.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 TOOL="$HERE/tools/store-assets.sh"
@@ -56,6 +62,8 @@ sized a "$T/a" "960,720"
 [ "$(json "$T/a/assets/info.json" "d['properties']['released_at']")" = "2026-09-01" ] || { echo "FAIL a: released_at"; exit 1; }
 json "$T/a/assets/info.json" "d['properties']['version']" | grep -Eq '^0\.3\.1\+[0-9a-f]{7}$' || { echo "FAIL a: version"; exit 1; }
 if ! { grep -q "Developer" "$T/a.out" && grep -q "Tags" "$T/a.out"; }; then echo "FAIL a: missing-field report"; exit 1; fi
+[ "$(json "$T/a/assets/info.json" "d['properties']['aspect']")" = "4:3" ] || { echo "FAIL a: aspect"; exit 1; }
+[ "$(json "$T/a/assets/info.json" "'marquee' in d['properties'] or 'bezel' in d['properties']")" = "False" ] || { echo "FAIL a: frame art URLs kept with no PNGs behind them"; exit 1; }
 
 # (b)
 cp "$T/a/assets/info.json" "$T/a.first.json"; ( cd "$T/a" && "$TOOL" --released-at 2026-09-01 ) >/dev/null
@@ -77,10 +85,12 @@ if ( cd "$T/e" && "$TOOL" ) >/dev/null 2>&1; then echo "FAIL e: should exit non-
 # (f)
 mk "$T/f" 720x960 1080x1440; ( cd "$T/f" && "$TOOL" ) >/dev/null
 sized f "$T/f" "720,960"
+[ "$(json "$T/f/assets/info.json" "d['properties']['aspect']")" = "3:4" ] || { echo "FAIL f: aspect"; exit 1; }
 
 # (g)
 mk "$T/g" 720x720 1080x1080; ( cd "$T/g" && "$TOOL" ) >/dev/null
 sized g "$T/g" "720,720"
+[ "$(json "$T/g/assets/info.json" "d['properties']['aspect']")" = "1:1" ] || { echo "FAIL g: aspect"; exit 1; }
 
 # (h)
 mk "$T/h" 960x720 1920x1080
@@ -95,5 +105,27 @@ if ( cd "$T/i" && "$TOOL" ) >/dev/null 2>"$T/i.err"; then echo "FAIL i: no displ
 grep -q "src/display.rs" "$T/i.err" || { echo "FAIL i: message: $(cat "$T/i.err")"; exit 1; }
 ( cd "$T/i" && GAME_SIZE=1280x720 "$TOOL" ) >/dev/null
 sized i "$T/i" "1280,720"
+[ "$(json "$T/i/assets/info.json" "d['properties']['aspect']")" = "16:9" ] || { echo "FAIL i: aspect"; exit 1; }
+
+# (j)
+art() {  # art <dir> <marquee WxH> <bezel WxH>: synthetic frame art
+  ffmpeg -v error -y -f lavfi -i "color=c=navy:s=${2}:d=0.1" -frames:v 1 "$1/assets/marquee.png"
+  ffmpeg -v error -y -f lavfi -i "color=c=navy:s=${3}:d=0.1" -frames:v 1 "$1/assets/bezel.png"
+}
+mk "$T/j"; art "$T/j" 1080x360 1920x1920; ( cd "$T/j" && "$TOOL" ) >/dev/null
+[ "$(json "$T/j/assets/info.json" "d['properties']['marquee']")" = "https://gamebient-game.vercel.app/assets/marquee.png" ] || { echo "FAIL j: marquee url"; exit 1; }
+[ "$(json "$T/j/assets/info.json" "d['properties']['bezel']")" = "https://gamebient-game.vercel.app/assets/bezel.png" ] || { echo "FAIL j: bezel url"; exit 1; }
+
+# (k)
+mk "$T/k"; art "$T/k" 1080x400 1920x1920
+if ( cd "$T/k" && "$TOOL" ) >/dev/null 2>"$T/k.err"; then echo "FAIL k: a 1080x400 marquee should be refused"; exit 1; fi
+grep -q "assets/marquee.png is 1080x400, expected 1080x360" "$T/k.err" || { echo "FAIL k: message: $(cat "$T/k.err")"; exit 1; }
+[ ! -d "$T/k/assets/screenshots" ] || { echo "FAIL k: wrote screenshots"; exit 1; }
+
+# (l)
+mk "$T/l" 1000x700 1500x1050
+if ( cd "$T/l" && "$TOOL" ) >/dev/null 2>"$T/l.err"; then echo "FAIL l: 10:7 should be refused"; exit 1; fi
+grep -q "10:7" "$T/l.err" || { echo "FAIL l: message: $(cat "$T/l.err")"; exit 1; }
+[ ! -d "$T/l/assets/screenshots" ] || { echo "FAIL l: wrote screenshots"; exit 1; }
 
 echo "test_store_assets: OK"
