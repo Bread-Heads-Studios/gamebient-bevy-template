@@ -9,8 +9,9 @@
 //!
 //! With none of those set the best score lasts for the session only.
 //!
-//! The stored score is higher-is-better only: `driver::HIGHER_IS_BETTER`
-//! gates its use, and a game where lower is better never reads or writes it.
+//! The stored score is higher-is-better only:
+//! `game::scoring::HIGHER_SCORE_IS_BETTER` gates its use, and a game where
+//! lower is better never reads or writes it.
 
 use std::path::{Path, PathBuf};
 

@@ -14,19 +14,12 @@ use crate::frame::best_score::{best_score_path_from_env, load_best, save_best};
 use crate::frame::brightness::{FrameBrightness, FrameEvent, FrameLevels, FramePhase};
 use crate::frame::caption::{group_digits, marquee_caption};
 use crate::frame::layout::{FrameLayout, PxRect, frame_layout};
-use crate::game::scoring::{GameData, LeaderboardScore};
+use crate::game::scoring::{GameData, HIGHER_SCORE_IS_BETTER, LeaderboardScore};
 use crate::game::states::{GameState, Paused};
 
-/// Score order of this game. The stored best score and the "SCORE TO BEAT" and
-/// "NEW HIGH SCORE" captions assume higher is better, which is what the
-/// template's `LeaderboardScore` documents ("higher-is-better integer"); the
-/// template has no other notion of score order in code or in `info.json`.
-/// A game whose score is better when lower (a time, a stroke count) sets this
-/// to `false`: the frame then shows no score to beat, never announces a new
-/// high score and never writes the best-score file.
-pub const HIGHER_IS_BETTER: bool = true;
-
-/// True when `score` is a record over `best` for the given score order.
+/// True when `score` is a record over `best` for the given score order. The
+/// order is `game::scoring::HIGHER_SCORE_IS_BETTER`, the game's own setting;
+/// this file defines none, so a template sync cannot reset it.
 fn is_record(higher_is_better: bool, best: u64, score: u64) -> bool {
     higher_is_better && score > best
 }
@@ -77,7 +70,7 @@ impl FrameRuntime {
     /// Reads the best score from its file, if there is one.
     pub fn from_env() -> Self {
         let path = best_score_path_from_env();
-        if !HIGHER_IS_BETTER {
+        if !HIGHER_SCORE_IS_BETTER {
             return Self::new(0, None);
         }
         let best = path.as_deref().map_or(0, load_best);
@@ -88,7 +81,7 @@ impl FrameRuntime {
     /// and is written to the file; anything else is a plain game over.
     pub fn finish_run(&mut self, final_score: u64) -> FrameEvent {
         self.final_score = Some(final_score);
-        let event = if is_record(HIGHER_IS_BETTER, self.best, final_score) {
+        let event = if is_record(HIGHER_SCORE_IS_BETTER, self.best, final_score) {
             self.best = final_score;
             if let Some(path) = &self.best_path
                 && let Err(error) = save_best(path, final_score)
@@ -121,7 +114,7 @@ impl FrameRuntime {
     }
 
     pub fn caption(&self) -> Option<String> {
-        let best = (HIGHER_IS_BETTER && self.best > 0).then(|| group_digits(self.best));
+        let best = (HIGHER_SCORE_IS_BETTER && self.best > 0).then(|| group_digits(self.best));
         let final_score = self.final_score.map(group_digits);
         marquee_caption(
             self.phase,

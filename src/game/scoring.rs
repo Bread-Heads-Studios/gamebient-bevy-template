@@ -37,6 +37,15 @@ impl GameData {
     }
 }
 
+/// Score order of this game, read by the cabinet frame (`src/frame/`). A game
+/// whose score is better when lower (a time, a stroke count) sets this to
+/// `false`, and must also set `score_order` in `assets/info.json` to match.
+/// The frame then shows no score to beat, never announces a new high score
+/// and never writes the best-score file. Lives here, not in `src/frame/`,
+/// because frame files are copied into games unchanged and this file is the
+/// game's own.
+pub const HIGHER_SCORE_IS_BETTER: bool = true;
+
 /// The single higher-is-better integer the leaderboard ranks. The template's
 /// `GameData` has `score`; games without one (golf, racing) compute it here.
 pub trait LeaderboardScore {
