@@ -384,6 +384,13 @@ together (`src/lib/cabinetFrame/` in the website repo).
   `src/ui/fighters.rs` (two queries), Gravestone Gauntlet
   `src/game/effects.rs` and `src/ui/how_to_play.rs`, pizza-pinball
   `src/ui/how_to_play.rs`.
+- **The game camera shares the window with the frame camera.** The frame
+  camera is `Msaa::Off`. A game `Camera2d` left on Bevy's default 4x MSAA
+  aborts the window on the first frame with `GX_FRAME=on` (wgpu rejects a
+  1-sample depth attachment against a 4-sample colour attachment); 3D game
+  cameras have not shown this. Give every game `Camera2d` that can share the
+  window (menu screens included) `Msaa::Off`, and run one `GX_FRAME=on`
+  capture before declaring a port done.
 - **What the frame reads from the game.** Frame files are copied into games
   unchanged, so these names must exist in every game:
   `crate::game::scoring::{GameData, LeaderboardScore, HIGHER_SCORE_IS_BETTER}`
@@ -394,7 +401,10 @@ together (`src/lib/cabinetFrame/` in the website repo).
   for example `pub use super::run::RunStats as GameData;`. The driver's tests
   build and change the score through two helpers, `data_with_score` and
   `add_score` in `src/frame/driver.rs`; a game whose type has no public
-  numeric `score` field adapts those two functions only.
+  numeric `score` field adapts those two functions only. A game whose scored
+  ending is a state other than `GameOver` maps it to `FramePhase::GameOver` in
+  its copy of `phase_for`, and the frame then finishes the run on entering it
+  (Hunted's `Victory` is the one case).
 - **Flat layouts.** A game with no `src/game/` (its sim files sit in
   `src/`) declares the copied modules in `src/lib.rs` and puts
   `pub use crate::{replay, scoring, sim, states};` in `src/game.rs`, so

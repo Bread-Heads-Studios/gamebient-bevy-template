@@ -53,7 +53,7 @@ pub struct FrameRuntime {
     /// The game's score order, `game::scoring::HIGHER_SCORE_IS_BETTER` at run
     /// time. A field, not a read of the constant, so tests can pin either order.
     higher_is_better: bool,
-    /// A run ended on entering `GameOver` and its score is not read yet.
+    /// A run ended on entering the `GameOver` phase and its score is not read yet.
     finish_pending: bool,
 }
 
@@ -217,17 +217,36 @@ pub fn step_frame(
     runtime.advance(time.delta_secs(), phase_for(*state.get()), paused.0);
 }
 
-/// `OnEnter(GameState::GameOver)`: mark the run as ended. The score is not
-/// read here: the order of this system against a game's own
-/// `OnEnter(GameOver)` systems (a time bonus, say) is undefined, so
-/// [`finish_pending_run`] takes it on the first `Update` tick in `GameOver`,
-/// after every `OnEnter` system has run.
-pub fn on_game_over(mut runtime: ResMut<FrameRuntime>) {
-    runtime.finish_pending = true;
+/// True on the tick the frame phase enters `GameOver`. `prev` is the phase
+/// seen on the previous tick, `None` before the first one: the first tick only
+/// records where the game starts (a menu state), so a game that somehow starts
+/// in `GameOver` has no run to finish and nothing is recorded at startup.
+pub fn entered_game_over(prev: Option<FramePhase>, now: FramePhase) -> bool {
+    matches!(prev, Some(p) if p != FramePhase::GameOver) && now == FramePhase::GameOver
+}
+
+/// `Update`, before [`finish_pending_run`]: mark the run as ended when the
+/// frame phase enters `GameOver`. That is the state `GameOver` and any state a
+/// game maps to `FramePhase::GameOver` in its copy of [`phase_for`] (Hunted's
+/// `Victory`). The score is not read here: a game's own `OnEnter` systems of
+/// the new state (a time bonus, say) run in `StateTransition`, before
+/// `Update`, so [`finish_pending_run`] in this same `Update` tick reads the
+/// score after every one of them. Fires once per entry into the phase, so a
+/// second run in the same session finishes again.
+pub fn watch_game_over(
+    state: Res<State<GameState>>,
+    mut runtime: ResMut<FrameRuntime>,
+    mut last: Local<Option<FramePhase>>,
+) {
+    let now = phase_for(*state.get());
+    if entered_game_over(*last, now) {
+        runtime.finish_pending = true;
+    }
+    *last = Some(now);
 }
 
 /// `Update`, before `step_frame`: if a run has just ended, compare its final
-/// score with the best. Runs once per game over.
+/// score with the best. Runs once per game over, in the tick it is marked.
 pub fn finish_pending_run(data: Res<GameData>, mut runtime: ResMut<FrameRuntime>) {
     if runtime.finish_pending {
         runtime.finish_pending = false;
@@ -286,9 +305,8 @@ mod tests {
         assert!(!is_record(false, 0, 5));
     }
 
-    /// A game's own `OnEnter(GameOver)` system may add a bonus. Its order
-    /// against the frame's is undefined, so the frame reads the score on the
-    /// first `Update` tick in `GameOver`.
+    /// A game's own `OnEnter(GameOver)` system may add a bonus. `OnEnter`
+    /// runs before `Update`, so the frame reads the score after it.
     #[test]
     fn the_final_score_includes_a_bonus_added_on_enter() {
         use bevy::state::app::StatesPlugin;
@@ -301,31 +319,93 @@ mod tests {
             .init_state::<GameState>()
             .insert_resource(data_with_score(100))
             .insert_resource(FrameRuntime::new(0, None, true))
-            // The frame's system runs before the game's bonus, the order
-            // that would make an `OnEnter` read too early.
-            .add_systems(OnEnter(GameState::GameOver), (on_game_over, bonus).chain())
-            .add_systems(Update, finish_pending_run);
+            .add_systems(OnEnter(GameState::GameOver), bonus)
+            .add_systems(Update, (watch_game_over, finish_pending_run).chain());
         app.update();
         app.world_mut()
             .resource_mut::<NextState<GameState>>()
             .set(GameState::GameOver);
-        app.update();
         app.update();
         let runtime = app.world().resource::<FrameRuntime>();
         assert_eq!(runtime.final_score, Some(600));
         assert_eq!(runtime.best, 600);
     }
 
+    /// Minimal app: the frame's two run-end systems over `GameState`.
+    fn run_end_app() -> App {
+        use bevy::state::app::StatesPlugin;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .init_state::<GameState>()
+            .insert_resource(data_with_score(0))
+            .insert_resource(FrameRuntime::new(0, None, true))
+            .add_systems(Update, (watch_game_over, finish_pending_run).chain());
+        app.update();
+        app
+    }
+
+    fn go(app: &mut App, state: GameState) {
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(state);
+        app.update();
+    }
+
+    fn final_score(app: &App) -> Option<u64> {
+        app.world().resource::<FrameRuntime>().final_score
+    }
+
     #[test]
-    fn a_run_is_finished_once() {
-        let mut world = World::new();
-        world.insert_resource(data_with_score(0));
-        world.insert_resource(FrameRuntime::new(0, None, true));
-        world.run_system_once(on_game_over).unwrap();
-        world.run_system_once(finish_pending_run).unwrap();
-        add_score(&mut world.resource_mut::<GameData>(), 999);
-        world.run_system_once(finish_pending_run).unwrap();
-        assert_eq!(world.resource::<FrameRuntime>().final_score, Some(0));
+    fn entering_game_over_finishes_the_run_once() {
+        let mut app = run_end_app();
+        assert_eq!(final_score(&app), None, "nothing is recorded at startup");
+        go(&mut app, GameState::Playing);
+        add_score(&mut app.world_mut().resource_mut::<GameData>(), 40);
+        go(&mut app, GameState::GameOver);
+        assert_eq!(final_score(&app), Some(40));
+    }
+
+    #[test]
+    fn a_second_run_finishes_again() {
+        let mut app = run_end_app();
+        go(&mut app, GameState::Playing);
+        add_score(&mut app.world_mut().resource_mut::<GameData>(), 40);
+        go(&mut app, GameState::GameOver);
+        go(&mut app, GameState::Menu);
+        go(&mut app, GameState::Playing);
+        add_score(&mut app.world_mut().resource_mut::<GameData>(), 10);
+        go(&mut app, GameState::GameOver);
+        assert_eq!(final_score(&app), Some(50));
+        assert_eq!(app.world().resource::<FrameRuntime>().best, 50);
+    }
+
+    #[test]
+    fn staying_in_game_over_finishes_only_once() {
+        let mut app = run_end_app();
+        go(&mut app, GameState::Playing);
+        add_score(&mut app.world_mut().resource_mut::<GameData>(), 40);
+        go(&mut app, GameState::GameOver);
+        add_score(&mut app.world_mut().resource_mut::<GameData>(), 999);
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_eq!(final_score(&app), Some(40));
+    }
+
+    #[test]
+    fn the_phase_drives_the_transition() {
+        use FramePhase::*;
+        assert!(entered_game_over(Some(Playing), GameOver));
+        assert!(entered_game_over(Some(Attract), GameOver));
+        assert!(!entered_game_over(Some(GameOver), GameOver));
+        assert!(!entered_game_over(Some(GameOver), Attract));
+        assert!(!entered_game_over(Some(Attract), Playing));
+        assert!(!entered_game_over(None, Attract));
+        assert!(
+            !entered_game_over(None, GameOver),
+            "the first tick only records the starting phase"
+        );
     }
 
     #[test]
