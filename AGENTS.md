@@ -166,7 +166,7 @@ These cost real debugging time on the project this template was extracted from:
   `camera.logical_viewport_rect().min` first.
 - **Linux native opens borderless fullscreen**; autopilot and record builds
   stay windowed so captures are the game's own size. The check is
-  `cfg!(feature = "autopilot")` in `display::game_window`; a game with any
-  other capture feature adds it there (docs/conventions.md, "Capture builds
-  stay windowed"). `GX_WINDOW_SIZE=WxH`
+  `cfg!(feature = "capture")` in `display::game_window`; `autopilot` implies
+  it, and a game with any other capture feature makes it imply `capture` in
+  `Cargo.toml` (docs/conventions.md, "Capture builds stay windowed"). `GX_WINDOW_SIZE=WxH`
   forces a window of that size on any native build.

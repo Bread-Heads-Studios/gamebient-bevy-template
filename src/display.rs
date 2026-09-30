@@ -35,7 +35,7 @@ pub fn game_window(title: &str) -> Window {
     #[allow(unused_mut)]
     let mut window = Window {
         present_mode: PresentMode::AutoVsync,
-        mode: window_mode_for(cfg!(target_os = "linux"), cfg!(feature = "autopilot")),
+        mode: window_mode_for(cfg!(target_os = "linux"), cfg!(feature = "capture")),
         ..policy.window(title)
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -50,8 +50,9 @@ pub fn game_window(title: &str) -> Window {
     window
 }
 
-/// Cabinets run Linux and get the whole panel. The autopilot and record
-/// harnesses capture the window, so they keep it the game's own size.
+/// Cabinets run Linux and get the whole panel. Builds with the `capture`
+/// feature (`autopilot` and `record` imply it) capture the window, so they
+/// keep it the game's own size.
 fn window_mode_for(linux_native: bool, harness: bool) -> WindowMode {
     if linux_native && !harness {
         WindowMode::BorderlessFullscreen(MonitorSelection::Primary)

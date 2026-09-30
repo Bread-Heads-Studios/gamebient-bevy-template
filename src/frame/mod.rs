@@ -39,8 +39,8 @@ pub const FRAME_LAYER: usize = 31;
 /// Whether the frame runs. `GX_FRAME` = `off`, `0`, `false` or `no` (any case)
 /// always disables it; `on`, `1`, `true` or `yes` enables it; anything else
 /// counts as unset. Under a dev
-/// harness (the `autopilot` and `record` features) it is off unless
-/// `GX_FRAME=on`, so footage and cover shots keep their framing.
+/// harness (the `capture` feature, which `autopilot` and `record` imply) it
+/// is off unless `GX_FRAME=on`, so footage and cover shots keep their framing.
 pub fn frame_enabled(gx_frame: Option<&str>, harness: bool) -> bool {
     match gx_frame.map(str::trim) {
         Some(value)
@@ -77,7 +77,7 @@ impl Plugin for FramePlugin {
         app.add_message::<Highlight>();
         app.init_resource::<FrameInsets>();
         let gx_frame = std::env::var("GX_FRAME").ok();
-        if !frame_enabled(gx_frame.as_deref(), cfg!(feature = "autopilot")) {
+        if !frame_enabled(gx_frame.as_deref(), cfg!(feature = "capture")) {
             // Off: the game takes the whole window, as if no frame existed.
             app.insert_resource(FrameInsets::default());
             return;

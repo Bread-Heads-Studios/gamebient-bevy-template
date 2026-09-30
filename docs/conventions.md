@@ -182,22 +182,16 @@ The short side is always 720, and `cargo test` fails on any other size.
   parameter's line as well. The marker records a reviewed exception for
   presentation code; it is never the fix for a `SimSet` system.
 - **Capture builds stay windowed.** On Linux the window is fullscreen
-  unless the build has the `autopilot` cargo feature (`record` implies it),
-  so screenshots are the game's own size. A game with any other capture
-  feature (Attic Excavator's `harness`) must add it to that check. The line
-  to edit is in `game_window` in `src/display.rs`:
+  unless the build has the `capture` cargo feature (`autopilot` implies it,
+  and `record` implies `autopilot`), so screenshots are the game's own size.
+  `game_window` in `src/display.rs` and the frame in `src/frame/mod.rs` read
+  only `capture`; never edit them for this. A game with any other capture
+  feature (Attic Excavator's `harness`, a `showcase`) makes it imply
+  `capture` in its `Cargo.toml`:
 
-  ```rust
-  mode: window_mode_for(cfg!(target_os = "linux"), cfg!(feature = "autopilot")),
-  ```
-
-  becomes
-
-  ```rust
-  mode: window_mode_for(
-      cfg!(target_os = "linux"),
-      cfg!(any(feature = "autopilot", feature = "harness")),
-  ),
+  ```toml
+  capture = []
+  harness = ["capture"]
   ```
 - **Checking a TV's shape on a dev machine.** `GX_WINDOW_SIZE=450x800 cargo
   run` opens a portrait window; `800x450` a landscape one. Native only.
@@ -318,7 +312,7 @@ together (`src/lib/cabinetFrame/` in the website repo).
   attract should land between 0.30 and 0.60: the sprite tint multiplies in
   linear light, so the ratio comes out a little below the nominal 0.45.
 - **Switches.** `GX_FRAME=off` (also `0`, `false`, `no`) disables the frame and gives the game the
-  whole window. Under `--features autopilot` or `record` the frame is off
+  whole window. Under a `capture` build (`autopilot`, `record`, or a game's own capture feature) the frame is off
   unless `GX_FRAME=on`, so captures never include it.
   `GX_WINDOW_SIZE=1080x1920` (see "Screen shape") opens a window of that
   size for checking a cabinet layout on a desk.

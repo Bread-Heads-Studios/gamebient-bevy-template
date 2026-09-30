@@ -20,9 +20,15 @@ path = "src/bin/verify.rs"
 required-features = ["verify"]
 
 [features]
+# Marks a build that captures the window (footage, cover shots): the Linux
+# window stays the game's own size and the cabinet frame is off unless asked
+# for. src/display.rs and src/frame/mod.rs read only this feature, so a game
+# with another capture feature (`harness`, `showcase`) lists "capture" in it
+# instead of editing those files. Dev-only; never enabled in shipping builds.
+capture = []
 # Self-playtest harness: scripted input + periodic screenshots
 # (src/game/autopilot.rs). Dev-only; never enabled in shipping builds.
-autopilot = []
+autopilot = ["capture"]
 # Offline footage recorder layered on the autopilot tour: fixed 1/60 s clock,
 # one screenshot per frame, events.jsonl (src/game/record/, tools/record.sh).
 # Dev-only; never enabled in shipping builds.
