@@ -163,8 +163,12 @@ The short side is always 720, and `cargo test` fails on any other size.
   is caught at run time instead: `tests/display_shape.rs` and
   `tests/windowed_shape.rs` record a run under a letterboxed display and
   require it to equal the bare run. The scanned directory is the constant
-  `SIM_SOURCE_DIR` in that test; a game with a flat `src/` layout points it
-  at the directory holding its sim files, never at `src/` itself.
+  `SIM_SOURCE_DIR` in that test. A game with a flat `src/` layout has no
+  directory that holds only its sim files (`src/` holds `display.rs`), so it
+  adds a `sim-sources.txt` at the crate root instead of editing the verbatim
+  `src/display.rs`: one `.rs` path per line, relative to the crate root, `#`
+  comments and blank lines allowed. When that file exists the scan reads the
+  files it lists and ignores `SIM_SOURCE_DIR`.
 - **The `allow-display` marker.** The grep walks `src/game/` only. Code in
   `src/ui/`, `src/assets/` and `src/main.rs` may call into `display` freely
   and needs no marker. Presentation code that lives under `src/game/` (a
@@ -198,6 +202,25 @@ The short side is always 720, and `cargo test` fails on any other size.
 - **The cabinet frame** sets `display::FrameInsets { reserve_top, gap }` to
   keep the marquee band and the gap around the game clear. Both are zero
   unless a frame is drawn.
+- **Camera rules for a new shape.** Pick the one that fits the game, put it
+  in a pure function with a unit test in the game's camera file, and call it
+  from an `Update` system, never from `SimSet`. Name the constants so the
+  choice can be flipped in review.
+  - **C1, fixed field.** The whole playfield stays visible: fit the field's
+    extents plus the game's margin at `GAME_WIDTH / GAME_HEIGHT`. Test that
+    every field corner projects inside |NDC| 0.95 and at least one lies
+    beyond 0.80, so the fit is not loose.
+  - **C2, open-world follow camera.** Keep the visible area: scale the view
+    by `sqrt(old_aspect / new_aspect)` (1.1547 for 16:9 to 4:3, 1.3333 to
+    1:1, 1.5396 to 3:4). Test that the visible area is within 1% of the
+    old one.
+  - **C3, first-person or chase 3D.** Keep the horizontal FOV, so the
+    vertical FOV grows as the screen gets less wide: 57.80 degrees at 4:3,
+    up from 45 degrees at 16:9. Test that the horizontal FOV at the new
+    aspect is within 0.1 degrees of the old one.
+  - **C4, read-ahead axis.** Keep the extent along the axis the player reads
+    ahead on (a belt runs horizontally, lanes run vertically) equal to its
+    old value within 1%. The other axis takes what the new shape gives.
 
 Vsync is pinned (`PresentMode::AutoVsync`).
 
@@ -310,10 +333,16 @@ together (`src/lib/cabinetFrame/` in the website repo).
   `$XDG_DATA_HOME/gamebient/<package>/best-score`, else
   `$HOME/.local/share/gamebient/<package>/best-score`. Delete the file to
   reset it.
-- **Checking the dimming.** On a portrait screenshot, the mean brightness of
-  a strip along the marquee's top edge in play divided by the same strip in
-  attract should land between 0.30 and 0.60: the sprite tint multiplies in
-  linear light, so the ratio comes out a little below the nominal 0.45.
+- **Checking the dimming.** Check it by relation, not by a fixed ratio.
+  On a landscape capture the bezel's mean brightness at idle (menu, attract)
+  is at most 0.35 x 255, in play it is below idle, and paused equals play
+  within 10%. On a portrait capture the marquee's mean in play is below idle
+  and paused equals play within 10%. `tools/frame-accept.sh --shots <dir>
+  --window WxH --ratio <r>` runs these checks on `02-title.png`,
+  `05-mid-play.png` and `08-pause.png`, and also that the gap around the game
+  is black and the bezel beyond it is not. `tools/frame-accept.sh
+  --check-copies <game>` proves the game's verbatim copies still match this
+  template.
 - **Switches.** `GX_FRAME=off` (also `0`, `false`, `no`) disables the frame and gives the game the
   whole window. Under a `capture` build (`autopilot`, `record`, or a game's own capture feature) the frame is off
   unless `GX_FRAME=on`, so captures never include it.
@@ -366,6 +395,12 @@ together (`src/lib/cabinetFrame/` in the website repo).
   build and change the score through two helpers, `data_with_score` and
   `add_score` in `src/frame/driver.rs`; a game whose type has no public
   numeric `score` field adapts those two functions only.
+- **Flat layouts.** A game with no `src/game/` (its sim files sit in
+  `src/`) declares the copied modules in `src/lib.rs` and puts
+  `pub use crate::{replay, scoring, sim, states};` in `src/game.rs`, so
+  `crate::game::scoring` and `crate::game::states` resolve in the copied
+  frame files unchanged. `src/fit.rs` stands in for `src/ui/fit.rs`, and the
+  display scan reads `sim-sources.txt` (see "Presentation only").
 - **A new `GameState` variant** is treated as attract by the frame unless
   you add it to `frame::driver::phase_for`.
 

@@ -18,9 +18,8 @@ use bevy::window::{PrimaryWindow, WindowResolution};
 
 use gamebient_game::display::{DisplayPlugin, FrameInsets, GameViewport};
 use gamebient_game::game::replay::recorder::ReplayRecorder;
-use gamebient_game::game::replay::selftest::{
-    SELFTEST_SEED, SELFTEST_TICKS, record_scripted_run, script,
-};
+use gamebient_game::game::replay::selftest::{SELFTEST_SEED, SELFTEST_TICKS};
+use gamebient_game::game::replay::selftest::{record_scripted_run, script};
 use gamebient_game::game::replay::{Replay, build_headless_app, verify};
 use gamebient_game::game::sim::{PendingSeed, RunOver, SimTick};
 use gamebient_game::game::states::GameState;

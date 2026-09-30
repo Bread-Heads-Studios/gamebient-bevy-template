@@ -48,7 +48,7 @@ fi
 
 # Cargo feature.
 if ! grep -q '^record = ' "$GAME/Cargo.toml"; then
-  perl -0pi -e 's/^autopilot = \[\]\n/autopilot = []\n# Offline footage recorder layered on the autopilot tour (src\/game\/record\/,\n# tools\/record.sh). Dev-only; never enabled in shipping builds.\nrecord = ["autopilot"]\n/m' "$GAME/Cargo.toml"
+  perl -0pi -e 's/^(autopilot = \[[^\]]*\]\n)/$1# Offline footage recorder layered on the autopilot tour (src\/game\/record\/,\n# tools\/record.sh). Dev-only; never enabled in shipping builds.\nrecord = ["autopilot"]\n/m' "$GAME/Cargo.toml"
 fi
 grep -q '^record = ' "$GAME/Cargo.toml" || echo "HAND EDIT: add 'record = [\"autopilot\"]' under [features] in Cargo.toml"
 

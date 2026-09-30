@@ -591,7 +591,7 @@ mod tests {
     fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         let entries = std::fs::read_dir(dir).unwrap_or_else(|e| {
             panic!(
-                "cannot read {}: {e}; set SIM_SOURCE_DIR to the directory that holds this game's sim files",
+                "cannot read {}: {e}; a game with no src/game/ lists its sim .rs files, one per line, in sim-sources.txt at the crate root (never edit this file)",
                 dir.display()
             )
         });
@@ -607,26 +607,38 @@ mod tests {
 
     /// Directory, relative to the crate root, whose `.rs` files must not
     /// read display state. Games with a flat `src/` layout (no `src/game/`)
-    /// point this at the directory that holds their sim files, never at
-    /// `src/` itself, which contains this file.
+    /// do not edit this: `src/` holds this file, and this file is copied
+    /// verbatim. They list their sim files in `sim-sources.txt` instead (see
+    /// `SIM_SOURCES_FILE`).
     const SIM_SOURCE_DIR: &str = "src/game";
 
-    /// The verifier has no window, so a sim system that reads the viewport
-    /// forks on the display the run was played on. Comments are skipped; a
-    /// dev harness or presentation system under `src/game/` that needs the
-    /// size carries `allow-display: <reason>` on the line. `FrameCamera` is
-    /// not a needle: naming the frame camera's marker (through
-    /// `crate::frame::FrameCamera`) in a camera query is not a read of
-    /// display state.
-    #[test]
-    fn game_code_does_not_read_display_state() {
+    /// File, relative to the crate root, that replaces `SIM_SOURCE_DIR` when it
+    /// exists: one `.rs` path per line (relative to the crate root), `#`
+    /// comments and blank lines allowed. For a flat `src/` layout, where the
+    /// sim files sit beside `src/display.rs` and no directory holds only them.
+    const SIM_SOURCES_FILE: &str = "sim-sources.txt";
+
+    /// Lines naming display state in the sim sources of the crate at `root`:
+    /// the files listed in `sim-sources.txt` when it exists, else every `.rs`
+    /// file under `SIM_SOURCE_DIR`.
+    fn scan(root: &std::path::Path) -> Vec<String> {
         let needles = ["GameViewport", "FrameInsets", "display::"];
         let mut files = Vec::new();
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(SIM_SOURCE_DIR);
-        rust_files(&dir, &mut files);
+        match std::fs::read_to_string(root.join(SIM_SOURCES_FILE)) {
+            Ok(list) => {
+                for line in list.lines() {
+                    let line = line.trim();
+                    if !line.is_empty() && !line.starts_with('#') {
+                        files.push(root.join(line));
+                    }
+                }
+            }
+            Err(_) => rust_files(&root.join(SIM_SOURCE_DIR), &mut files),
+        }
         let mut hits = Vec::new();
         for file in files {
-            let text = std::fs::read_to_string(&file).unwrap();
+            let text = std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
             for (n, line) in text.lines().enumerate() {
                 let code = line.trim_start();
                 if code.starts_with("//") || line.contains("allow-display") {
@@ -639,10 +651,42 @@ mod tests {
                 }
             }
         }
+        hits
+    }
+
+    /// The verifier has no window, so a sim system that reads the viewport
+    /// forks on the display the run was played on. Comments are skipped; a
+    /// dev harness or presentation system under `src/game/` that needs the
+    /// size carries `allow-display: <reason>` on the line. `FrameCamera` is
+    /// not a needle: naming the frame camera's marker (through
+    /// `crate::frame::FrameCamera`) in a camera query is not a read of
+    /// display state.
+    #[test]
+    fn game_code_does_not_read_display_state() {
+        let hits = scan(std::path::Path::new(env!("CARGO_MANIFEST_DIR")));
         assert!(
             hits.is_empty(),
-            "display state named in src/game/ (presentation only; see src/display.rs):\n{}",
+            "display state named in the sim sources (src/game/, or the files in sim-sources.txt; presentation only, see src/display.rs):\n{}",
             hits.join("\n")
         );
+    }
+
+    #[test]
+    fn sim_sources_file_replaces_the_directory() {
+        let root = std::env::temp_dir().join(format!("display-scan-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        // No src/game/ here: reading the directory would panic. Only the
+        // listed file is scanned; the unlisted one names display state too.
+        std::fs::write(
+            root.join("sim.rs"),
+            "fn tick() {\n    let w = display::GAME_WIDTH;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("ui.rs"), "use crate::display::GameViewport;\n").unwrap();
+        std::fs::write(root.join(SIM_SOURCES_FILE), "# sim files\n\nsim.rs\n").unwrap();
+        let hits = scan(&root);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(hits[0].contains("sim.rs:2"), "{hits:?}");
     }
 }
