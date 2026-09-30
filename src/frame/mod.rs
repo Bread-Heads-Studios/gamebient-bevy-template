@@ -215,8 +215,10 @@ mod tests {
     /// the two after it name `FrameCamera`:
     /// - it has `With<Camera2d>` or `With<Camera>`, or
     /// - it has `&Camera` or `&mut Camera` (followed by `,`, `)` or `>`) and
-    ///   neither it nor the two lines after have a `With<` naming some other
-    ///   type (`With<Camera3d>`, a game's own marker).
+    ///   the `Query<...>`/`Single<...>`/`Populated<...>` that holds it has no
+    ///   `With<` naming some other type (`With<Camera3d>`, a game's own
+    ///   marker). Only a `With<` inside that same query counts: one in the
+    ///   next parameter's query does not narrow this one.
     ///
     /// A query keyword (`Query<`, `Single<`, `Populated<`) must appear on the
     /// line or the three before. Comment lines and lines carrying
@@ -230,24 +232,57 @@ mod tests {
         let end = (i + 2).min(lines.len() - 1);
         let near = &lines[i..=end];
         let direct = line.contains("With<Camera2d>") || line.contains("With<Camera>");
+
+        // The lines from three before to four after, joined, and where line
+        // `i` starts in them.
+        let start = i.saturating_sub(3);
+        let window = lines[start..=(i + 4).min(lines.len() - 1)].join("\n");
+        let line_at: usize = lines[start..i].iter().map(|l| l.len() + 1).sum();
+        // Whether the query holding the camera type at `pos` has a `With<`
+        // naming another type: scan from its opening `<` to its closing `>`.
+        let narrowed_at = |pos: usize| -> bool {
+            let Some(open) = KEYWORDS
+                .iter()
+                .filter_map(|k| window[..pos].rfind(k).map(|p| p + k.len()))
+                .max()
+            else {
+                return false;
+            };
+            let mut depth = 1usize;
+            for (at, c) in window[open..].char_indices() {
+                let at = open + at;
+                match c {
+                    '<' => {
+                        depth += 1;
+                        let rest = &window[at + 1..];
+                        if window[..at].ends_with("With")
+                            && !(rest.starts_with("Camera>") || rest.starts_with("Camera2d>"))
+                        {
+                            return true;
+                        }
+                    }
+                    '>' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return false;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            false
+        };
         let by_ref = ["&Camera", "&mut Camera"].iter().any(|needle| {
             line.match_indices(needle).any(|(at, _)| {
                 matches!(
                     line[at + needle.len()..].chars().next(),
                     Some(',' | ')' | '>')
-                )
+                ) && !narrowed_at(line_at + at)
             })
         });
-        let other_marker = near.iter().any(|l| {
-            l.match_indices("With<").any(|(at, _)| {
-                let name = &l[at + "With<".len()..];
-                !(name.starts_with("Camera>") || name.starts_with("Camera2d>"))
-            })
-        });
-        if !(direct || (by_ref && !other_marker)) {
+        if !(direct || by_ref) {
             return false;
         }
-        let start = i.saturating_sub(3);
         let in_query = lines[start..=i]
             .iter()
             .any(|l| KEYWORDS.iter().any(|k| l.contains(k)));
@@ -259,6 +294,28 @@ mod tests {
     fn flagged(src: &str) -> bool {
         let lines: Vec<&str> = src.lines().collect();
         camera_query_flagged(&lines, 0)
+    }
+
+    /// Whether line `n` of `src` is flagged by the camera-query scan.
+    fn flagged_at(src: &str, n: usize) -> bool {
+        let lines: Vec<&str> = src.lines().collect();
+        camera_query_flagged(&lines, n)
+    }
+
+    /// Pizza Pinball's `position_labels`: a bare camera query, then an
+    /// unrelated query with a `With<>` of its own two lines later.
+    #[test]
+    fn a_with_in_the_next_query_does_not_narrow_a_bare_camera_query() {
+        let src = "pub fn position_labels(\n    camera_q: Query<(&Camera, &GlobalTransform)>,\n    ui_scale: Res<UiScale>,\n    items: Query<&GlobalTransform, With<Spin>>,\n) {}";
+        assert!(flagged_at(src, 1));
+        // The same filter inside the camera's own multi-line query narrows it.
+        let own = "fn f(\n    c: Query<\n        (&Camera, &GlobalTransform),\n        With<MainCamera>,\n    >,\n    items: Query<&GlobalTransform, With<Spin>>,\n) {}";
+        assert!(!flagged_at(own, 2));
+        // And a tuple filter on the same line.
+        assert!(!flagged_at(
+            "fn f(c: Query<&Camera, (With<A>, Without<B>)>) {}",
+            0
+        ));
     }
 
     #[test]
