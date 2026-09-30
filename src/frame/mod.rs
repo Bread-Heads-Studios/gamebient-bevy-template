@@ -8,6 +8,8 @@ pub mod best_score;
 pub mod brightness;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod caption;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod driver;
 pub mod highlight;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod layout;
