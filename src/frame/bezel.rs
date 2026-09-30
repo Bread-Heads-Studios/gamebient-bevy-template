@@ -22,8 +22,10 @@ pub struct BezelSprite;
 #[derive(Component)]
 pub struct GapBacking;
 
-/// A brightness multiplier as a sprite tint. The tint is an sRGB grey, so
-/// the result matches the website's CSS `brightness()` filter.
+/// A brightness multiplier as a sprite tint. The sprite colour multiplies
+/// the texel in linear light, whereas CSS `brightness()` multiplies encoded
+/// sRGB values, so on screen the result is always at or below the nominal
+/// multiplier: darker than the website at the same level, never brighter.
 pub fn tint(level: f32) -> Color {
     let level = level.clamp(0.0, 1.0);
     Color::srgb(level, level, level)

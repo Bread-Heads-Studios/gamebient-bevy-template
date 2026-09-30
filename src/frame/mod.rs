@@ -36,13 +36,27 @@ use bevy::prelude::*;
 /// cameras never draw the frame and the frame camera never draws the game.
 pub const FRAME_LAYER: usize = 31;
 
-/// Whether the frame runs. `GX_FRAME=off` always disables it. Under a dev
+/// Whether the frame runs. `GX_FRAME` = `off`, `0`, `false` or `no` (any case)
+/// always disables it; `on`, `1`, `true` or `yes` enables it; anything else
+/// counts as unset. Under a dev
 /// harness (the `autopilot` and `record` features) it is off unless
 /// `GX_FRAME=on`, so footage and cover shots keep their framing.
 pub fn frame_enabled(gx_frame: Option<&str>, harness: bool) -> bool {
     match gx_frame.map(str::trim) {
-        Some(value) if value.eq_ignore_ascii_case("off") => false,
-        Some(value) if value.eq_ignore_ascii_case("on") => true,
+        Some(value)
+            if ["off", "0", "false", "no"]
+                .iter()
+                .any(|w| value.eq_ignore_ascii_case(w)) =>
+        {
+            false
+        }
+        Some(value)
+            if ["on", "1", "true", "yes"]
+                .iter()
+                .any(|w| value.eq_ignore_ascii_case(w)) =>
+        {
+            true
+        }
         _ => !harness,
     }
 }
@@ -87,6 +101,7 @@ impl Plugin for FramePlugin {
                 (
                     camera::skip_redundant_writeback,
                     driver::apply_layout,
+                    driver::finish_pending_run,
                     driver::step_frame,
                     bezel::layout_bezel,
                     bezel::paint_bezel,
@@ -113,6 +128,18 @@ mod tests {
         assert!(!frame_enabled(Some("off"), false));
         assert!(!frame_enabled(Some(" OFF "), false));
         assert!(!frame_enabled(Some("off"), true));
+    }
+
+    #[test]
+    fn the_usual_off_and_on_words_are_understood() {
+        for off in ["0", "false", "FALSE", "no", " No "] {
+            assert!(!frame_enabled(Some(off), false), "{off}");
+            assert!(!frame_enabled(Some(off), true), "{off}");
+        }
+        for on in ["1", "true", "True", "yes", "YES"] {
+            assert!(frame_enabled(Some(on), false), "{on}");
+            assert!(frame_enabled(Some(on), true), "{on}");
+        }
     }
 
     #[test]

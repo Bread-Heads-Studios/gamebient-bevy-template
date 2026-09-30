@@ -74,18 +74,43 @@ pub fn decode_png(bytes: &[u8]) -> Option<Image> {
     Some(converted)
 }
 
+/// Largest side of a game's own art, in pixels.
+const MAX_ART_SIDE: u32 = 4096;
+
+/// Why a game's own art of this size cannot be used, if it cannot.
+pub fn art_problem(width: u32, height: u32, must_be_square: bool) -> Option<String> {
+    if width > MAX_ART_SIDE || height > MAX_ART_SIDE {
+        return Some(format!(
+            "is {width}x{height}, a side is larger than {MAX_ART_SIDE}"
+        ));
+    }
+    if must_be_square && width != height {
+        return Some(format!("is {width}x{height}, not square"));
+    }
+    None
+}
+
 /// The game's own file from `assets/`, or the embedded fallback. The flag
-/// is true when the fallback was used.
-fn read_art(file: &str, fallback: &'static [u8]) -> (Image, bool) {
+/// is true when the fallback was used. A file that is present but unusable
+/// is reported with a warning and replaced by the fallback.
+fn read_art(file: &str, fallback: &'static [u8], must_be_square: bool) -> (Image, bool) {
     let path = FileAssetReader::get_base_path().join("assets").join(file);
-    if let Ok(bytes) = std::fs::read(&path) {
-        match decode_png(&bytes) {
-            Some(image) => return (image, false),
+    match std::fs::read(&path) {
+        Ok(bytes) => match decode_png(&bytes) {
+            Some(image) => match art_problem(image.width(), image.height(), must_be_square) {
+                None => return (image, false),
+                Some(problem) => warn!("frame: {} {problem}; using the fallback", path.display()),
+            },
             None => warn!(
-                "frame: {} is not a usable PNG; using the fallback",
+                "frame: {} is not a PNG, or cannot be converted to 8-bit RGBA; using the fallback",
                 path.display()
             ),
-        }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => warn!(
+            "frame: could not read {}: {error}; using the fallback",
+            path.display()
+        ),
     }
     (
         decode_png(fallback).expect("embedded fallback frame art decodes"),
@@ -105,11 +130,11 @@ pub struct FrameArt {
 
 /// `Startup`: read the art, bake the bezel's saturation, build the sweep.
 pub fn load_frame_art(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
-    let (mut bezel, _) = read_art("bezel.png", FALLBACK_BEZEL);
+    let (mut bezel, _) = read_art("bezel.png", FALLBACK_BEZEL, true);
     if let Some(data) = bezel.data.as_mut() {
         desaturate_rgba8(data, BEZEL_SATURATION);
     }
-    let (marquee, marquee_is_fallback) = read_art("marquee.png", FALLBACK_MARQUEE);
+    let (marquee, marquee_is_fallback) = read_art("marquee.png", FALLBACK_MARQUEE, false);
     let mut sweep = Image::new(
         Extent3d {
             width: SWEEP_TEXTURE_WIDTH,
@@ -224,6 +249,16 @@ mod tests {
                 assert_eq!(pixel(x, y), first, "pixel {x},{y}");
             }
         }
+    }
+
+    #[test]
+    fn art_size_problems_are_named() {
+        assert_eq!(art_problem(1080, 360, false), None);
+        assert_eq!(art_problem(1920, 1920, true), None);
+        assert_eq!(art_problem(4096, 4096, true), None);
+        assert!(art_problem(1920, 1080, true).unwrap().contains("square"));
+        assert!(art_problem(4097, 4097, true).unwrap().contains("4096"));
+        assert!(art_problem(1080, 5000, false).unwrap().contains("4096"));
     }
 
     #[test]

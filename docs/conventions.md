@@ -313,7 +313,11 @@ together (`src/lib/cabinetFrame/` in the website repo).
   `$XDG_DATA_HOME/gamebient/<package>/best-score`, else
   `$HOME/.local/share/gamebient/<package>/best-score`. Delete the file to
   reset it.
-- **Switches.** `GX_FRAME=off` disables the frame and gives the game the
+- **Checking the dimming.** On a portrait screenshot, the mean brightness of
+  a strip along the marquee's top edge in play divided by the same strip in
+  attract should land between 0.30 and 0.60: the sprite tint multiplies in
+  linear light, so the ratio comes out a little below the nominal 0.45.
+- **Switches.** `GX_FRAME=off` (also `0`, `false`, `no`) disables the frame and gives the game the
   whole window. Under `--features autopilot` or `record` the frame is off
   unless `GX_FRAME=on`, so captures never include it.
   `GX_WINDOW_SIZE=1080x1920` (see "Screen shape") opens a window of that

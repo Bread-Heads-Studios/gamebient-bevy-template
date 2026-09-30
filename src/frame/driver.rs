@@ -50,6 +50,8 @@ pub struct FrameRuntime {
     /// Colour of the pulse in progress. `None` is the default colour.
     pub pulse_color: Option<[u8; 3]>,
     best_path: Option<PathBuf>,
+    /// A run ended on entering `GameOver` and its score is not read yet.
+    finish_pending: bool,
 }
 
 impl FrameRuntime {
@@ -64,6 +66,7 @@ impl FrameRuntime {
             final_score: None,
             pulse_color: None,
             best_path,
+            finish_pending: false,
         }
     }
 
@@ -210,9 +213,22 @@ pub fn step_frame(
     runtime.advance(time.delta_secs(), phase_for(*state.get()), paused.0);
 }
 
-/// `OnEnter(GameState::GameOver)`: compare the final score with the best.
-pub fn on_game_over(data: Res<GameData>, mut runtime: ResMut<FrameRuntime>) {
-    runtime.finish_run(u64::from(data.leaderboard_score()));
+/// `OnEnter(GameState::GameOver)`: mark the run as ended. The score is not
+/// read here: the order of this system against a game's own
+/// `OnEnter(GameOver)` systems (a time bonus, say) is undefined, so
+/// [`finish_pending_run`] takes it on the first `Update` tick in `GameOver`,
+/// after every `OnEnter` system has run.
+pub fn on_game_over(mut runtime: ResMut<FrameRuntime>) {
+    runtime.finish_pending = true;
+}
+
+/// `Update`, before `step_frame`: if a run has just ended, compare its final
+/// score with the best. Runs once per game over.
+pub fn finish_pending_run(data: Res<GameData>, mut runtime: ResMut<FrameRuntime>) {
+    if runtime.finish_pending {
+        runtime.finish_pending = false;
+        runtime.finish_run(u64::from(data.leaderboard_score()));
+    }
 }
 
 #[cfg(test)]
@@ -253,6 +269,51 @@ mod tests {
         assert!(!is_record(true, 10, 10));
         assert!(!is_record(false, 10, 5));
         assert!(!is_record(false, 0, 5));
+    }
+
+    /// A game's own `OnEnter(GameOver)` system may add a bonus. Its order
+    /// against the frame's is undefined, so the frame reads the score on the
+    /// first `Update` tick in `GameOver`.
+    #[test]
+    fn the_final_score_includes_a_bonus_added_on_enter() {
+        use bevy::state::app::StatesPlugin;
+
+        fn bonus(mut data: ResMut<GameData>) {
+            data.score += 500;
+        }
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .init_state::<GameState>()
+            .insert_resource(GameData {
+                score: 100,
+                ..default()
+            })
+            .insert_resource(FrameRuntime::new(0, None))
+            // The frame's system runs before the game's bonus, the order
+            // that would make an `OnEnter` read too early.
+            .add_systems(OnEnter(GameState::GameOver), (on_game_over, bonus).chain())
+            .add_systems(Update, finish_pending_run);
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::GameOver);
+        app.update();
+        app.update();
+        let runtime = app.world().resource::<FrameRuntime>();
+        assert_eq!(runtime.final_score, Some(600));
+        assert_eq!(runtime.best, 600);
+    }
+
+    #[test]
+    fn a_run_is_finished_once() {
+        let mut world = World::new();
+        world.insert_resource(GameData::default());
+        world.insert_resource(FrameRuntime::new(0, None));
+        world.run_system_once(on_game_over).unwrap();
+        world.run_system_once(finish_pending_run).unwrap();
+        world.resource_mut::<GameData>().score = 999;
+        world.run_system_once(finish_pending_run).unwrap();
+        assert_eq!(world.resource::<FrameRuntime>().final_score, Some(0));
     }
 
     #[test]
