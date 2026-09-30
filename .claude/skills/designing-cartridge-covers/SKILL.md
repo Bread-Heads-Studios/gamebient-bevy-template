@@ -1,6 +1,6 @@
 ---
 name: designing-cartridge-covers
-description: Use when a Gamebient game needs its box cover (assets/cartridge.png) made or redone, when tools/cartridge-cover.svg still says PLACEHOLDER, when a cover looks like another game's cover, when capturing gameplay screenshots via the autopilot harness, or when customizing src/game/autopilot.rs for a new game
+description: Use when a Gamebient game needs its box cover (assets/cartridge.png) made or redone, when it needs its cabinet marquee or bezel art (assets/marquee.png, assets/bezel.png), when tools/cartridge-cover.svg, tools/marquee.svg or tools/bezel.svg still says PLACEHOLDER, when a cover looks like another game's cover, when a cover's gameplay panel is the wrong shape after the game changed aspect ratio, when capturing gameplay screenshots via the autopilot harness, or when customizing src/game/autopilot.rs for a new game
 ---
 
 # Designing Cartridge Covers
@@ -16,7 +16,8 @@ the game's own tone.** Two covers from this studio should never share a
 skeleton.
 
 Supporting files: [fonts.md](fonts.md) (what renders under rsvg on macOS),
-[autopilot.md](autopilot.md) (customizing the capture harness).
+[autopilot.md](autopilot.md) (customizing the capture harness),
+[frame-art.md](frame-art.md) (the cabinet marquee and bezel).
 
 ## Process
 
@@ -74,6 +75,17 @@ A cover designed while the game was 16:9 has a 16:9 `<image>` (for example
 `width="960" height="540"`). After the game changes ratio, re-capture
 (`./make-cartridge.sh`), set the `<image>` to the new ratio, and reshape
 the clip so it still frames the action.
+
+## Marquee and bezel
+
+Cabinets draw a marquee above the game (vertical cabinets) and a bezel
+behind it (all cabinets). Both come from the finished cover:
+`tools/marquee.svg` (1080x360) takes the cover's title treatment, and
+`tools/bezel.svg` (1920x1920) takes its palette and motifs as quiet
+texture. `tools/frame-art.sh` renders both into `assets/` and refuses a
+bezel with detail in its central 1080x1080 or with high contrast. The
+frame dims the art at runtime, so it is drawn at full brightness. Follow
+[frame-art.md](frame-art.md).
 
 ## Common mistakes
 

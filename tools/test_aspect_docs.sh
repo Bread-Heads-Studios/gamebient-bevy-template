@@ -48,6 +48,20 @@ present "360 x 480" tools/cartridge-cover.svg
 present "Gameplay panel by ratio" "$SKILLS/designing-cartridge-covers/SKILL.md"
 present "x 204, y 424, 360 x 480" "$SKILLS/designing-cartridge-covers/SKILL.md"
 
+# Skill: marquee and bezel art.
+FRAME_ART="$SKILLS/designing-cartridge-covers/frame-art.md"
+present "marquee" "$SKILLS/designing-cartridge-covers/SKILL.md"
+present "[frame-art.md](frame-art.md)" "$SKILLS/designing-cartridge-covers/SKILL.md"
+present "tools/frame-art.sh" "$FRAME_ART"
+present "1080x360" "$FRAME_ART"
+present "1920x1920" "$FRAME_ART"
+present "central 1080x1080" "$FRAME_ART"
+present "x0.35" "$FRAME_ART"
+present "x0.20" "$FRAME_ART"
+present "x0.6" "$FRAME_ART"
+present "full brightness" "$FRAME_ART"
+present "Impact" "$FRAME_ART"
+
 # --- end of checks ---
 [ "$fail" -eq 0 ] || exit 1
 echo "test_aspect_docs: OK"
