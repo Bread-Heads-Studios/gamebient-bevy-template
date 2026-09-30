@@ -154,10 +154,17 @@ The short side is always 720, and `cargo test` fails on any other size.
   ui_scale, label_width)` does exactly that; every label, popup or key
   pinned to a world position calls it rather than carrying a hand copy.
 - **Presentation only.** No sim system may read `GameViewport`,
-  `FrameInsets` or `UiScale`: the replay verifier has no window.
-  `display::tests::game_code_does_not_read_display_state` greps `src/game/`
-  for it, and `tests/display_shape.rs` records a run under a letterboxed
-  display and verifies it without one.
+  `FrameInsets`, `UiScale` or `Window`: the replay verifier has no window.
+  Two checks guard this. `display::tests::game_code_does_not_read_display_state`
+  scans `src/game/` for the display module's names only (`display::`,
+  `GameViewport`, `FrameInsets`, `FrameCamera`); it does not look for
+  `UiScale` or `Window`, it skips lines that start with `//`, and it skips
+  any line containing `allow-display`. A sim read of `UiScale` or `Window`
+  is caught at run time instead: `tests/display_shape.rs` and
+  `tests/windowed_shape.rs` record a run under a letterboxed display and
+  require it to equal the bare run. The scanned directory is the constant
+  `SIM_SOURCE_DIR` in that test; a game with a flat `src/` layout points it
+  at the directory holding its sim files, never at `src/` itself.
 - **The `allow-display` marker.** The grep walks `src/game/` only. Code in
   `src/ui/`, `src/assets/` and `src/main.rs` may call into `display` freely
   and needs no marker. Presentation code that lives under `src/game/` (a

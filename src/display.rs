@@ -588,7 +588,13 @@ mod tests {
     }
 
     fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        for entry in std::fs::read_dir(dir).unwrap() {
+        let entries = std::fs::read_dir(dir).unwrap_or_else(|e| {
+            panic!(
+                "cannot read {}: {e}; set SIM_SOURCE_DIR to the directory that holds this game's sim files",
+                dir.display()
+            )
+        });
+        for entry in entries {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 rust_files(&path, out);
@@ -598,6 +604,12 @@ mod tests {
         }
     }
 
+    /// Directory, relative to the crate root, whose `.rs` files must not
+    /// read display state. Games with a flat `src/` layout (no `src/game/`)
+    /// point this at the directory that holds their sim files, never at
+    /// `src/` itself, which contains this file.
+    const SIM_SOURCE_DIR: &str = "src/game";
+
     /// The verifier has no window, so a sim system that reads the viewport
     /// forks on the display the run was played on. Comments are skipped; a
     /// dev harness or presentation system under `src/game/` that needs the
@@ -606,10 +618,8 @@ mod tests {
     fn game_code_does_not_read_display_state() {
         let needles = ["GameViewport", "FrameInsets", "FrameCamera", "display::"];
         let mut files = Vec::new();
-        rust_files(
-            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/game")),
-            &mut files,
-        );
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(SIM_SOURCE_DIR);
+        rust_files(&dir, &mut files);
         let mut hits = Vec::new();
         for file in files {
             let text = std::fs::read_to_string(&file).unwrap();
