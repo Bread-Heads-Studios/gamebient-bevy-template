@@ -401,7 +401,10 @@ together (`src/lib/cabinetFrame/` in the website repo).
   for example `pub use super::run::RunStats as GameData;`. The driver's tests
   build and change the score through two helpers, `data_with_score` and
   `add_score` in `src/frame/driver.rs`; a game whose type has no public
-  numeric `score` field adapts those two functions only.
+  numeric `score` field adapts those two functions only. A game whose scored
+  ending is a state other than `GameOver` maps it to `FramePhase::GameOver` in
+  its copy of `phase_for`, and the frame then finishes the run on entering it
+  (Hunted's `Victory` is the one case).
 - **Flat layouts.** A game with no `src/game/` (its sim files sit in
   `src/`) declares the copied modules in `src/lib.rs` and puts
   `pub use crate::{replay, scoring, sim, states};` in `src/game.rs`, so

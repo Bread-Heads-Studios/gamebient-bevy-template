@@ -75,7 +75,6 @@ impl Plugin for FramePlugin {
     #[cfg(not(target_arch = "wasm32"))]
     fn build(&self, app: &mut App) {
         use crate::display::FrameInsets;
-        use crate::game::states::GameState;
 
         // `HostBridgePlugin` registers it too; `add_message` is idempotent.
         // Registered here so the frame does not depend on plugin order.
@@ -100,12 +99,12 @@ impl Plugin for FramePlugin {
                 )
                     .chain(),
             )
-            .add_systems(OnEnter(GameState::GameOver), driver::on_game_over)
             .add_systems(
                 Update,
                 (
                     camera::skip_redundant_writeback,
                     driver::apply_layout,
+                    driver::watch_game_over,
                     driver::finish_pending_run,
                     driver::step_frame,
                     bezel::layout_bezel,
