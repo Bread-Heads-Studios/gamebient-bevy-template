@@ -17,11 +17,17 @@ use crate::frame::layout::{FrameLayout, PxRect, frame_layout};
 use crate::game::scoring::{GameData, HIGHER_SCORE_IS_BETTER, LeaderboardScore};
 use crate::game::states::{GameState, Paused};
 
-/// True when `score` is a record over `best` for the given score order. The
+/// True when `score` is a record over `best` for the given score order
+/// (0 is "no best yet" in both). The
 /// order is `game::scoring::HIGHER_SCORE_IS_BETTER`, the game's own setting;
 /// this file defines none, so a template sync cannot reset it.
 fn is_record(higher_is_better: bool, best: u64, score: u64) -> bool {
-    higher_is_better && score > best
+    if higher_is_better {
+        score > best
+    } else {
+        // 0 means "no best yet", and a 0 score is never a record.
+        score > 0 && (best == 0 || score < best)
+    }
 }
 
 /// The frame's view of each game state. Only `Playing` and `GameOver` are
@@ -77,11 +83,8 @@ impl FrameRuntime {
     /// Reads the best score from its file, if there is one.
     pub fn from_env() -> Self {
         let path = best_score_path_from_env();
-        if !HIGHER_SCORE_IS_BETTER {
-            return Self::new(0, None, false);
-        }
         let best = path.as_deref().map_or(0, load_best);
-        Self::new(best, path, true)
+        Self::new(best, path, HIGHER_SCORE_IS_BETTER)
     }
 
     /// Records the end of a run. A score above the best is a new high score
@@ -126,6 +129,7 @@ impl FrameRuntime {
         marquee_caption(
             self.phase,
             self.levels.celebration.is_some(),
+            self.higher_is_better,
             best.as_deref(),
             final_score.as_deref(),
         )
@@ -298,11 +302,17 @@ mod tests {
     }
 
     #[test]
-    fn a_lower_is_better_game_never_records() {
+    fn is_record_follows_the_score_order() {
         assert!(is_record(true, 10, 11));
         assert!(!is_record(true, 10, 10));
-        assert!(!is_record(false, 10, 5));
-        assert!(!is_record(false, 0, 5));
+        assert!(is_record(true, 0, 1));
+        assert!(!is_record(true, 0, 0));
+        assert!(is_record(false, 10, 5));
+        assert!(!is_record(false, 10, 10));
+        assert!(!is_record(false, 10, 11));
+        assert!(is_record(false, 0, 5), "no best yet: any time is a record");
+        assert!(!is_record(false, 0, 0));
+        assert!(!is_record(false, 10, 0), "a 0 score is never a record");
     }
 
     /// A game's own `OnEnter(GameOver)` system may add a bonus. `OnEnter`
@@ -428,21 +438,22 @@ mod tests {
     }
 
     #[test]
-    fn a_lower_is_better_runtime_shows_no_score_and_never_writes() {
+    fn a_lower_is_better_runtime_records_lower_scores_and_writes_the_file() {
         let dir = std::env::temp_dir().join(format!("gx-frame-lower-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("best-score");
-        let mut rt = FrameRuntime::new(100, Some(path.clone()), false);
+        let mut rt = FrameRuntime::new(0, Some(path.clone()), false);
         rt.advance(0.0, FramePhase::Attract, false);
-        assert_eq!(rt.caption(), None, "no score to beat");
-        assert_eq!(
-            rt.finish_run(50),
-            FrameEvent::GameOver,
-            "lower is not a record"
-        );
-        assert_eq!(rt.finish_run(500), FrameEvent::GameOver);
-        assert_eq!(rt.best, 100);
-        assert!(!path.exists(), "the best-score file is never written");
+        assert_eq!(rt.caption(), None, "no numbers in attract");
+        assert_eq!(rt.finish_run(500), FrameEvent::NewHighScore, "first run");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "500\n");
+        assert_eq!(rt.finish_run(600), FrameEvent::GameOver, "higher is worse");
+        assert_eq!(rt.best, 500);
+        assert_eq!(rt.finish_run(50), FrameEvent::NewHighScore, "lower wins");
+        assert_eq!(rt.best, 50);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "50\n");
+        rt.advance(0.1, FramePhase::GameOver, false);
+        assert_eq!(rt.caption().as_deref(), Some("NEW BEST"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

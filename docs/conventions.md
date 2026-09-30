@@ -316,6 +316,11 @@ together (`src/lib/cabinetFrame/` in the website repo).
   strength. The frame multiplies the bezel by 0.35 (0.20 during play) and
   its saturation by 0.6, and the marquee by 1.0 (0.45 during play), fading
   over one second. The bezel never exceeds 0.35.
+- **Lower-is-better games** (`HIGHER_SCORE_IS_BETTER = false`). The best is
+  still kept in the best-score file, compared with "lower wins" (0 means no
+  best yet; a 0 score is never a record). The marquee shows no numbers, only
+  `NEW BEST` after a record, because a lower-is-better leaderboard value may
+  be an encoding rather than a readable time.
 - **Highlight.** For a boss, a level clear or a big combo, write one message:
 
   ```rust
