@@ -65,6 +65,9 @@ jobs:
         working-directory: tools
         run: python3 -m unittest test_cut_clips -v
 
+      - name: Game size tests
+        run: tools/test_game_size.sh
+
   rollout:
     name: rollout-replay.sh
     runs-on: ubuntu-latest
