@@ -47,7 +47,10 @@ pub fn mark_seen(mut seen: ResMut<SeenHowToPlay>) {
 /// entities — spawn each one from the same meshes/materials gameplay uses so
 /// the key always matches what players see, give it `HowToPlayScreen + Spin`,
 /// and pair it with a label. Grid positions sit in front of the Startup
-/// camera at (0, 0, 20) looking at the origin.
+/// camera at (0, 0, 20) looking at the origin. The view there is 16.6 world
+/// units tall at every ratio; its width follows the game's ratio, and a
+/// 170 px label is 3.9 units wide, so keep item centres within
+/// |x| <= 9.0 at 4:3, 6.0 at 1:1 and 4.0 at 3:4.
 pub fn spawn_how_to_play(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -158,19 +161,22 @@ pub fn position_labels(
     let Ok((camera, cam_tf)) = camera_q.single() else {
         return;
     };
+    let view_min = camera
+        .logical_viewport_rect()
+        .map_or(Vec2::ZERO, |rect| rect.min);
     for (label, mut node) in &mut labels {
         let Ok(item_tf) = items.get(label.target) else {
             continue;
         };
         // Anchor just below the item so the label clears the mesh.
         let anchor = item_tf.translation() - Vec3::Y * 1.6;
-        let Ok(viewport) = camera.world_to_viewport(cam_tf, anchor) else {
+        let Ok(item_px) = camera.world_to_viewport(cam_tf, anchor) else {
             continue;
         };
-        // Node Px values get multiplied by UiScale at layout time; divide so
-        // the node lands on the viewport-pixel position we computed.
-        node.left = Val::Px(viewport.x / ui_scale.0 - LABEL_WIDTH / 2.0);
-        node.top = Val::Px(viewport.y / ui_scale.0);
+        // Window pixels to UI pixels inside the letterboxed viewport.
+        let origin = crate::display::label_origin(item_px, view_min, ui_scale.0, LABEL_WIDTH);
+        node.left = Val::Px(origin.x);
+        node.top = Val::Px(origin.y);
     }
 }
 

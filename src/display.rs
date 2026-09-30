@@ -114,6 +114,20 @@ pub fn letterbox(window: UVec2, game: UVec2, reserve_top: u32, gap: u32) -> Game
     }
 }
 
+/// Top-left corner, in UI pixels, that centres a label `label_width` UI
+/// pixels wide under `item_px`.
+///
+/// `item_px` is what `Camera::world_to_viewport` returns: logical window
+/// pixels, which already include the letterboxed viewport's offset.
+/// `view_min` is `camera.logical_viewport_rect().min`. UI nodes are placed
+/// relative to the viewport's corner, and their Px values are multiplied by
+/// `UiScale` at layout time, so take the offset off and divide. Every screen
+/// that pins UI to a world position goes through this.
+pub fn label_origin(item_px: Vec2, view_min: Vec2, ui_scale: f32, label_width: f32) -> Vec2 {
+    let local = (item_px - view_min) / ui_scale;
+    Vec2::new(local.x - label_width / 2.0, local.y)
+}
+
 /// Marker for cameras that draw the cabinet frame and must NOT be letterboxed.
 #[derive(Component)]
 pub struct FrameCamera;
@@ -552,6 +566,25 @@ mod tests {
             viewport_for(UVec2::new(1080, 1920), insets, true),
             letterbox(UVec2::new(1080, 1920), GAME, 360, 8)
         );
+    }
+
+    #[test]
+    fn labels_are_centred_under_the_item_inside_the_viewport() {
+        // No letterbox, UI scale 1: the label's left edge is half its width
+        // left of the item.
+        assert_eq!(
+            label_origin(Vec2::new(480.0, 400.0), Vec2::ZERO, 1.0, 170.0),
+            Vec2::new(480.0 - 85.0, 400.0)
+        );
+        // A 4:3 game on a portrait 1080x1920 panel: viewport 1080x810 at
+        // y = 555, UI scale 810 / 720. An item at the viewport's centre
+        // (window 540, 960) is at UI (480, 360).
+        let origin = label_origin(Vec2::new(540.0, 960.0), Vec2::new(0.0, 555.0), 1.125, 170.0);
+        assert!((origin.x - (480.0 - 85.0)).abs() < 1e-3);
+        assert!((origin.y - 360.0).abs() < 1e-3);
+        // The width is the caller's: a 60 px score popup over the same item.
+        let popup = label_origin(Vec2::new(540.0, 960.0), Vec2::new(0.0, 555.0), 1.125, 60.0);
+        assert!((popup.x - (480.0 - 30.0)).abs() < 1e-3);
     }
 
     fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
