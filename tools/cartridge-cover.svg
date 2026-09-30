@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   PLACEHOLDER cartridge cover for Gamebient Game. Rendered by make-cartridge.sh
-  via rsvg-convert; expects the gameplay screenshot at ./shot.png (16:9).
+  via rsvg-convert; expects the gameplay screenshot at ./shot.png, captured
+  at the game's own ratio (tools/game-size.sh).
 
   This layout is deliberately plain so it is obvious it has not been designed
   yet. Before shipping, redesign it in the game's own voice: typeface, words,
@@ -9,6 +10,16 @@
   Only these elements are fixed for the shelf: a "Bread Heads Studios" credit,
   a "ColecoVision GX" credit, the player count, and a real-gameplay panel with
   a "real gameplay" tag. See the `designing-cartridge-covers` skill.
+
+  The gameplay panel below is the 4:3 slot, for the template's 960x720. The
+  slot for each ratio, all 480 tall with the top edge at y 424:
+      4:3   x 64    y 424   640 x 480   tag at translate(136,904)
+      1:1   x 144   y 424   480 x 480   tag at translate(216,904)
+      3:4   x 204   y 424   360 x 480   tag at translate(276,904)
+  When src/display.rs changes ratio, change the clip rect, the image, the
+  outline rect and the tag together, and the backing rect to the slot grown
+  by 8 on every side. tools/test_cover_slot.sh checks the image against
+  tools/game-size.sh.
 
   rsvg-convert uses system fonts. On macOS, Impact, DIN Condensed, plain
   Courier, Hoefler, Big Caslon and Superclarendon silently fall back to
@@ -22,7 +33,7 @@
       <stop offset="1" stop-color="#05070f"/>
     </linearGradient>
     <clipPath id="panelClip">
-      <rect x="48" y="430" width="672" height="378" rx="12"/>
+      <rect x="64" y="424" width="640" height="480" rx="12"/>
     </clipPath>
   </defs>
 
@@ -43,14 +54,15 @@
   <text x="384" y="359" text-anchor="middle" font-family="Menlo, monospace" font-size="16"
         fill="#ffd94d">PLACEHOLDER COVER — DESIGN ME</text>
 
-  <!-- real gameplay panel -->
-  <rect x="40" y="422" width="688" height="394" rx="16" fill="#0a0f1c"/>
+  <!-- real gameplay panel (4:3 slot; see the table in the header comment) -->
+  <rect x="56" y="416" width="656" height="496" rx="16" fill="#0a0f1c"/>
   <g clip-path="url(#panelClip)">
-    <!-- 16:9 shot letterboxed into the panel; tune x/y/width/height to frame the action -->
-    <image xlink:href="shot.png" x="48" y="430" width="672" height="378"/>
+    <!-- the shot at the game's own ratio; to zoom on the action, grow width and
+         height together (keep width:height equal to the game's) and move x/y -->
+    <image xlink:href="shot.png" x="64" y="424" width="640" height="480"/>
   </g>
-  <rect x="48" y="430" width="672" height="378" rx="12" fill="none" stroke="#7fb4d8" stroke-width="3"/>
-  <g transform="translate(120,808)">
+  <rect x="64" y="424" width="640" height="480" rx="12" fill="none" stroke="#7fb4d8" stroke-width="3"/>
+  <g transform="translate(136,904)">
     <rect x="-72" y="-14" width="144" height="28" rx="6" fill="#16213a" stroke="#7fb4d8" stroke-width="2"/>
     <text x="0" y="6" text-anchor="middle" font-family="Futura, 'Helvetica Neue', sans-serif"
           font-weight="bold" font-size="14" letter-spacing="2" fill="#bfe3ff">REAL GAMEPLAY</text>

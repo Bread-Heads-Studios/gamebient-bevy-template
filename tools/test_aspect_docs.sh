@@ -41,6 +41,13 @@ absent "16:9 from build/record/clips/" "$SKILLS/recording-game-footage/tools/ree
 present "force_original_aspect_ratio=decrease" "$SKILLS/recording-game-footage/tools/reel.py"
 present "810x1080" "$SKILLS/recording-game-footage/SKILL.md"
 
+# Cover: the screenshot slot follows the game's ratio.
+absent "(16:9)" tools/cartridge-cover.svg
+absent "16:9 shot" tools/cartridge-cover.svg
+present "360 x 480" tools/cartridge-cover.svg
+present "Gameplay panel by ratio" "$SKILLS/designing-cartridge-covers/SKILL.md"
+present "x 204, y 424, 360 x 480" "$SKILLS/designing-cartridge-covers/SKILL.md"
+
 # --- end of checks ---
 [ "$fail" -eq 0 ] || exit 1
 echo "test_aspect_docs: OK"
