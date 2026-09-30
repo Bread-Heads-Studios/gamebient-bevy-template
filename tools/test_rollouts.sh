@@ -15,6 +15,7 @@
 #       when that checkout is not beside this template);
 #   (f) frame-accept.sh --check-copies passes on (d) and (e) and fails after a
 #       comment is appended to a copied src/frame/layout.rs;
+#   (g) rollout-record.sh inserts `record` after a capture-aware autopilot line;
 #   (h) frame-accept.sh --shots passes synthetic captures and fails a bad gap.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -144,6 +145,13 @@ git -C "$T/d" checkout -q src/frame/driver.rs
 perl -0pi -e 's/^#\[cfg\(test\)\]/\/\/ drift\n#[cfg(test)]/m' "$T/d/src/frame/driver.rs"
 if "$HERE/tools/frame-accept.sh" --check-copies "$T/d" > /dev/null 2>&1; then echo "FAIL f: an edit above driver.rs's test module was allowed"; exit 1; fi
 git -C "$T/d" checkout -q src/frame/driver.rs
+
+# (g)
+mkdir -p "$T/g/src"
+printf '[package]\nname = "scratch-game"\nversion = "0.1.0"\n\n[features]\ncapture = []\nautopilot = ["capture"]\n' > "$T/g/Cargo.toml"
+"$HERE/tools/rollout-record.sh" "$T/g" > "$T/g.out" 2>&1 || { echo "FAIL g: rollout-record.sh exited non-zero"; cat "$T/g.out"; exit 1; }
+grep -q '^record = \["autopilot"\]' "$T/g/Cargo.toml" || { echo "FAIL g: no record feature after a capture-aware autopilot line"; cat "$T/g/Cargo.toml"; exit 1; }
+grep -q "HAND EDIT: add 'record = " "$T/g.out" && { echo "FAIL g: rollout-record asked for a hand edit on the record feature"; exit 1; }
 
 # (h)
 if python3 -c 'import PIL' 2>/dev/null; then
