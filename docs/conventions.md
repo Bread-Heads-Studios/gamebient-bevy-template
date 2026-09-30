@@ -318,6 +318,31 @@ together (`src/lib/cabinetFrame/` in the website repo).
   unless `GX_FRAME=on`, so captures never include it.
   `GX_WINDOW_SIZE=1080x1920` (see "Screen shape") opens a window of that
   size for checking a cabinet layout on a desk.
+- **Camera queries exclude `FrameCamera`.** The frame adds a second
+  `Camera2d`. Any game system that queries cameras without excluding it
+  matches two cameras: `.single()` and `Single<..>` stop matching, and a loop
+  over `With<Camera2d>` (a screen shake) would move the bezel during play.
+  Every camera query in a game says `Without<FrameCamera>`, even one already
+  narrowed by `With<Camera3d>`:
+
+  ```rust
+  // before
+  fn shake(mut cam: Single<&mut Transform, With<Camera2d>>) { .. }
+  fn labels(cams: Query<(&Camera, &GlobalTransform)>) { .. }
+  // after
+  use crate::display::FrameCamera;
+  fn shake(mut cam: Single<&mut Transform, (With<Camera2d>, Without<FrameCamera>)>) { .. }
+  fn labels(cams: Query<(&Camera, &GlobalTransform), Without<FrameCamera>>) { .. }
+  ```
+
+  Under `src/game/` the line also needs an `// allow-display: <reason>`
+  marker. The test `frame::tests::camera_queries_exclude_the_frame_camera`
+  scans `src/` (except `src/frame/` and `src/display.rs`) and fails naming
+  the file and line; a query that must see every camera carries
+  `// frame-camera-ok: <reason>`. Known fleet cases to fix when rolling the
+  frame out: beat-bender `src/ui/fighters.rs`, Gravestone Gauntlet
+  `src/game/effects.rs` and `src/ui/how_to_play.rs`, pizza-pinball
+  `src/ui/how_to_play.rs`.
 - **A new `GameState` variant** is treated as attract by the frame unless
   you add it to `frame::driver::phase_for`.
 

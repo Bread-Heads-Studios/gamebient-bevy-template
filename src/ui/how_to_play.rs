@@ -153,7 +153,12 @@ pub fn spin_items(time: Res<Time>, mut query: Query<&mut Transform, With<Spin>>)
 /// frame after state entry; this is invisible only because HowToPlay is
 /// always entered through a near-black ScreenFade. Keep it that way.
 pub fn position_labels(
-    camera_q: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    // The cabinet frame adds a second camera; `Without<FrameCamera>` keeps
+    // this query on the game camera. See "Cabinet frame" in docs/conventions.md.
+    camera_q: Query<
+        (&Camera, &GlobalTransform),
+        (With<Camera3d>, Without<crate::display::FrameCamera>),
+    >,
     ui_scale: Res<UiScale>,
     items: Query<&GlobalTransform, (With<Spin>, Without<Camera3d>)>,
     mut labels: Query<(&ItemLabel, &mut Node)>,

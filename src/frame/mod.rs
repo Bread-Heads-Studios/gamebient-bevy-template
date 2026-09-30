@@ -58,6 +58,9 @@ impl Plugin for FramePlugin {
         use crate::display::FrameInsets;
         use crate::game::states::GameState;
 
+        // `HostBridgePlugin` registers it too; `add_message` is idempotent.
+        // Registered here so the frame does not depend on plugin order.
+        app.add_message::<Highlight>();
         app.init_resource::<FrameInsets>();
         let gx_frame = std::env::var("GX_FRAME").ok();
         if !frame_enabled(gx_frame.as_deref(), cfg!(feature = "autopilot")) {
@@ -124,6 +127,81 @@ mod tests {
         assert!(!frame_enabled(None, true));
         assert!(frame_enabled(Some("on"), true));
         assert!(frame_enabled(Some("ON"), true));
+    }
+
+    /// Every camera query outside `src/frame/` and `src/display.rs` must
+    /// exclude the frame camera, or a second `Camera2d` breaks `.single()`
+    /// and moves the bezel along with the game camera.
+    ///
+    /// The scan is literal, not a parser. A line is a camera query when it
+    /// contains one of the camera patterns below and a `Query<`, `Single<` or
+    /// `Populated<` appears on it or on one of the three lines before it.
+    /// It passes when `FrameCamera` appears on that line or the two after,
+    /// or when the line has `// frame-camera-ok: <reason>`. Limits: it
+    /// cannot see a query type split over more than four lines, a camera
+    /// type behind an alias, or a query built in a macro; comment lines are
+    /// skipped.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn camera_queries_exclude_the_frame_camera() {
+        use std::path::Path;
+
+        const PATTERNS: [&str; 7] = [
+            "With<Camera2d>",
+            "With<Camera3d>",
+            "With<Camera>",
+            "&Camera,",
+            "&Camera)",
+            "&mut Camera,",
+            "&mut Camera)",
+        ];
+        const KEYWORDS: [&str; 3] = ["Query<", "Single<", "Populated<"];
+
+        fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        walk(&src, &mut files);
+        let mut offenders = Vec::new();
+        for path in files {
+            let rel = path.strip_prefix(&src).unwrap();
+            if rel.starts_with("frame") || rel == Path::new("display.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let lines: Vec<&str> = text.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if line.trim_start().starts_with("//") || line.contains("frame-camera-ok:") {
+                    continue;
+                }
+                if !PATTERNS.iter().any(|p| line.contains(p)) {
+                    continue;
+                }
+                let start = i.saturating_sub(3);
+                let in_query = lines[start..=i]
+                    .iter()
+                    .any(|l| KEYWORDS.iter().any(|k| l.contains(k)));
+                let end = (i + 2).min(lines.len() - 1);
+                let excluded = lines[i..=end].iter().any(|l| l.contains("FrameCamera"));
+                if in_query && !excluded {
+                    offenders.push(format!("{}:{}: {}", rel.display(), i + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "camera queries that do not exclude FrameCamera:\n{}",
+            offenders.join("\n")
+        );
     }
 
     /// The verifier's app. Nothing of the frame may be in it.
