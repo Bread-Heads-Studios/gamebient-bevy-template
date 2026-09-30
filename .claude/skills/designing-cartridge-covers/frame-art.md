@@ -80,9 +80,11 @@ Marquee:
 1. **It is the title.** Take the cover's title treatment: same face, same
    colours, same stroke-below-fill-above stack. Make it as large as fits
    inside x 60 to 1020.
-2. **Rows 288 to 360 hold no lettering.** The frame writes the score line
-   over the marquee and needs a quiet strip. `tools/frame-art.sh` does not
-   check this: it checks the size and the bezel only, so look at the render.
+2. **Rows 288 to 360 are dark and low-contrast.** The frame writes the
+   score line over the marquee and needs a quiet strip: mean luma at most
+   60 there, and no line brighter than 120. No lettering either.
+   `tools/frame-art.sh` does not check this: it checks the size and the
+   bezel only, so look at the render.
 3. **It must read at x0.45.** Light lettering on a darker field. Check the
    dimmed preview below.
 4. **At most two drawings from the cover**, at the sides, behind the title.
@@ -160,5 +162,7 @@ is dropped, `word-spacing` is ignored, and text never wraps.
 | Title in the bezel | It belongs on the marquee. Horizontal cabinets have a physical marquee. |
 | Score, "INSERT COIN" or "PRESS START" drawn into the marquee | The frame writes live text. The art is still. |
 | Lettering in the marquee's bottom 72 rows | Move it up; that strip is for the score line. |
+| Bright art in the marquee's bottom 72 rows | Rows 288 to 360 stay at mean luma 60 or less, no line above 120, or the score is unreadable. |
+| The cover's gameplay shot taken at an arena edge | Take it away from the arena's edge, with the playfield's middle in frame. |
 | "PLACEHOLDER MARQUEE — DESIGN ME" still in the render | Delete the notice block. |
 | Editing `assets/bezel.png` in an image editor | Edit `tools/bezel.svg` and re-render, or the next render discards the change. |
