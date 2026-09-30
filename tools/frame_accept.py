@@ -388,6 +388,11 @@ def check_copies(game_arg):
                     return lines[:at]
 
                 a, b = head(troot / f), head(groot / f)
+                # Hunted's scored ending is `Victory`, so its `phase_for` carries
+                # one extra arm. That single line is the fleet's only sanctioned
+                # edit above the test module (plan 8, Part D, Hunted).
+                if lib_name(game) == "hunted":
+                    b = [l for l in b if "GameState::Victory => FramePhase::GameOver" not in l]
                 if a != b:
                     problems.append(f"{label}: differs above `#[cfg(test)]`\n{hunk(label, a, b)}")
             elif (troot / f).read_bytes() != (groot / f).read_bytes():
