@@ -3,5 +3,7 @@
 //! frame".
 
 pub mod highlight;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod layout;
 
 pub use highlight::Highlight;
