@@ -18,6 +18,9 @@ fn main() {
             game::GamePlugin::default(),
             assets::AssetsPlugin,
             ui::UiPlugin,
+            // Bezel and marquee around the letterboxed game. Native only;
+            // GX_FRAME=off disables it. Never add this to GamePlugin.
+            gamebient_game::frame::FramePlugin,
         ))
         .run();
 }
