@@ -16,7 +16,16 @@
 #   (f) frame-accept.sh --check-copies passes on (d) and (e) and fails after a
 #       comment is appended to a copied src/frame/layout.rs;
 #   (g) rollout-record.sh inserts `record` after a capture-aware autopilot line;
-#   (h) frame-accept.sh --shots passes synthetic captures and fails a bad gap.
+#   (h) frame-accept.sh --shots passes synthetic captures, fails a bad gap, and
+#       says so when --frame off leaves no bars;
+#   (i) --check-copies passes on a scratch clone of games/gulper (a 6-letter
+#       crate name) after rollout-aspect.sh and cargo fmt --all, and fails on a
+#       stray tools/test_*.sh;
+#   (j) rollout-aspect.sh asks a flat layout (games/Hunted) for sim-sources.txt
+#       and a crate with no src/lib.rs (games/moleman-racing) for a lib target;
+#   (k) the camera-query scan in rollout-aspect.sh flags a bare camera query
+#       followed by an unrelated With<> query, and not a With<> inside its own.
+# (e), (i) and (j) skip when the game checkouts are not beside the template.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -186,11 +195,59 @@ PY
     echo "FAIL h: a lit gap passed"; exit 1
   fi
   grep -q 'gap not black' "$T/h2.out" || { echo "FAIL h: the lit gap was not named"; cat "$T/h2.out"; exit 1; }
+  mkdir -p "$T/h/full"
+  python3 - "$T/h/full" <<'PY'
+import sys
+from PIL import Image
+for n in ("02-title.png", "05-mid-play.png", "08-pause.png"):
+    Image.new("RGB", (1440, 1080), (60, 60, 60)).save(f"{sys.argv[1]}/{n}")
+PY
+  "$HERE/tools/frame-accept.sh" --shots "$T/h/full" --window 1440x1080 --ratio 4:3 --frame off > "$T/h4.out" 2>&1 \
+    || { echo "FAIL h: --frame off at the game's own aspect failed"; cat "$T/h4.out"; exit 1; }
+  grep -q 'no bars at this window; nothing to check' "$T/h4.out" || { echo "FAIL h: no 'no bars' message"; cat "$T/h4.out"; exit 1; }
   if "$HERE/tools/frame-accept.sh" --shots "$T/h/ok" --window 1920x1080 --ratio 4:3 --frame on > "$T/h3.out" 2>&1; then
     echo "FAIL h: captures passed under the wrong ratio"; exit 1
   fi
 else
   echo "test_rollouts: SKIP h (no Pillow)"
 fi
+
+# (i)
+GULPER_SRC="${GULPER_SRC:-$HERE/../../games/gulper}"
+if [ -d "$GULPER_SRC/.git" ]; then
+  git clone -q "$GULPER_SRC" "$T/i"
+  "$HERE/tools/rollout-aspect.sh" "$T/i" 4:3 > "$T/i.out" 2>&1 || { echo "FAIL i: rollout-aspect.sh exited non-zero"; cat "$T/i.out"; exit 1; }
+  (cd "$T/i" && cargo fmt --all)
+  "$HERE/tools/frame-accept.sh" --check-copies "$T/i" > "$T/i2.out" 2>&1 || { echo "FAIL i: --check-copies failed on gulper after rollout-aspect.sh and cargo fmt"; cat "$T/i2.out"; exit 1; }
+  echo '#!/bin/sh' > "$T/i/tools/test_stray.sh"
+  if "$HERE/tools/frame-accept.sh" --check-copies "$T/i" > "$T/i3.out" 2>&1; then echo "FAIL i: a stray tools/test_*.sh was allowed"; exit 1; fi
+else
+  echo "test_rollouts: SKIP i (no $GULPER_SRC)"
+fi
+
+# (j)
+HUNTED_SRC="${HUNTED_SRC:-$HERE/../../games/Hunted}"
+if [ -d "$HUNTED_SRC/.git" ] && [ ! -f "$HUNTED_SRC/src/game/mod.rs" ]; then
+  git clone -q "$HUNTED_SRC" "$T/j1"
+  "$HERE/tools/rollout-aspect.sh" "$T/j1" 4:3 > "$T/j1.out" 2>&1 || { echo "FAIL j: rollout-aspect.sh failed on the flat layout"; cat "$T/j1.out"; exit 1; }
+  grep -q '^HAND EDIT: sim-sources.txt: list the sim .rs files (one per line)' "$T/j1.out" || { echo "FAIL j: no sim-sources.txt HAND EDIT for a flat layout"; cat "$T/j1.out"; exit 1; }
+else
+  echo "test_rollouts: SKIP j (flat layout: no $HUNTED_SRC)"
+fi
+MOLEMAN_SRC="${MOLEMAN_SRC:-$HERE/../../games/moleman-racing}"
+if [ -d "$MOLEMAN_SRC/.git" ] && [ ! -f "$MOLEMAN_SRC/src/lib.rs" ]; then
+  git clone -q "$MOLEMAN_SRC" "$T/j2"
+  "$HERE/tools/rollout-aspect.sh" "$T/j2" 4:3 > "$T/j2.out" 2>&1 || { echo "FAIL j: rollout-aspect.sh failed without src/lib.rs"; cat "$T/j2.out"; exit 1; }
+  grep -q '^HAND EDIT: src/lib.rs: this crate needs a lib target' "$T/j2.out" || { echo "FAIL j: no lib target HAND EDIT"; cat "$T/j2.out"; exit 1; }
+else
+  echo "test_rollouts: SKIP j (no lib.rs-less $MOLEMAN_SRC)"
+fi
+
+# (k) on the template copy (d), which is committed and clean again.
+printf 'pub fn a(\n    camera_q: Query<(&Camera, &GlobalTransform)>,\n    ui_scale: Res<UiScale>,\n    items: Query<&GlobalTransform, With<Spin>>,\n) {}\npub fn b(\n    c: Query<\n        (&Camera, &GlobalTransform),\n        With<MainCamera>,\n    >,\n    items: Query<&GlobalTransform, With<Spin>>,\n) {}\n' > "$T/d/src/ui/zz.rs"
+git -C "$T/d" checkout -q . && git -C "$T/d" add -A && git -C "$T/d" -c user.name=t -c user.email=t@t commit -qm zz
+"$HERE/tools/rollout-aspect.sh" "$T/d" 1:1 > "$T/k.out" 2>&1 || { echo "FAIL k: rollout-aspect.sh failed"; cat "$T/k.out"; exit 1; }
+grep -q '^HAND EDIT: src/ui/zz.rs:2: camera query' "$T/k.out" || { echo "FAIL k: the bare camera query beside a With<Spin> query was not flagged"; cat "$T/k.out"; exit 1; }
+if grep -q '^HAND EDIT: src/ui/zz.rs:\(7\|8\|9\|10\|11\):' "$T/k.out"; then echo "FAIL k: a With<> inside the camera's own query was flagged"; cat "$T/k.out"; exit 1; fi
 
 echo "test_rollouts: OK"
