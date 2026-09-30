@@ -58,6 +58,8 @@ while IFS= read -r f; do
 done <<< "$files"
 
 echo "Done. Next steps:"
+echo "  0. Pick the game's ratio: set GAME_WIDTH / GAME_HEIGHT in src/display.rs"
+echo "     (960x720 = 4:3, the default; 720x720 = 1:1; 720x960 = 3:4)."
 echo "  1. cargo build         # refresh Cargo.lock with the new package name"
 echo "  2. git add -A && git commit -m 'chore: initialize $NAME from template'"
 echo "  3. Create the GitHub repo $REPO and push."

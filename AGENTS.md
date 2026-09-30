@@ -27,6 +27,12 @@ one-responsibility files.
 - **Curated Bevy features.** `Cargo.toml` sets `default-features = false` and lists
   features explicitly; native-only features are gated to `cfg(not(target_arch = "wasm32"))`.
   Add features deliberately — they affect the wasm bundle size.
+- **One display module.** `src/display.rs` owns the game's size (`GAME_WIDTH` x
+  `GAME_HEIGHT`: 960x720, 720x720 or 720x960), the window (`game_window`), the
+  native letterbox (`GameViewport`, applied to every window camera without
+  `FrameCamera`) and `UiScale` (viewport short side / 720). Never write a
+  resolution anywhere else, never set `UiScale` yourself, and never read display
+  state from sim code. See docs/conventions.md, "Screen shape".
 - **Deterministic sim.** Run state changes only inside `sim::SimSet`
   (`FixedUpdate`, 60 Hz, chained). Sim systems read `TickInput`, draw
   randomness from `GameRng`, and never touch wall-clock or
@@ -138,3 +144,14 @@ These cost real debugging time on the project this template was extracted from:
   falling back to `VERCEL_GIT_COMMIT_SHA`; a build with neither fails on
   purpose (never ships `+unknown`), because the site caches a verifier per
   build id — every release must carry a new one.
+- **`world_to_viewport` includes the letterbox offset.** It returns window
+  pixels; UI nodes are placed relative to the camera viewport. On a desktop
+  window the offset is zero and the bug is invisible; on a cabinet every
+  projected label lands a bar's width off. Subtract
+  `camera.logical_viewport_rect().min` first.
+- **Linux native opens borderless fullscreen**; autopilot and record builds
+  stay windowed so captures are the game's own size. The check is
+  `cfg!(feature = "autopilot")` in `display::game_window`; a game with any
+  other capture feature adds it there (docs/conventions.md, "Capture builds
+  stay windowed"). `GX_WINDOW_SIZE=WxH`
+  forces a window of that size on any native build.

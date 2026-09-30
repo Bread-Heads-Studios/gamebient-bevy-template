@@ -10,6 +10,7 @@ One file per system/feature, grouped by responsibility under three plugins:
 ```
 src/
   main.rs        # window + plugin wiring only
+  display.rs     # DisplayPlugin: game size, native letterbox, UI scale
   game/          # GamePlugin: state machine, resources, gameplay systems
   assets/        # AssetsPlugin: load/create meshes, materials, audio
   ui/            # UiPlugin: menus + HUD
@@ -110,15 +111,94 @@ native-only features (gilrs, wayland, x11) to `cfg(not(target_arch = "wasm32"))`
 Every feature you add grows the wasm bundle, so add deliberately and keep the list
 documented inline.
 
-## Rendering for low-power targets
+## Screen shape and rendering for low-power targets
 
-The window is **pinned**: `fit_canvas_to_parent: false` with a 1280×720
-resolution, so the web backbuffer is 0.92 MP on every display (the Pi
-fill-rate budget); the gamebient-input glue sizes the canvas per
-`devicePixelRatio` and letterboxes it. There is no render-scale constant:
-`with_scale_factor_override` never changes the pixel count. UI is authored
-against `REFERENCE_HEIGHT` (720) and scaled by `update_ui_scale`, so hardcoded
-pixel sizes hold on any display. Vsync is pinned.
+`src/display.rs` is the single source for the game's shape. Set `GAME_WIDTH`
+and `GAME_HEIGHT` there to one sanctioned size; nothing else in the game
+states a resolution.
+
+| Ratio | `GAME_WIDTH` x `GAME_HEIGHT` | Megapixels |
+|---|---|---|
+| 4:3 (template default) | 960 x 720 | 0.69 |
+| 1:1 | 720 x 720 | 0.52 |
+| 3:4 | 720 x 960 | 0.69 |
+
+The short side is always 720, and `cargo test` fails on any other size.
+
+- **The window is pinned.** `display::game_window` builds it through
+  `CanvasPolicy::Pinned`, so `fit_canvas_to_parent` is `false` and the web
+  backbuffer is exactly `GAME_WIDTH` x `GAME_HEIGHT` on every display (the Pi
+  fill-rate budget). The gamebient-input glue sizes the canvas per
+  `devicePixelRatio` and letterboxes it in the page. There is no render-scale
+  constant: `with_scale_factor_override` never changes the pixel count.
+- **Native builds letterbox inside the window.** On Linux the window is
+  borderless fullscreen; on macOS and Windows it opens at the game's size.
+  `DisplayPlugin` computes `GameViewport`, the largest rect of the game's
+  ratio that fits the window, and sets it as `Camera.viewport` on every
+  window camera. The bars show `ClearColor`. On web no camera viewport is
+  set: the canvas is already the game's size.
+- **UI is authored against a short side of 720.** `DisplayPlugin` sets
+  `UiScale` to `ui_scale_for(w, h)` = min(w, h) / 720 of the viewport's
+  logical size, and Bevy lays UI out inside the camera viewport, so
+  hardcoded `Val::Px` and `font_size` values hold on any display. The view
+  is 960 UI pixels wide at 4:3 and 720 at 1:1 and 3:4: size a line of text
+  with `ui::fit::fit_font_size` when it could be wider than that.
+- **A camera of your own.** Any extra camera that renders to the window is
+  letterboxed too. One that must not be (the cabinet frame) carries
+  `display::FrameCamera`. A camera that sets its own viewport carries
+  `FrameCamera` and places itself inside `GameViewport`.
+- **Projecting world positions into UI.** `Camera::world_to_viewport`
+  returns window pixels that include the letterbox offset; UI nodes are
+  relative to the viewport. Subtract `camera.logical_viewport_rect().min`
+  and divide by `UiScale`. `display::label_origin(item_px, view_min,
+  ui_scale, label_width)` does exactly that; every label, popup or key
+  pinned to a world position calls it rather than carrying a hand copy.
+- **Presentation only.** No sim system may read `GameViewport`,
+  `FrameInsets` or `UiScale`: the replay verifier has no window.
+  `display::tests::game_code_does_not_read_display_state` greps `src/game/`
+  for it, and `tests/display_shape.rs` records a run under a letterboxed
+  display and verifies it without one.
+- **The `allow-display` marker.** The grep walks `src/game/` only. Code in
+  `src/ui/`, `src/assets/` and `src/main.rs` may call into `display` freely
+  and needs no marker. Presentation code that lives under `src/game/` (a
+  follow camera, camera framing, a dev harness) and needs a display value
+  must carry the marker as a trailing comment **on the same line** as the
+  name, in the form `// allow-display: <reason>`. The needles are
+  `display::`, `GameViewport`, `FrameInsets` and `FrameCamera`, so mark the
+  `use` line and later bare uses of a constant need nothing:
+
+  ```rust
+  use crate::display::{GAME_HEIGHT, GAME_WIDTH}; // allow-display: camera framing in Update, never read in SimSet
+  ```
+
+  A system that takes `Res<GameViewport>` carries the marker on that
+  parameter's line as well. The marker records a reviewed exception for
+  presentation code; it is never the fix for a `SimSet` system.
+- **Capture builds stay windowed.** On Linux the window is fullscreen
+  unless the build has the `autopilot` cargo feature (`record` implies it),
+  so screenshots are the game's own size. A game with any other capture
+  feature (Attic Excavator's `harness`) must add it to that check. The line
+  to edit is in `game_window` in `src/display.rs`:
+
+  ```rust
+  mode: window_mode_for(cfg!(target_os = "linux"), cfg!(feature = "autopilot")),
+  ```
+
+  becomes
+
+  ```rust
+  mode: window_mode_for(
+      cfg!(target_os = "linux"),
+      cfg!(any(feature = "autopilot", feature = "harness")),
+  ),
+  ```
+- **Checking a TV's shape on a dev machine.** `GX_WINDOW_SIZE=450x800 cargo
+  run` opens a portrait window; `800x450` a landscape one. Native only.
+- **The cabinet frame** sets `display::FrameInsets { reserve_top, gap }` to
+  keep the marquee band and the gap around the game clear. Both are zero
+  unless a frame is drawn.
+
+Vsync is pinned (`PresentMode::AutoVsync`).
 
 ## Boot flow & presentation kit
 

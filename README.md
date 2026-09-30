@@ -47,7 +47,8 @@ cargo run --release          # release, native host
 
 ```bash
 cargo run --features autopilot                       # scripted tour, shots in /tmp/gamebient-game-shots
-AUTOPILOT_DIR=shots AUTOPILOT_SCALE=1.5 cargo run --features autopilot   # 1920x1080 captures
+AUTOPILOT_DIR=shots AUTOPILOT_SCALE=1.5 cargo run --features autopilot   # 1440x1080 captures at 4:3
+GX_WINDOW_SIZE=450x800 cargo run --features autopilot                    # letterboxed in a portrait window
 ```
 
 A bot plays the game through the real input path and saves a screenshot at
@@ -59,7 +60,7 @@ game has gameplay. Dev-only; never compiled into shipping builds.
 
 ```bash
 tools/record.sh                       # 60 fps tour video + beat clips -> build/record/
-AUTOPILOT_SCALE=1.0 tools/record.sh   # 1280x720 instead of 1920x1080
+AUTOPILOT_SCALE=1.0 tools/record.sh   # the game's pinned size (960x720) instead of 1.5x
 tools/record.sh --keep-frames         # keep the PNG frames after encoding
 ```
 
@@ -137,11 +138,27 @@ builds all three targets and publishes a GitHub Release with:
 `gamebient-game-pi.tar.gz`, `gamebient-game-x86.tar.gz`, `gamebient-game-web.zip`,
 and the flat cartridge `gamebient-game.tar.gz`.
 
+## Screen shape
+
+The game renders at one pinned size, set in `src/display.rs`:
+
+| Ratio | `GAME_WIDTH` x `GAME_HEIGHT` |
+|---|---|
+| 4:3 (default) | 960 x 720 |
+| 1:1 | 720 x 720 |
+| 3:4 | 720 x 960 |
+
+On the web the canvas is that size and the page letterboxes it. On a cabinet
+(Linux) the window is fullscreen and the game is letterboxed inside it. UI is
+authored against a short side of 720 and scales with the game. Details:
+[docs/conventions.md](docs/conventions.md), "Screen shape".
+
 ## Project structure
 
 ```
 src/
-  main.rs            App + curated DefaultPlugins, window, UI-scale helper
+  main.rs            App + curated DefaultPlugins, window and plugin wiring
+  display.rs         Game size, window, native letterbox, UI scale (DisplayPlugin)
   game/
     mod.rs           GamePlugin: state machine, resources, gameplay systems, cleanup
     states.rs        GameState (Menu / Playing / GameOver)
@@ -150,6 +167,7 @@ src/
   assets/mod.rs      AssetsPlugin (procedural; add asset loading here)
   ui/
     mod.rs / menu.rs / hud.rs   Title + game-over screens, score/lives HUD
+    fit.rs           Text sizing against the game's width
 ```
 
 Geometry is procedural — no external model files. See
