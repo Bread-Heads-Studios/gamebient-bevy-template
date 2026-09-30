@@ -18,10 +18,11 @@ functions at the bottom of the file are game-specific.
 | `09-game-over` | the real game-over screen |
 
 Whole tour ≤ ~90 s; the app exits with `AppExit::Success`. Captures are the
-game's pinned size from `src/display.rs` by default (960x720 at 4:3, 720x720
-at 1:1, 720x960 at 3:4) and 1.5 times that with `AUTOPILOT_SCALE=1.5`
-(`make-cartridge.sh` sets this). An unconverted 16:9 game still captures
-1280x720 and 1920x1080.
+game's own size by default (`tools/game-size.sh`: 960x720, 720x720 or
+720x960) and 1.5x that with `AUTOPILOT_SCALE=1.5` (1440x1080, 1080x1080 or
+1080x1440). `make-cartridge.sh` sets the scale, and `GX_FRAME=off` so the
+cabinet frame is never in a capture. An unconverted 16:9 game still captures
+1280x720 at scale 1.0.
 
 ## What to replace
 

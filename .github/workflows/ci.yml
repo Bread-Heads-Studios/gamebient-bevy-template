@@ -68,6 +68,9 @@ jobs:
       - name: Game size tests
         run: tools/test_game_size.sh
 
+      - name: Stale-size lint
+        run: tools/test_aspect_docs.sh
+
   rollout:
     name: rollout-replay.sh
     runs-on: ubuntu-latest

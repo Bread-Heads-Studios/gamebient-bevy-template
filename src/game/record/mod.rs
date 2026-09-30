@@ -493,7 +493,7 @@ mod tests {
         let m = Manifest {
             name: "Gamebient Game".into(),
             fps: 60,
-            width: 1920,
+            width: 1440,
             height: 1080,
             frames: 3600,
             beats: vec![("01-studio-logo".into(), 72), ("02-title".into(), 150)],
@@ -501,7 +501,7 @@ mod tests {
         };
         assert_eq!(
             manifest_json(&m),
-            r#"{"name":"Gamebient Game","fps":60,"width":1920,"height":1080,"frames":3600,"duration_s":60.000,"beats":[{"name":"01-studio-logo","frame":72},{"name":"02-title","frame":150}],"audio":null}"#
+            r#"{"name":"Gamebient Game","fps":60,"width":1440,"height":1080,"frames":3600,"duration_s":60.000,"beats":[{"name":"01-studio-logo","frame":72},{"name":"02-title","frame":150}],"audio":null}"#
         );
     }
 
@@ -528,22 +528,31 @@ mod tests {
 
     #[test]
     fn accept_frame_with_no_expected_size_adopts_and_saves() {
-        assert_eq!(accept_frame(None, (1920, 1080)), (true, Some((1920, 1080))));
+        assert_eq!(accept_frame(None, (1440, 1080)), (true, Some((1440, 1080))));
     }
 
     #[test]
     fn accept_frame_matching_expected_size_saves() {
         assert_eq!(
-            accept_frame(Some((1920, 1080)), (1920, 1080)),
-            (true, Some((1920, 1080)))
+            accept_frame(Some((1440, 1080)), (1440, 1080)),
+            (true, Some((1440, 1080)))
         );
     }
 
     #[test]
     fn accept_frame_mismatched_size_skips_without_changing_expected() {
         assert_eq!(
-            accept_frame(Some((1920, 1080)), (1280, 720)),
-            (false, Some((1920, 1080)))
+            accept_frame(Some((1440, 1080)), (960, 720)),
+            (false, Some((1440, 1080)))
+        );
+    }
+
+    #[test]
+    fn accept_frame_treats_a_portrait_capture_like_any_other_size() {
+        assert_eq!(accept_frame(None, (1080, 1440)), (true, Some((1080, 1440))));
+        assert_eq!(
+            accept_frame(Some((1080, 1440)), (1440, 1080)),
+            (false, Some((1080, 1440)))
         );
     }
 }

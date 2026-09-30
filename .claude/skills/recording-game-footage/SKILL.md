@@ -9,9 +9,11 @@ description: Use when a Gamebient game needs play-video footage, trailer clips, 
 
 Every template-derived game can record its own autopilot tour offline:
 `tools/record.sh` runs the game with `--features record` on a fixed 1/60 s
-clock, captures every frame, encodes `build/record/tour.mp4` (60 fps,
-1920x1080), cuts `clips/<beat>.mp4` and `shots/<beat>.png` around each
-autopilot beat, and writes `events.jsonl`, `manifest.json`, `chapters.md`.
+clock, captures every frame, encodes `build/record/tour.mp4` (60 fps, at
+1.5x the game's own size from `tools/game-size.sh`: 1440x1080 for a 4:3
+game, 1080x1080 for 1:1, 1080x1440 for 3:4), cuts `clips/<beat>.mp4` and
+`shots/<beat>.png` around each autopilot beat, and writes `events.jsonl`,
+`manifest.json`, `chapters.md`. The cabinet frame is off in every capture.
 Recordings also carry a mixed audio track (`audio.wav`, muxed into
 `tour.mp4` at −16 LUFS) and 9:16 versions of everything (`clips/vertical/
 <beat>.mp4`, `tour-vertical.mp4`): the full 16:9 frame over a blurred fill
@@ -102,3 +104,6 @@ reading one frame each from a title card, a clip, and the end card.
 | Rolling out over an old `record.rs` | The script deletes it before copying the folder module in; don't hand-restore a stray `record.rs`. |
 | Hunted's flat layout | No `src/game/`; the recorder lands at `src/record/` (see irregular-games.md). |
 | Manifest `audio.peak` is 0 | The game muted itself under the autopilot (grand-theft-otto honours `AUTOPILOT_SOUND`, which `record.sh` sets); look for `GlobalVolume` inserts gated on harness/autopilot flags. |
+| `record.sh: captured WxH, expected WxH` | The window did not get its size. A 3:4 capture at 1.5 is 1440 rows tall: record on a display with more rows than that, or run `AUTOPILOT_SCALE=1.0 tools/record.sh`. |
+| `game-size: src/display.rs not found` | The game has not been converted off 16:9 yet. Record it as it is with `GAME_SIZE=1280x720 tools/record.sh`. |
+| Reusing clips recorded before the ratio change | They are 16:9. Re-record; `store-assets.sh` refuses footage at another ratio. |

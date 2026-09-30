@@ -33,9 +33,11 @@ command -v rsvg-convert >/dev/null || {
 }
 
 if [[ $CAPTURE -eq 1 ]]; then
-  echo "==> capturing gameplay (autopilot tour, ~60s at 1920x1080)"
+  CAPTURE_SIZE="$(tools/game-size.sh --scale 1.5)"
+  echo "==> capturing gameplay (autopilot tour, ~60s at $CAPTURE_SIZE)"
   mkdir -p "$SHOT_DIR"
-  AUTOPILOT_DIR="$PWD/$SHOT_DIR" AUTOPILOT_SCALE=1.5 cargo run --features autopilot
+  # GX_FRAME=off: the cover shot is the game alone, without the cabinet frame.
+  AUTOPILOT_DIR="$PWD/$SHOT_DIR" AUTOPILOT_SCALE=1.5 GX_FRAME=off cargo run --features autopilot
 fi
 
 SHOT="$SHOT_DIR/$BEAT.png"
