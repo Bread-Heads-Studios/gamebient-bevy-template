@@ -46,8 +46,10 @@ impl GameData {
 /// game's own.
 pub const HIGHER_SCORE_IS_BETTER: bool = true;
 
-/// The single higher-is-better integer the leaderboard ranks. The template's
-/// `GameData` has `score`; games without one (golf, racing) compute it here.
+/// The single integer the leaderboard ranks, in the order
+/// `HIGHER_SCORE_IS_BETTER` names (higher wins by default, lower for a time
+/// or a stroke count). The template's `GameData` has `score`; games without
+/// one (golf, racing) compute it here.
 pub trait LeaderboardScore {
     fn leaderboard_score(&self) -> u32;
 }

@@ -347,6 +347,17 @@ together (`src/lib/cabinetFrame/` in the website repo).
   frame out: beat-bender `src/ui/fighters.rs`, Gravestone Gauntlet
   `src/game/effects.rs` and `src/ui/how_to_play.rs`, pizza-pinball
   `src/ui/how_to_play.rs`.
+- **What the frame reads from the game.** Frame files are copied into games
+  unchanged, so these names must exist in every game:
+  `crate::game::scoring::{GameData, LeaderboardScore, HIGHER_SCORE_IS_BETTER}`
+  (`GameData` implements `Default` and `LeaderboardScore`) and
+  `crate::game::states::{GameState, Paused}` (`GameState` has `Playing` and
+  `GameOver`; `Paused` is a tuple struct over `bool`). A game whose run type
+  has another name aliases it in `scoring.rs` instead of editing the frame,
+  for example `pub use super::run::RunStats as GameData;`. The driver's tests
+  build and change the score through two helpers, `data_with_score` and
+  `add_score` in `src/frame/driver.rs`; a game whose type has no public
+  numeric `score` field adapts those two functions only.
 - **A new `GameState` variant** is treated as attract by the frame unless
   you add it to `frame::driver::phase_for`.
 

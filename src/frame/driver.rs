@@ -50,12 +50,15 @@ pub struct FrameRuntime {
     /// Colour of the pulse in progress. `None` is the default colour.
     pub pulse_color: Option<[u8; 3]>,
     best_path: Option<PathBuf>,
+    /// The game's score order, `game::scoring::HIGHER_SCORE_IS_BETTER` at run
+    /// time. A field, not a read of the constant, so tests can pin either order.
+    higher_is_better: bool,
     /// A run ended on entering `GameOver` and its score is not read yet.
     finish_pending: bool,
 }
 
 impl FrameRuntime {
-    pub fn new(best: u64, best_path: Option<PathBuf>) -> Self {
+    pub fn new(best: u64, best_path: Option<PathBuf>, higher_is_better: bool) -> Self {
         let mut brightness = FrameBrightness::new();
         let levels = brightness.step(0.0, FramePhase::Attract, false);
         Self {
@@ -66,6 +69,7 @@ impl FrameRuntime {
             final_score: None,
             pulse_color: None,
             best_path,
+            higher_is_better,
             finish_pending: false,
         }
     }
@@ -74,17 +78,17 @@ impl FrameRuntime {
     pub fn from_env() -> Self {
         let path = best_score_path_from_env();
         if !HIGHER_SCORE_IS_BETTER {
-            return Self::new(0, None);
+            return Self::new(0, None, false);
         }
         let best = path.as_deref().map_or(0, load_best);
-        Self::new(best, path)
+        Self::new(best, path, true)
     }
 
     /// Records the end of a run. A score above the best is a new high score
     /// and is written to the file; anything else is a plain game over.
     pub fn finish_run(&mut self, final_score: u64) -> FrameEvent {
         self.final_score = Some(final_score);
-        let event = if is_record(HIGHER_SCORE_IS_BETTER, self.best, final_score) {
+        let event = if is_record(self.higher_is_better, self.best, final_score) {
             self.best = final_score;
             if let Some(path) = &self.best_path
                 && let Err(error) = save_best(path, final_score)
@@ -117,7 +121,7 @@ impl FrameRuntime {
     }
 
     pub fn caption(&self) -> Option<String> {
-        let best = (HIGHER_SCORE_IS_BETTER && self.best > 0).then(|| group_digits(self.best));
+        let best = (self.higher_is_better && self.best > 0).then(|| group_digits(self.best));
         let final_score = self.final_score.map(group_digits);
         marquee_caption(
             self.phase,
@@ -238,6 +242,17 @@ mod tests {
 
     use super::*;
 
+    // The frame reads the game's score through these two helpers only. A game
+    // whose score type has another shape adapts them (see docs/conventions.md,
+    // "Cabinet frame"), not the tests.
+    fn data_with_score(score: u32) -> GameData {
+        GameData { score, ..default() }
+    }
+
+    fn add_score(data: &mut GameData, points: u32) {
+        data.score += points;
+    }
+
     #[test]
     fn every_state_maps_to_a_phase() {
         assert_eq!(phase_for(GameState::StudioLogo), FramePhase::Attract);
@@ -249,7 +264,7 @@ mod tests {
 
     #[test]
     fn a_score_above_the_best_is_a_new_high_score() {
-        let mut rt = FrameRuntime::new(100, None);
+        let mut rt = FrameRuntime::new(100, None, true);
         assert_eq!(rt.finish_run(150), FrameEvent::NewHighScore);
         assert_eq!(rt.best, 150);
         assert_eq!(rt.final_score, Some(150));
@@ -279,16 +294,13 @@ mod tests {
         use bevy::state::app::StatesPlugin;
 
         fn bonus(mut data: ResMut<GameData>) {
-            data.score += 500;
+            add_score(&mut data, 500);
         }
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin))
             .init_state::<GameState>()
-            .insert_resource(GameData {
-                score: 100,
-                ..default()
-            })
-            .insert_resource(FrameRuntime::new(0, None))
+            .insert_resource(data_with_score(100))
+            .insert_resource(FrameRuntime::new(0, None, true))
             // The frame's system runs before the game's bonus, the order
             // that would make an `OnEnter` read too early.
             .add_systems(OnEnter(GameState::GameOver), (on_game_over, bonus).chain())
@@ -307,18 +319,18 @@ mod tests {
     #[test]
     fn a_run_is_finished_once() {
         let mut world = World::new();
-        world.insert_resource(GameData::default());
-        world.insert_resource(FrameRuntime::new(0, None));
+        world.insert_resource(data_with_score(0));
+        world.insert_resource(FrameRuntime::new(0, None, true));
         world.run_system_once(on_game_over).unwrap();
         world.run_system_once(finish_pending_run).unwrap();
-        world.resource_mut::<GameData>().score = 999;
+        add_score(&mut world.resource_mut::<GameData>(), 999);
         world.run_system_once(finish_pending_run).unwrap();
         assert_eq!(world.resource::<FrameRuntime>().final_score, Some(0));
     }
 
     #[test]
     fn a_zero_score_never_celebrates() {
-        let mut rt = FrameRuntime::new(0, None);
+        let mut rt = FrameRuntime::new(0, None, true);
         assert_eq!(rt.finish_run(0), FrameEvent::GameOver);
     }
 
@@ -327,7 +339,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gx-frame-driver-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("best-score");
-        let mut rt = FrameRuntime::new(10, Some(path.clone()));
+        let mut rt = FrameRuntime::new(10, Some(path.clone()), true);
         rt.finish_run(5);
         assert!(!path.exists(), "a losing run writes nothing");
         rt.finish_run(25);
@@ -336,8 +348,27 @@ mod tests {
     }
 
     #[test]
+    fn a_lower_is_better_runtime_shows_no_score_and_never_writes() {
+        let dir = std::env::temp_dir().join(format!("gx-frame-lower-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("best-score");
+        let mut rt = FrameRuntime::new(100, Some(path.clone()), false);
+        rt.advance(0.0, FramePhase::Attract, false);
+        assert_eq!(rt.caption(), None, "no score to beat");
+        assert_eq!(
+            rt.finish_run(50),
+            FrameEvent::GameOver,
+            "lower is not a record"
+        );
+        assert_eq!(rt.finish_run(500), FrameEvent::GameOver);
+        assert_eq!(rt.best, 100);
+        assert!(!path.exists(), "the best-score file is never written");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_refused_highlight_keeps_the_first_colour() {
-        let mut rt = FrameRuntime::new(0, None);
+        let mut rt = FrameRuntime::new(0, None, true);
         assert!(rt.highlight(Some([255, 204, 0])));
         assert!(!rt.highlight(Some([1, 2, 3])));
         assert_eq!(rt.pulse_color, Some([255, 204, 0]));
@@ -345,7 +376,7 @@ mod tests {
 
     #[test]
     fn caption_follows_the_phase() {
-        let mut rt = FrameRuntime::new(12340, None);
+        let mut rt = FrameRuntime::new(12340, None, true);
         rt.advance(0.0, FramePhase::Attract, false);
         assert_eq!(rt.caption().as_deref(), Some("SCORE TO BEAT 12,340"));
         rt.advance(0.1, FramePhase::Playing, false);
@@ -365,7 +396,7 @@ mod tests {
 
     #[test]
     fn no_best_score_means_no_attract_caption() {
-        let mut rt = FrameRuntime::new(0, None);
+        let mut rt = FrameRuntime::new(0, None, true);
         rt.advance(0.0, FramePhase::Attract, false);
         assert_eq!(rt.caption(), None);
     }
