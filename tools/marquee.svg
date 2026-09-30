@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  PLACEHOLDER marquee for Gamebient Game. Rendered by tools/frame-art.sh via
+  rsvg-convert to assets/marquee.png, 1080x360. A vertical cabinet shows it
+  in a band above the game.
+
+  This layout is deliberately plain so it is obvious it has not been designed
+  yet. Before shipping, redesign it from the game's cover: see frame-art.md
+  in the `designing-cartridge-covers` skill. What binds every marquee:
+
+  - It carries the title treatment: the cover's lettering, face and colours,
+    as large as fits inside x 60 to 1020.
+  - Rows 288 to 360 hold no lettering. The frame writes the score line over
+    the marquee and needs a quiet strip.
+  - Full brightness. The frame shows it at 1.00 when idle and dims it to 0.45
+    during play, so it must still read at 0.45. Never draw it dim.
+  - A still image. The sweep, flashes and pulses are drawn by the frame.
+  - Opaque: the background rect covers the whole canvas.
+
+  rsvg-convert uses system fonts. On macOS, Impact, DIN Condensed, plain
+  Courier, Hoefler, Big Caslon and Superclarendon silently fall back to
+  Helvetica; verify any face with a probe render before relying on it. Text
+  on a path is dropped and text never wraps.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="360" viewBox="0 0 1080 360">
+  <defs>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f5590"/>
+      <stop offset="1" stop-color="#16213a"/>
+    </linearGradient>
+    <clipPath id="face">
+      <rect x="12" y="12" width="1056" height="336" rx="18"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1080" height="360" fill="#05070f"/>
+  <g clip-path="url(#face)">
+    <rect width="1080" height="360" fill="url(#glass)"/>
+    <!-- backlight rays -->
+    <g fill="#7fb4d8" fill-opacity="0.14">
+      <path d="M540 520 L-120 0 L80 0 Z"/>
+      <path d="M540 520 L240 0 L400 0 Z"/>
+      <path d="M540 520 L680 0 L840 0 Z"/>
+      <path d="M540 520 L1000 0 L1200 0 Z"/>
+    </g>
+  </g>
+  <rect x="12" y="12" width="1056" height="336" rx="18" fill="none" stroke="#7fb4d8" stroke-width="4"/>
+
+  <!-- studio credit -->
+  <text x="540" y="70" text-anchor="middle" font-family="Futura, 'Helvetica Neue', sans-serif"
+        font-weight="bold" font-size="20" letter-spacing="6" fill="#7fb4d8">BREAD HEADS STUDIOS</text>
+
+  <!-- title: replace with the cover's title treatment (stroke below, fill above) -->
+  <text x="540" y="190" text-anchor="middle" font-family="'Arial Black', 'Helvetica Neue', sans-serif"
+        font-weight="900" font-size="92" fill="none" stroke="#05070f" stroke-width="12"
+        stroke-linejoin="round">GAMEBIENT GAME</text>
+  <text x="540" y="190" text-anchor="middle" font-family="'Arial Black', 'Helvetica Neue', sans-serif"
+        font-weight="900" font-size="92" fill="#eaf4ff">GAMEBIENT GAME</text>
+
+  <!-- placeholder notice: delete when the marquee is designed -->
+  <rect x="340" y="222" width="400" height="44" rx="8" fill="#3a2a06" stroke="#ffd94d" stroke-width="2"/>
+  <text x="540" y="251" text-anchor="middle" font-family="Menlo, monospace" font-size="16"
+        fill="#ffd94d">PLACEHOLDER MARQUEE — DESIGN ME</text>
+</svg>

@@ -80,6 +80,17 @@ one-responsibility files.
   `tools/cartridge-cover.svg`, which must be redesigned in the game's own voice,
   and `info.json`'s description/genre/hosts must be filled in. Use the
   `designing-cartridge-covers` and `generating-cartridge-metadata` skills.
+- **Sizes come from one place:** `tools/game-size.sh` prints the game's size
+  from `src/display.rs`. `record.sh`, `make-cartridge.sh` and
+  `store-assets.sh` ask it; never write 1280, 720, 1920 or 1080 into a tool.
+- **Cabinet frame art:** `tools/frame-art.sh` renders `tools/marquee.svg` to
+  `assets/marquee.png` (1080x360) and `tools/bezel.svg` to `assets/bezel.png`
+  (1920x1920) and refuses a bezel with detail in its central 1080x1080 or
+  with high contrast. The SVGs ship as placeholders; the PNGs do not ship. A
+  game with no `assets/marquee.png` or `assets/bezel.png` falls back to the
+  shared ColecoVision GX art on the cabinet, so run `frame-art.sh` only once
+  the SVGs are designed. `frame-art.md` in the `designing-cartridge-covers`
+  skill says how to make them from the cover.
 - **Replay verification:** `cargo test --all-features` runs the codec tests and
   the native `--selftest`; regenerate `tests/fixtures/selftest.gxr` whenever the
   sim changes — `cargo run --features verify --bin verify -- --selftest --write
