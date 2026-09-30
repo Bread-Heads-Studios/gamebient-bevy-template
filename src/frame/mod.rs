@@ -4,6 +4,8 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod brightness;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod caption;
 pub mod highlight;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod layout;
