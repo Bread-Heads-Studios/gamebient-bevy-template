@@ -25,6 +25,8 @@ pub mod caption;
 pub mod driver;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod layout;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod marquee;
 
 pub use highlight::Highlight;
 
@@ -72,6 +74,7 @@ impl Plugin for FramePlugin {
                     camera::spawn_frame_camera,
                     art::load_frame_art,
                     bezel::spawn_bezel,
+                    marquee::spawn_marquee,
                 )
                     .chain(),
             )
@@ -84,6 +87,8 @@ impl Plugin for FramePlugin {
                     driver::step_frame,
                     bezel::layout_bezel,
                     bezel::paint_bezel,
+                    marquee::layout_marquee,
+                    marquee::paint_marquee,
                 )
                     .chain(),
             );

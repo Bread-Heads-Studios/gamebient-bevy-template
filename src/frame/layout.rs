@@ -90,6 +90,49 @@ pub fn caption_box(marquee_w: f32, marquee_h: f32) -> (f32, f32) {
     (marquee_h * CAPTION_Y, marquee_w * CAPTION_SIZE_PER_WIDTH)
 }
 
+/// Left edge of the fallback marquee's title box, in 1080-wide art pixels.
+const TITLE_BOX_LEFT: u32 = 475;
+/// Right edge of the fallback marquee's title box, in 1080-wide art pixels.
+const TITLE_BOX_RIGHT: u32 = 1052;
+const TITLE_BOX_REFERENCE_W: u32 = 1080;
+/// Vertical centre of the title box, in 360-tall art pixels.
+const TITLE_CENTRE_ROW: u32 = 154;
+/// Tallest title, in 360-tall art pixels.
+const TITLE_MAX_SIZE_ROWS: u32 = 84;
+const TITLE_REFERENCE_H: u32 = 360;
+/// Share of the box width a title may fill.
+const TITLE_FILL: f32 = 0.92;
+/// Average advance of the template's monospaced font, in em.
+pub const TITLE_ADVANCE_EM: f32 = 0.6;
+
+/// Where the game's title goes on the shared fallback marquee, and how big.
+/// The website implements the same function with the same vectors.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TitleBox {
+    pub box_left: u32,
+    pub box_right: u32,
+    pub centre_x: f32,
+    pub centre_y: f32,
+    pub font_size: f32,
+}
+
+pub fn title_box(marquee_w: u32, marquee_h: u32, chars: usize, advance_em: f32) -> TitleBox {
+    let box_left = marquee_w * TITLE_BOX_LEFT / TITLE_BOX_REFERENCE_W;
+    let box_right = marquee_w * TITLE_BOX_RIGHT / TITLE_BOX_REFERENCE_W;
+    let box_w = box_right - box_left;
+    let centre_x = box_left as f32 + box_w as f32 / 2.0;
+    let centre_y = marquee_h as f32 * TITLE_CENTRE_ROW as f32 / TITLE_REFERENCE_H as f32;
+    let max_size = marquee_h as f32 * TITLE_MAX_SIZE_ROWS as f32 / TITLE_REFERENCE_H as f32;
+    let fit = box_w as f32 * TITLE_FILL / (chars.max(1) as f32 * advance_em);
+    TitleBox {
+        box_left,
+        box_right,
+        centre_x,
+        centre_y,
+        font_size: max_size.min(fit).floor().max(1.0),
+    }
+}
+
 /// Centre and size of `rect` in `Camera2d` world units: logical pixels,
 /// origin at the window centre, y up.
 pub fn to_world(rect: PxRect, window: UVec2, scale_factor: f32) -> (Vec2, Vec2) {
@@ -109,6 +152,35 @@ mod tests {
 
     fn rect(x: i32, y: i32, w: u32, h: u32) -> PxRect {
         PxRect { x, y, w, h }
+    }
+
+    #[test]
+    fn title_box_vectors_t1_to_t6() {
+        // (w, h, chars, advance, box_left, box_right, font_size)
+        let rows = [
+            (1080, 360, 15, 0.6, 475, 1052, 58.0),
+            (1080, 360, 15, 0.72, 475, 1052, 49.0),
+            (1080, 360, 8, 0.6, 475, 1052, 84.0),
+            (1080, 360, 22, 0.72, 475, 1052, 33.0),
+            (540, 180, 15, 0.6, 237, 526, 29.0),
+            (1080, 360, 0, 0.6, 475, 1052, 84.0),
+        ];
+        for (i, (w, h, chars, advance, left, right, size)) in rows.into_iter().enumerate() {
+            let t = title_box(w, h, chars, advance);
+            assert_eq!(
+                (t.box_left, t.box_right, t.font_size),
+                (left, right, size),
+                "T{}",
+                i + 1
+            );
+        }
+    }
+
+    #[test]
+    fn title_box_centre_at_1080_by_360() {
+        let t = title_box(1080, 360, 15, TITLE_ADVANCE_EM);
+        assert_eq!(t.centre_x, 763.5);
+        assert_eq!(t.centre_y, 154.0);
     }
 
     #[test]

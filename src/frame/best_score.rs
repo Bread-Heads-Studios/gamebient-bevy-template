@@ -8,6 +8,9 @@
 //! 3. `$HOME/.local/share/gamebient/<package name>/best-score`
 //!
 //! With none of those set the best score lasts for the session only.
+//!
+//! The stored score is higher-is-better only: `driver::HIGHER_IS_BETTER`
+//! gates its use, and a game where lower is better never reads or writes it.
 
 use std::path::{Path, PathBuf};
 
