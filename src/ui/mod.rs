@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+pub mod fit;
 pub mod how_to_play;
 pub mod hud;
 pub mod menu;

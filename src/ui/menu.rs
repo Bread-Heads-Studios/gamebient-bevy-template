@@ -3,11 +3,18 @@ use bevy::prelude::*;
 use crate::game::audio::SfxEvent;
 use crate::game::input::GameInput;
 use crate::game::states::GameState;
+use crate::ui::fit::{fit_font_size, ui_width};
 use crate::ui::how_to_play::{SeenHowToPlay, start_target};
 use crate::ui::transition::{Pulse, ScreenFade};
 
 #[derive(Component)]
 pub struct MenuRoot;
+
+/// Title text, sized to fit the game's width whatever its ratio.
+const TITLE: &str = "GAMEBIENT GAME";
+
+/// Controls line under the start prompt. ASCII only.
+const CONTROLS: &str = "Arrows / WASD: Move  |  Z: A  X: B  |  Esc: Pause";
 
 /// Spawns the title screen: styled text title with a pulsing start prompt
 /// over a bottom scrim.
@@ -42,9 +49,9 @@ pub fn spawn_menu(mut commands: Commands) {
         BackgroundColor(Color::srgb(0.01, 0.02, 0.05)),
         children![
             (
-                Text::new("GAMEBIENT GAME"),
+                Text::new(TITLE),
                 TextFont {
-                    font_size: 72.0,
+                    font_size: fit_font_size(TITLE, 72.0, ui_width()),
                     ..default()
                 },
                 TextColor(Color::srgb(0.2, 0.8, 1.0)),
@@ -77,9 +84,9 @@ pub fn spawn_menu(mut commands: Commands) {
                         },
                     ),
                     (
-                        Text::new("Arrows / WASD: Move  |  Z: A  X: B  |  Esc: Pause"),
+                        Text::new(CONTROLS),
                         TextFont {
-                            font_size: 18.0,
+                            font_size: fit_font_size(CONTROLS, 18.0, ui_width()),
                             ..default()
                         },
                         TextColor(Color::srgb(0.5, 0.6, 0.7)),

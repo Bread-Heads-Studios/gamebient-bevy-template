@@ -165,6 +165,11 @@ impl Plugin for GamePlugin {
 }
 
 /// One-time scene setup: a camera and a directional light.
+///
+/// The camera's vertical field of view is fixed at 45 degrees, so at z = 20
+/// the view is 16.6 world units tall at every ratio and its width follows
+/// the game's ratio: 22.1 units at 4:3, 16.6 at 1:1, 12.4 at 3:4 (it was
+/// 29.5 at 16:9). Keep world content inside that.
 fn setup_scene(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),

@@ -24,7 +24,7 @@
 //! | `09-game-over.png`      | the real game-over screen              |
 //!
 //! Env: `AUTOPILOT_DIR` (default `/tmp/gamebient-game-shots`), `AUTOPILOT_SCALE`
-//! (window scale-factor override; `1.5` captures 1920x1080).
+//! (window scale-factor override; `1.5` captures 1440x1080 at 4:3).
 //!
 //! # Customizing for your game
 //!
@@ -59,8 +59,9 @@ fn shot_dir() -> String {
     std::env::var("AUTOPILOT_DIR").unwrap_or_else(|_| "/tmp/gamebient-game-shots".into())
 }
 
-/// `AUTOPILOT_SCALE=1.5` renders the 1280x720 window at 1920x1080 so the
-/// cover shot is hi-res. Applied once at startup.
+/// `AUTOPILOT_SCALE=1.5` renders the window at 1.5 times its pinned size
+/// (the template's 960x720 becomes 1440x1080) so the cover shot is hi-res.
+/// Applied once at startup.
 fn apply_scale_override(mut windows: Query<&mut Window>) {
     let Some(scale) = std::env::var("AUTOPILOT_SCALE")
         .ok()
@@ -271,7 +272,8 @@ fn drive_bot(
     let Ok(tf) = player.single() else {
         return;
     };
-    // Bounce between x = -6 and x = 6.
+    // Bounce between x = -6 and x = 6: inside the 4:3 view (|x| < 11.0) and
+    // the 1:1 view (8.3). A 3:4 game (6.2) narrows this to 4.5.
     let heading_right = (t / 3.0).floor() as i32 % 2 == 0;
     let held = match (heading_right, tf.translation.x) {
         (true, x) if x < 6.0 => Buttons::RIGHT,
