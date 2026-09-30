@@ -118,7 +118,7 @@ if [ -d "$PACK_SRC/.git" ]; then
   has 'HIGHER_SCORE_IS_BETTER: bool = true;' src/game/scoring.rs
   has 'add_message::<Highlight>()' src/game/host.rs
   has 'report_highlight,' src/game/host.rs
-  [ -f "$T/e/tests/display_contract.rs" ] && [ -f "$T/e/tests/display_shape.rs" ] || { echo "FAIL e: tests not written"; exit 1; }
+  if [ ! -f "$T/e/tests/display_contract.rs" ] || [ ! -f "$T/e/tests/display_shape.rs" ]; then echo "FAIL e: tests not written"; exit 1; fi
   grep -q 'pack_the_ripper::display' "$T/e/tests/display_shape.rs" || { echo "FAIL e: display_shape.rs crate name not rewritten"; exit 1; }
   [ -f "$T/e/.claude/skills/designing-cartridge-covers/SKILL.md" ] && [ -f "$T/e/.claude/skills/generating-cartridge-metadata/SKILL.md" ] \
     || { echo "FAIL e: skill snapshots missing"; exit 1; }
