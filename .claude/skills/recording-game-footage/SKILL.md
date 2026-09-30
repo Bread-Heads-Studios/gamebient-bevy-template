@@ -99,6 +99,17 @@ Outputs `build/reel/reel-16x9.mp4` and `build/reel/reel-9x16.mp4`. Verify
 with `ffprobe` durations (≈ 16 × (1.5 + 4.5) + 3 s for a 16-game reel) and by
 reading one frame each from a title card, a clip, and the end card.
 
+One reel mixes games of different ratios. No clip is stretched or cropped:
+
+| Reel | Source | Where the game lands |
+|---|---|---|
+| 16x9 (landscape) | `clips/<beat>.mp4` | fitted to the frame's height and centred over a blurred fill of itself: a 4:3 clip is 1440x1080 at x 240, a 1:1 clip 1080x1080 at x 420, a 3:4 clip 810x1080 at x 555 |
+| 9x16 (portrait) | `clips/vertical/<beat>.mp4` | used as recorded: gameplay at full width with its title and CTA plates (a 4:3 clip shows gameplay at y 555-1365) |
+
+`reel.py` prints each clip's placement as it builds. Read one frame of a
+3:4 game from the 16x9 reel and check the picture is upright and unsquashed
+with blur on both sides.
+
 ## Common mistakes
 
 | Mistake | Fix |

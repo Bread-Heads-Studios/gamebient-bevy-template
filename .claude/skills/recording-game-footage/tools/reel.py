@@ -10,8 +10,12 @@ docs/reel.json: {"cta": [line1, line2], "card_secs": 1.5, "end_secs": 3.0,
 "games": [{"folder", "clip", "start", "length"}]}. `clip` is a beat name
 (`06-delivery-popup`) or an alias (`signature`, `game-over`). Each game gets
 a title card (its assets/cartridge.png + title), then its clip trimmed to
-start/length (16:9 from build/record/clips/, 9:16 from clips/vertical/);
-the reel ends on a CTA card. Needs ffmpeg, ffprobe, rsvg-convert. Stdlib only.
+start/length; the reel ends on a CTA card. Games are 4:3, 1:1 or 3:4 (or
+16:9 if not converted yet) and one reel mixes them: the 16x9 reel takes
+build/record/clips/ and fits each clip inside 1920x1080 over a blurred copy
+of itself (a 3:4 clip is 810x1080 at x 555); the 9x16 reel takes
+clips/vertical/, which record.sh already composed at 1080x1920.
+Needs ffmpeg, ffprobe, rsvg-convert. Stdlib only.
 
 Segments (cards and clips) are intermediate Matroska files with lossless
 PCM audio; loudness normalization and near-silent clip windows are handled
@@ -31,6 +35,8 @@ import xml.sax.saxutils
 HERE = pathlib.Path(__file__).resolve().parent
 DEFAULTS = {"cta": ["Play the demo at", "colecovisiongx.com"], "card_secs": 1.5, "end_secs": 3.0}
 GAME_DEFAULTS = {"start": 1.0, "length": 4.5}
+# The reel's two output formats (frame size, where its source clips live).
+# These are not the games' ratios: any game's clip is fitted into either.
 ASPECTS = {"16x9": ((1920, 1080), "clips"), "9x16": ((1080, 1920), "clips/vertical")}
 FADE = 0.15
 LOUDNORM = "loudnorm=I=-16:TP=-1.5:LRA=11"
@@ -106,16 +112,46 @@ def card_args(png, secs, size, out):
             "-map", "0:v", "-map", "1:a", *ENCODE, "-shortest", str(out)]
 
 
-def clip_args(src, start, length, size, has_audio, out, normalize=True):
+def fit_filter(size):
+    """Filter graph that fits a clip of any aspect inside `size`.
+
+    The clip is scaled to fit without stretching or cropping and centred
+    over a blurred, darkened copy of itself that fills the frame (the look
+    of the vertical clips). A clip already at `size` covers the fill.
+    """
     w, h = size
+    return (f"[0:v]split=2[bg][fg];"
+            f"[bg]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},"
+            f"scale={w // 4}:{h // 4},gblur=sigma=8,scale={w}:{h},eq=brightness=-0.12[bgb];"
+            f"[fg]scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2[fgs];"
+            f"[bgb][fgs]overlay=(W-w)/2:(H-h)/2,fps=60,format=yuv420p[v]")
+
+
+def placement(src, size):
+    """(w, h, x, y): where fit_filter puts a clip of size `src` inside `size`."""
+    (sw, sh), (w, h) = src, size
+    scale = min(w / sw, h / sh)
+    fw, fh = 2 * round(sw * scale / 2), 2 * round(sh * scale / 2)
+    return (fw, fh, (w - fw) // 2, (h - fh) // 2)
+
+
+def video_size(path):
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                          "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", str(path)],
+                         capture_output=True, text=True, check=True).stdout
+    w, h = out.strip().split("x")
+    return (int(w), int(h))
+
+
+def clip_args(src, start, length, size, has_audio, out, normalize=True):
     args = ["-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", str(src)]
     if not has_audio:
         args += ["-f", "lavfi", "-t", f"{length:.3f}", "-i", SILENCE]
     af = f"afade=t=in:d={FADE},afade=t=out:st={length - FADE:.3f}:d={FADE}"
     if normalize:
         af += f",{LOUDNORM}"
-    return args + ["-vf", f"scale={w}:{h},fps=60,format=yuv420p", "-af", af,
-                   "-map", "0:v", "-map", "0:a" if has_audio else "1:a", *ENCODE, str(out)]
+    return args + ["-filter_complex", fit_filter(size), "-af", af,
+                   "-map", "[v]", "-map", "0:a" if has_audio else "1:a", *ENCODE, str(out)]
 
 
 def concat_list(paths):
@@ -194,6 +230,9 @@ def build(root, cfg, aspect):
         if not src.exists():
             sys.exit(f"reel: {src} missing; re-run tools/record.sh in {g['folder']}")
         seg = gwork / "clip.mkv"
+        src_size = video_size(src)
+        fw, fh, fx, fy = placement(src_size, size)
+        print(f"reel: {g['folder']} {beat} {src_size[0]}x{src_size[1]} -> {fw}x{fh} at +{fx}+{fy} ({aspect})")
         normalize = not is_near_silent(src, g["start"], g["length"])
         run(f"{g['folder']} clip ({src})",
             clip_args(src, g["start"], g["length"], size, has_audio(src), seg, normalize=normalize))

@@ -36,6 +36,11 @@ absent "16:9 gameplay" tools/vertical-banner.svg
 present "{{CTA_PLATE_Y}}" tools/vertical-banner.svg
 present "y 240-1680" "$SKILLS/recording-game-footage/SKILL.md"
 
+# Reel: clips are fitted over a blurred fill, never forced to the reel's size.
+absent "16:9 from build/record/clips/" "$SKILLS/recording-game-footage/tools/reel.py"
+present "force_original_aspect_ratio=decrease" "$SKILLS/recording-game-footage/tools/reel.py"
+present "810x1080" "$SKILLS/recording-game-footage/SKILL.md"
+
 # --- end of checks ---
 [ "$fail" -eq 0 ] || exit 1
 echo "test_aspect_docs: OK"
