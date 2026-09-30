@@ -7,6 +7,8 @@
 //! window, so nothing under `src/game/` that runs in `SimSet` may read it.
 
 use bevy::prelude::*;
+use bevy::window::{MonitorSelection, PresentMode, WindowMode};
+use gamebient_input::CanvasPolicy;
 
 /// Pinned backbuffer width in physical pixels. Per game.
 pub const GAME_WIDTH: u32 = 960;
@@ -14,6 +16,52 @@ pub const GAME_WIDTH: u32 = 960;
 pub const GAME_HEIGHT: u32 = 720;
 /// Short side that all UI pixel values are authored against.
 pub const REFERENCE_SHORT_SIDE: f32 = 720.0;
+
+/// The primary window: pinned on web, borderless fullscreen on Linux native.
+///
+/// macOS and Windows dev machines get a GAME_WIDTH x GAME_HEIGHT window.
+/// `GX_WINDOW_SIZE=WxH` (native only) opens a window of that size instead,
+/// to check the letterbox against a TV's shape without a TV.
+pub fn game_window(title: &str) -> Window {
+    let policy = CanvasPolicy::Pinned {
+        width: GAME_WIDTH,
+        height: GAME_HEIGHT,
+    };
+    #[allow(unused_mut)]
+    let mut window = Window {
+        present_mode: PresentMode::AutoVsync,
+        mode: window_mode_for(cfg!(target_os = "linux"), cfg!(feature = "autopilot")),
+        ..policy.window(title)
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some((width, height)) = std::env::var("GX_WINDOW_SIZE")
+        .ok()
+        .as_deref()
+        .and_then(parse_window_size)
+    {
+        window.resolution = bevy::window::WindowResolution::new(width, height);
+        window.mode = WindowMode::Windowed;
+    }
+    window
+}
+
+/// Cabinets run Linux and get the whole panel. The autopilot and record
+/// harnesses capture the window, so they keep it the game's own size.
+fn window_mode_for(linux_native: bool, harness: bool) -> WindowMode {
+    if linux_native && !harness {
+        WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
+    } else {
+        WindowMode::Windowed
+    }
+}
+
+/// Parses `GX_WINDOW_SIZE`: `"1080x1920"` is `Some((1080, 1920))`. Each side
+/// must be 1..=8192.
+pub fn parse_window_size(s: &str) -> Option<(u32, u32)> {
+    let (w, h) = s.trim().split_once(['x', 'X'])?;
+    let (w, h) = (w.parse::<u32>().ok()?, h.parse::<u32>().ok()?);
+    ((1..=8192).contains(&w) && (1..=8192).contains(&h)).then_some((w, h))
+}
 
 /// UI scale for a view of this logical size: min(w, h) / 720.
 pub fn ui_scale_for(view_w: f32, view_h: f32) -> f32 {
@@ -63,8 +111,6 @@ pub fn letterbox(window: UVec2, game: UVec2, reserve_top: u32, gap: u32) -> Game
 
 #[cfg(test)]
 mod tests {
-    use gamebient_input::CanvasPolicy;
-
     use super::*;
 
     #[test]
@@ -195,5 +241,47 @@ mod tests {
         assert_eq!(boxed((200, 100), (960, 720), 100, 0), ((0, 0), (200, 100)));
         assert_eq!(boxed((200, 100), (960, 720), 0, 100), ((0, 0), (200, 100)));
         assert_eq!(boxed((200, 100), (0, 720), 0, 0), ((0, 0), (200, 100)));
+    }
+
+    #[test]
+    fn fullscreen_only_on_a_linux_cabinet_build() {
+        assert_eq!(
+            window_mode_for(true, false),
+            WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
+        );
+        // Autopilot and record builds capture the window: keep it game-sized.
+        assert_eq!(window_mode_for(true, true), WindowMode::Windowed);
+        assert_eq!(window_mode_for(false, false), WindowMode::Windowed);
+        assert_eq!(window_mode_for(false, true), WindowMode::Windowed);
+    }
+
+    #[test]
+    fn window_size_override_parses_width_x_height() {
+        assert_eq!(parse_window_size("1080x1920"), Some((1080, 1920)));
+        assert_eq!(parse_window_size(" 450X800 "), Some((450, 800)));
+        assert_eq!(parse_window_size("0x800"), None);
+        assert_eq!(parse_window_size("9000x800"), None);
+        assert_eq!(parse_window_size("450"), None);
+        assert_eq!(parse_window_size("450x"), None);
+        assert_eq!(parse_window_size("wide"), None);
+    }
+
+    #[test]
+    fn game_window_is_pinned_and_targets_the_game_canvas() {
+        let window = game_window("Test");
+        assert_eq!(window.title, "Test");
+        assert_eq!(window.canvas.as_deref(), Some("#game"));
+        assert!(!window.fit_canvas_to_parent);
+        assert_eq!(window.present_mode, PresentMode::AutoVsync);
+        // A developer running the tests with the override set gets that size.
+        if std::env::var_os("GX_WINDOW_SIZE").is_none() {
+            assert_eq!(
+                CanvasPolicy::from_window(&window),
+                CanvasPolicy::Pinned {
+                    width: GAME_WIDTH,
+                    height: GAME_HEIGHT,
+                }
+            );
+        }
     }
 }
