@@ -27,14 +27,21 @@ How this template builds for three targets and ships releases. See
   capture into the store metadata the website renders. Inputs:
   `build/record/shots/{04,05,06,07}-*.png` and `build/record/clips/signature.mp4`
   (falling back to `05-mid-play.mp4`, then `04-early-play.mp4`). Outputs:
-  `assets/screenshots/01.png…04.png` (1280x720), `assets/trailer.mp4` (H.264/AAC,
-  1280x720, `+faststart`, ≤20s, refuses to write one over 8 MB), and rewrites
+  `assets/screenshots/01.png…04.png` and `assets/trailer.mp4` (H.264/AAC,
+  `+faststart`, ≤20s, refuses to write one over 8 MB), both at the game's own
+  size from `tools/game-size.sh` (960x720, 720x720 or 720x960). Footage whose
+  ratio is not the game's is refused; re-record it. It also rewrites
   `assets/info.json`'s `properties.screenshots`/`trailer_url`/`version` plus
   `released_at`/`Developer`/`Developer URL`/`Tags` (only via the matching flag
   or when still a `PLACEHOLDER:` value; otherwise reports what's still missing).
   The website's `scripts/game-release-date.mjs` supplies the exact
   `--released-at` date from the game's on-chain release transaction.
   `tools/rollout-store-assets.sh <game-dir>` copies it into a game checkout.
+- **`tools/game-size.sh [--scale FACTOR] [path/to/display.rs]`** — prints the
+  game's size as `<width>x<height>`, parsed from `GAME_WIDTH` / `GAME_HEIGHT`
+  in `src/display.rs`. `--scale 1.5` prints the capture size. Every media tool
+  takes its size from here. A game that has not been converted yet and has no
+  `src/display.rs` sets `GAME_SIZE=1280x720` in the environment instead.
 - **`fetch-cartridge.sh`** — downloads the flat `gamebient-game.tar.gz` from the
   latest GitHub release into `dist/assets/`. Non-fatal and private-repo-safe
   (resolves the asset through the GitHub API with `GH_TOKEN`).

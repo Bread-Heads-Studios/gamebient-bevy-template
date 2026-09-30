@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Builds the store assets the ColecoVision GX site renders on a game page
 # from an existing tools/record.sh capture, and rewrites assets/info.json:
-#   assets/screenshots/01..04.png  <- build/record/shots/{04,05,06,07}-*.png at 1280x720
-#   assets/trailer.mp4             <- build/record/clips/signature.mp4 (fallback 05-mid-play, 04-early-play)
+#   assets/screenshots/01..04.png  <- build/record/shots/{04,05,06,07}-*.png at the game's own size
+#   assets/trailer.mp4             <- build/record/clips/signature.mp4 (fallback 05-mid-play, 04-early-play),
+#                                     also at the game's own size
+# The size is tools/game-size.sh's: GAME_WIDTH x GAME_HEIGHT in src/display.rs,
+# or GAME_SIZE=1280x720 for a game not converted yet. Footage whose ratio is
+# not the game's is refused rather than squashed: re-run tools/record.sh.
 #   properties.screenshots / trailer_url / version, released_at (only when
 #   absent or --released-at given). Developer / Developer URL / Tags are only
 #   written with --set-*; missing ones are reported so a human fills them in.
@@ -28,8 +32,22 @@ while [ $# -gt 0 ]; do
 done
 [ -z "$RELEASED_AT" ] || [[ "$RELEASED_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "store-assets: --released-at must be YYYY-MM-DD" >&2; exit 2; }
 command -v ffmpeg >/dev/null 2>&1 || { echo "store-assets: ffmpeg not on PATH (brew install ffmpeg)" >&2; exit 1; }
+command -v ffprobe >/dev/null 2>&1 || { echo "store-assets: ffprobe not on PATH (brew install ffmpeg)" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "store-assets: python3 not on PATH" >&2; exit 1; }
 [ -f assets/info.json ] || { echo "store-assets: assets/info.json not found" >&2; exit 1; }
+
+# The game's own size; game-size.sh sits beside this script and reads $PWD/src/display.rs.
+SIZE="$("$(cd "$(dirname "$0")" && pwd)/game-size.sh")"
+W="${SIZE%x*}"; H="${SIZE#*x}"
+
+dims() {  # dims <image or video>: prints <width>x<height>
+  ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=x "$1"
+}
+same_aspect() {  # same_aspect <WxH>: true when it is the game's ratio, to within a pixel of rounding
+  local w="${1%x*}" h="${1#*x}"
+  local d=$(( w * H - h * W ))
+  [ "${d#-}" -le $(( W + H )) ]
+}
 
 SHOTS=build/record/shots; CLIPS=build/record/clips
 MAX_TRAILER_BYTES=8000000; MAX_TRAILER_SECONDS=20
@@ -47,9 +65,15 @@ for c in signature.mp4 05-mid-play.mp4 04-early-play.mp4; do
   [ -f "$CLIPS/$c" ] && { trailer_src="$CLIPS/$c"; break; }
 done
 
+# Refuse footage recorded at another ratio before anything is written.
+for f in "${picked[@]}" ${trailer_src:+"$trailer_src"}; do
+  d="$(dims "$f")"
+  same_aspect "$d" || { echo "store-assets: $f is $d, which is not the game's ${W}x${H} ratio; re-run tools/record.sh" >&2; exit 1; }
+done
+
 if [ $DRY -eq 1 ]; then
-  echo "would write ${#picked[@]} screenshots from: ${picked[*]}"
-  echo "would write trailer from: ${trailer_src:-<none>}"
+  echo "would write ${#picked[@]} screenshots at ${W}x${H} from: ${picked[*]}"
+  echo "would write trailer at ${W}x${H} from: ${trailer_src:-<none>}"
   exit 0
 fi
 
@@ -58,14 +82,14 @@ rm -f assets/screenshots/0[1-6].png
 i=0; urls=()
 for f in "${picked[@]}"; do
   i=$((i+1)); n=$(printf '%02d' "$i")
-  ffmpeg -nostdin -v error -y -i "$f" -vf "scale=1280:720:flags=lanczos" -frames:v 1 "assets/screenshots/$n.png"
+  ffmpeg -nostdin -v error -y -i "$f" -vf "scale=${W}:${H}:flags=lanczos" -frames:v 1 "assets/screenshots/$n.png"
   urls+=("$n.png")
 done
 
 trailer_written=0
 if [ -n "$trailer_src" ]; then
   ffmpeg -nostdin -v error -y -i "$trailer_src" -t "$MAX_TRAILER_SECONDS" \
-    -vf "scale=1280:720:flags=lanczos" -c:v libx264 -preset slow -crf 23 -pix_fmt yuv420p \
+    -vf "scale=${W}:${H}:flags=lanczos" -c:v libx264 -preset slow -crf 23 -pix_fmt yuv420p \
     -c:a aac -b:a 96k -movflags +faststart -f mp4 assets/trailer.mp4.tmp
   size=$(stat -f%z assets/trailer.mp4.tmp 2>/dev/null || stat -c%s assets/trailer.mp4.tmp)
   if [ "$size" -gt "$MAX_TRAILER_BYTES" ]; then
