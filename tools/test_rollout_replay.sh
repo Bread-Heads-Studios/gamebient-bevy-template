@@ -1121,7 +1121,7 @@ pub fn planned_taps() -> u32 {
     0
 }
 BOT
-perl -0pi -e 's/^use bevy::prelude::\*;\nuse bevy::window::\{PresentMode, WindowResolution\};\nuse gamebient_game::\{assets, game, ui\};\n/mod assets;\n#[cfg(any(feature = "record", feature = "autopilot"))]\nmod bot;\nmod game;\nmod ui;\n\nuse bevy::prelude::*;\nuse bevy::window::{PresentMode, WindowResolution};\n/' "$COPY_M/src/main.rs"
+perl -0pi -e 's/^use bevy::prelude::\*;\nuse gamebient_game::\{assets, display, game, ui\};\n/mod assets;\n#[cfg(any(feature = "record", feature = "autopilot"))]\nmod bot;\nmod display;\nmod game;\nmod ui;\n\nuse bevy::prelude::*;\n/' "$COPY_M/src/main.rs"
 grep -q '^mod assets;$' "$COPY_M/src/main.rs" \
   || fail "(m) setup: main.rs did not get its pre-port mod block back"
 grep -q '^#\[cfg(any(feature = "record", feature = "autopilot"))\]$' "$COPY_M/src/main.rs" \
@@ -1131,10 +1131,10 @@ bash "$TEMPLATE/tools/rollout-replay.sh" "$COPY_M" >"$SCRATCH_ROOT/m-output.txt"
 cat "$SCRATCH_ROOT/m-output.txt"
 
 # The plain mods import unconditionally...
-grep -q '^use gamebient_game::{assets, game, ui};$' "$COPY_M/src/main.rs" \
-  || fail "(m) main.rs has no unconditional 'use gamebient_game::{assets, game, ui};'"
+grep -q '^use gamebient_game::{assets, display, game, ui};$' "$COPY_M/src/main.rs" \
+  || fail "(m) main.rs has no unconditional 'use gamebient_game::{assets, display, game, ui};'"
 # ...with no attribute anywhere above it before the next real item.
-perl -0ne 'exit 1 if /#\[cfg\([^\n]*\)\]\s*\n\s*use gamebient_game::\{assets, game, ui\};/' "$COPY_M/src/main.rs" \
+perl -0ne 'exit 1 if /#\[cfg\([^\n]*\)\]\s*\n\s*use gamebient_game::\{assets, display, game, ui\};/' "$COPY_M/src/main.rs" \
   || fail "(m) the unconditional import inherited a #[cfg] from a removed mod line"
 # ...and the cfg-gated mod becomes its own cfg-gated use.
 perl -0ne 'exit 1 unless /#\[cfg\(any\(feature = "record", feature = "autopilot"\)\)\]\nuse gamebient_game::bot;/' "$COPY_M/src/main.rs" \
