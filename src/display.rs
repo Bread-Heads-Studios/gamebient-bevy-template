@@ -591,7 +591,7 @@ mod tests {
     fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         let entries = std::fs::read_dir(dir).unwrap_or_else(|e| {
             panic!(
-                "cannot read {}: {e}; set SIM_SOURCE_DIR to the directory that holds this game's sim files",
+                "cannot read {}: {e}; a game with no src/game/ lists its sim .rs files, one per line, in sim-sources.txt at the crate root (never edit this file)",
                 dir.display()
             )
         });
@@ -607,8 +607,9 @@ mod tests {
 
     /// Directory, relative to the crate root, whose `.rs` files must not
     /// read display state. Games with a flat `src/` layout (no `src/game/`)
-    /// point this at the directory that holds their sim files, never at
-    /// `src/` itself, which contains this file.
+    /// do not edit this: `src/` holds this file, and this file is copied
+    /// verbatim. They list their sim files in `sim-sources.txt` instead (see
+    /// `SIM_SOURCES_FILE`).
     const SIM_SOURCE_DIR: &str = "src/game";
 
     /// File, relative to the crate root, that replaces `SIM_SOURCE_DIR` when it
