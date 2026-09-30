@@ -59,9 +59,10 @@ if [ "$FLAT" = true ]; then
 else
   FIT_DEST=src/ui/fit.rs; SCORING=src/game/scoring.rs; HOST=src/game/host.rs
 fi
-# A template copy (it carries this script) keeps the template's own tests.
+# The template itself (or a copy of it) has init-game.sh at its root, which
+# every game deletes; it keeps the template's own tests.
 IS_TEMPLATE=false
-[ -f "$GAME/tools/rollout-aspect.sh" ] && IS_TEMPLATE=true
+[ -f "$GAME/init-game.sh" ] && IS_TEMPLATE=true
 
 # The crate name tests import: [lib] name, else the package name.
 LIB="$(perl -ne '
@@ -263,7 +264,7 @@ fi
 
 # 8. A game does not carry the template's own tests or rollout scripts.
 if [ "$IS_TEMPLATE" = true ]; then
-  echo "note: $GAME carries tools/rollout-aspect.sh (a template copy); its own tests stay"
+  echo "note: $GAME carries init-game.sh (a template copy); its own tests stay"
 else
   for f in "$GAME"/tools/test_*.sh "$GAME"/tools/rollout-*.sh; do
     if [ -e "$f" ]; then
@@ -300,15 +301,19 @@ if [ -f "$LIBRS" ]; then
   grep -qE '^pub mod frame;' "$LIBRS" || missing+=("\`pub mod frame;\`")
   if [ "$FLAT" = true ]; then
     grep -qE '^pub mod fit;' "$LIBRS" || missing+=("\`pub mod fit;\` (for src/fit.rs)")
-  elif ! grep -qE '^\s*pub mod fit;' "$GAME/src/ui/mod.rs" 2>/dev/null; then
-    missing+=("\`pub mod fit;\` in src/ui/mod.rs")
   fi
   if [ ${#missing[@]} -gt 0 ]; then
     joined="$(printf '%s, ' "${missing[@]}")"
     echo "HAND EDIT: src/lib.rs: declare ${joined%, }"
   fi
+  if [ "$FLAT" = false ] && ! grep -qE '^\s*pub mod fit;' "$GAME/src/ui/mod.rs" 2>/dev/null; then
+    echo "HAND EDIT: src/ui/mod.rs: declare \`pub mod fit;\`"
+  fi
+else
+  echo "HAND EDIT: src/lib.rs: this crate needs a lib target (the generated tests import \`$LIB::display\`, \`$LIB::ui::fit\`); add src/lib.rs declaring display, frame, game, ui and a [lib] in Cargo.toml"
 fi
 if [ "$FLAT" = true ]; then
+  echo "HAND EDIT: sim-sources.txt: list the sim .rs files (one per line)"
   echo "HAND EDIT: src/game.rs: re-export the modules so the copied files resolve unchanged: pub use crate::{replay, scoring, sim, states};"
 fi
 
@@ -328,13 +333,34 @@ find "$GAME/src" -name '*.rs' -not -path "$GAME/src/frame/*" -not -path "$GAME/s
         my $end = $i + 2 > $#l ? $#l : $i + 2;
         my @near = @l[$i .. $end];
         my $direct = $line =~ /With<Camera2d>/ || $line =~ /With<Camera>/;
-        my $by_ref = $line =~ /&(?:mut )?Camera(?=[,)>])/;
-        my $other = 0;
-        for my $n (@near) {
-          while ($n =~ /With<(?!Camera>|Camera2d>)/g) { $other = 1 }
-        }
-        next unless $direct || ($by_ref && !$other);
         my $start = $i - 3 < 0 ? 0 : $i - 3;
+        my $hi = $i + 4 > $#l ? $#l : $i + 4;
+        my $window = join("\n", @l[$start .. $hi]);
+        my $line_at = 0;
+        $line_at += length($l[$_]) + 1 for $start .. $i - 1;
+        # A `With<` counts only inside the Query<...> that holds the camera.
+        my $narrowed = sub {
+          my $before = substr($window, 0, $_[0]);
+          return 0 unless $before =~ /.*(?:Query|Single|Populated)</s;
+          my $at = $+[0];
+          my $depth = 1;
+          for (my $k = $at; $k < length($window); $k++) {
+            my $c = substr($window, $k, 1);
+            if ($c eq "<") {
+              $depth++;
+              return 1 if substr($window, 0, $k) =~ /With\z/
+                && substr($window, $k + 1) !~ /^(?:Camera|Camera2d)>/;
+            } elsif ($c eq ">") {
+              return 0 if --$depth == 0;
+            }
+          }
+          return 0;
+        };
+        my $by_ref = 0;
+        while ($line =~ /&(?:mut )?Camera(?=[,)>])/g) {
+          $by_ref = 1 unless $narrowed->($line_at + $-[0]);
+        }
+        next unless $direct || $by_ref;
         my $in_query = grep { /Query<|Single<|Populated</ } @l[$start .. $i];
         my $excluded = grep { /FrameCamera/ } @near;
         next unless $in_query && !$excluded;

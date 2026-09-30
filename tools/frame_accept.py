@@ -260,7 +260,10 @@ def shots_check(args):
                 )
             )
     elif not frame_on:
-        print(f"frame off: brightness relations do not apply; {bars or 'no bars measured'}")
+        if rect[2:] == window:
+            print("frame off: no bars at this window; nothing to check")
+        else:
+            print(f"frame off: brightness relations do not apply; {bars or 'no bars measured'}")
 
     if failures:
         print("FAIL")
@@ -424,8 +427,8 @@ def check_copies(game_arg):
         exact_tree(f".claude/skills/{skill}")
 
     # A game never carries the template's own tests or rollout scripts. A
-    # template copy (it has rollout-aspect.sh) is exempt.
-    if not (game / "tools/rollout-aspect.sh").is_file():
+    # template (it has init-game.sh, which every game deletes) is exempt.
+    if not (game / "init-game.sh").is_file():
         tools = game / "tools"
         stray = [
             p.name
