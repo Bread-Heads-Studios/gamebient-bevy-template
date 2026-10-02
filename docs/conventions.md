@@ -142,7 +142,9 @@ The short side is always 720, and `cargo test` fails on any other size.
   logical size, and Bevy lays UI out inside the camera viewport, so
   hardcoded `Val::Px` and `font_size` values hold on any display. The view
   is 960 UI pixels wide at 4:3 and 720 at 1:1 and 3:4: size a line of text
-  with `ui::fit::fit_font_size` when it could be wider than that.
+  with `ui::fit::fit_font_size(face, text, max, view_w)` (or
+  `face.fitted(text, max)`) when it could be wider than that. See
+  "Typography and cards".
 - **A camera of your own.** Any extra camera that renders to the window is
   letterboxed too. One that must not be (the cabinet frame) carries
   `FrameCamera` (`crate::frame::FrameCamera`). A camera that sets its own
@@ -233,8 +235,9 @@ per session) → `Playing` → `GameOver` → `Menu`. Every transition goes thro
 call `fade.request(target)` and gate input handlers on `fade.is_idle()`.
 
 Per-game work when building on the template:
-- **Title:** keep the text title, or switch to full-bleed artwork (see the
-  commented example in `src/ui/menu.rs`).
+- **Title:** follow the title anatomy in "Typography and cards": theme the
+  backdrop, lockup and prompt rail, or switch the lockup to full-bleed
+  artwork (see the commented example in `src/ui/menu.rs`).
 - **How to play:** replace the placeholder item in
   `src/ui/how_to_play.rs::spawn_how_to_play` with your game's real entities —
   spawn from the same meshes/materials gameplay uses, one `Spin` +
@@ -245,6 +248,101 @@ Per-game work when building on the template:
 - **Web boot:** `index.html` starts the engine on the "Click to Start"
   gesture; the wasm is prefetched behind the progress bar. Don't move
   `init()` back before the unlock.
+
+## Typography and cards
+
+The GX house rules for type and panels (the fleet spec is
+`docs/plans/2026-10-02-title-typography-pass.md` in the workspace). Files:
+
+| File | Copy into games | What it owns |
+|---|---|---|
+| `src/ui/fit.rs` | verbatim | `Face`, `fit_font_size`, `ui_width` |
+| `src/ui/card.rs` | verbatim | `CardStyle`, `card`, `card_with`, `CardIntro`, the 8 px scale |
+| `src/ui/studio_logo.rs` | verbatim | the Bread Heads card |
+| `src/ui/fonts.rs` + `src/ui/fonts/` | template, then the game's own faces | embedded faces, `UiFonts`, `install_fonts`, the TTF metric test |
+| `src/ui/theme.rs` | the game's own | palette, card styles, pause word |
+| `src/ui/backdrop.rs` | the game's own | the title backdrop motif |
+
+- **Two faces, one optional accent.** `fonts::DISPLAY` sets titles,
+  headlines, card titles and big numbers; `fonts::BODY` sets prompts, the
+  HUD, labels and card bodies. A game may add one `ACCENT` for a single job
+  (a script subtitle, an epitaph). Nothing in the UI renders in Bevy's
+  default Fira Mono. Set a face explicitly on every `Text`:
+  `DISPLAY.font(size)`, `BODY.fitted(text, max)`, or `fonts::body(size)`.
+  `Face::font` also asks for the face's real weight, so the shaper never
+  synthesises another.
+- **Faces are embedded.** Each TTF sits in `src/ui/fonts/` beside its
+  licence (`<Family>-OFL.txt`, or Apache `LICENSE.txt`), listed in
+  `src/ui/fonts/README.md` with its source and how it was cut. Google Fonts
+  ships most families as variable fonts only: cut a static instance at the
+  named weight with `fonttools varLib.instancer` (and subset to Latin-1
+  with `pyftsubset`), and keep no extra weights. `fonts.rs` declares each
+  as a `Face` const with `include_bytes!` and a fixed `uuid_handle!`, and
+  `fonts::install_fonts` inserts them into `Assets<Font>`. `UiPlugin` runs
+  it from `Plugin::finish`, not `Startup`: the initial state's `OnEnter`
+  (the studio logo's text) runs in `StateTransition`, which Bevy runs
+  before `PreStartup`.
+- **Never touch the default font slot** (`AssetId::<Font>::default()`).
+  The cabinet frame's marquee and caption `Text2d` render in it, and so
+  does any width-sensitive in-world text a game keeps. A face replaces the
+  default only where the UI names it.
+- **The fit metric is per face and measured.** `Face::advance_em` is the
+  worst-case average advance per character, in ems, for uppercase plus
+  digits text: at least the A-Z 0-9 average, rounded up. `fit_font_size`
+  multiplies it by the character count. `fonts::tests` parses every
+  embedded TTF with `ttf-parser` (a dev-dependency pinned to the
+  lockfile's version) and checks that, for each string in `tests::fitted()`
+  (every string the UI renders at a fitted size, with its face), the real
+  advance (the sum of h-advances over units-per-em) is at most
+  `chars * advance_em`, and that `advance_em` is within 0.03 of the A-Z 0-9
+  average so titles do not shrink for nothing. Add a string to `fitted()`
+  whenever you fit one. The template's values: Space Grotesk Bold 0.63,
+  Inter SemiBold 0.68, Fraunces Black 0.71, Fraunces Italic 0.64.
+- **Text spawned from game code reads `Option<Res<UiFonts>>`.** The replay
+  verifier and the `tests/` harnesses build `GamePlugin` without
+  `UiPlugin`, so `UiFonts` does not exist there. A pause overlay, popup or
+  banner spawned under `src/game/` takes `fonts: Option<Res<UiFonts>>` and
+  uses `fonts::body_or_default(fonts.as_deref(), size)` /
+  `display_or_default`, which fall back to the default font. Never a
+  required `Res<UiFonts>`: it panics the verifier. Reading `UiFonts` only
+  ever chooses a font; it must never decide anything the sim sees.
+- **Never animate `font_size`.** Every new size allocates a glyph atlas
+  that is never freed. Animate `UiTransform` scale or rotation, or the
+  colour's alpha (the shared `Pulse`). Fitted sizes are computed once, at
+  spawn.
+- **Title anatomy** (the same in every game; `src/ui/menu.rs` is the
+  reference):
+  - **Backdrop:** live or animated and on-theme, never a flat fill: the game
+    world in attract mode, a cosmetic copy of it (menu-marker entities,
+    never sim markers, despawned on exit), or a procedural motif
+    (`backdrop.rs`: a dusk gradient, horizon glow and a drifting grid).
+  - **Lockup** in the upper ~45%: the display face with depth
+    (`TextShadow`, stacked offset copies, or a themed plate), plus one
+    tagline.
+  - **Prompt rail** at the bottom, on a themed plate (`theme::RAIL`): a
+    verb prompt that names the button, pulsing with the shared `Pulse`
+    (`menu::PROMPT_PULSE`), one controls line, and the best score as a chip.
+  - **Settled by t = 1.0 s**, because autopilot shots fire then. One
+    primary moving layer plus the prompt pulse; ambient loops at 0.5 Hz or
+    slower; nothing flashes faster than 3 Hz.
+- **Cards share one primitive.** `theme.rs` defines the game's
+  `CardStyle`s (fill, optional top-to-bottom gradient, a 2-3 px accent
+  border, radius, shadow); `card(&style)` builds a centred column on the
+  8 px scale and `card_with(&style, node)` takes your own layout (the
+  style overrides its `border` and `border_radius`). Add `card::intro()`
+  for the house entrance, an ease-out scale-and-rise over at most 250 ms
+  on `UiTransform`, driven by `Time<Real>` in `card::animate_card_intro`.
+  Space with `card::{S1, S2, S3, S4, S6}` (8/16/24/32/48). Game over is a
+  card with the score as the hero number and the best as a chip or a NEW
+  BEST badge; pause is a card with a themed word (`theme::PAUSE_WORD`)
+  and the two hints, ESC resume and ENTER quit to title.
+- **Contrast.** Text sits on a plate or scrim wherever the backdrop is
+  busy. Body text is at least 15 px at a 720 short side.
+- **The studio logo is shared.** `studio_logo.rs` is the same in every
+  game: Fraunces Black and Fraunces Italic (`fonts::STUDIO`,
+  `fonts::STUDIO_ITALIC`, whose ids never change) on a crust-to-black
+  radial gradient, with a 2% scale settle over the hold. Sync it from the
+  template; never theme it.
 
 ## Controls (the Gamebient canon)
 

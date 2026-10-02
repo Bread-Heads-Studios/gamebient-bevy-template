@@ -3,7 +3,11 @@ use bevy::prelude::*;
 use crate::game::audio::SfxEvent;
 use crate::game::input::GameInput;
 use crate::game::states::GameState;
-use crate::ui::transition::{Pulse, ScreenFade};
+use crate::ui::card::{S1, S2, S4, card_with};
+use crate::ui::fonts::{BODY, DISPLAY};
+use crate::ui::menu::PROMPT_PULSE;
+use crate::ui::theme::{MUTED, NIGHT, PAPER, RAIL, SIGNAL, TITLE_SHADOW};
+use crate::ui::transition::ScreenFade;
 
 /// Set once the player has seen the how-to-play screen this session; never
 /// reset, so the screen shows exactly once per boot.
@@ -36,6 +40,11 @@ pub struct ItemLabel {
 
 const LABEL_WIDTH: f32 = 170.0;
 
+/// Screen header. TEMPLATE NOTE: a themed header ("PACKING SLIP", "SITE
+/// BRIEFING").
+pub const HEADLINE: &str = "HOW TO PLAY";
+pub const LAUNCH_PROMPT: &str = "PRESS ENTER TO START";
+
 /// Marks the how-to-play screen as seen for the rest of the session.
 pub fn mark_seen(mut seen: ResMut<SeenHowToPlay>) {
     seen.0 = true;
@@ -56,42 +65,66 @@ pub fn spawn_how_to_play(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // Headline and launch prompt.
+    // A vignette that frames the showcase without covering it (UI draws
+    // over the 3D view, so the centre stays clear).
     commands.spawn((
         HowToPlayScreen,
         Node {
+            position_type: PositionType::Absolute,
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::SpaceBetween,
-            padding: UiRect::axes(Val::Px(0.0), Val::Px(40.0)),
             ..default()
         },
-        children![
-            (
-                Text::new("HOW TO PLAY"),
-                TextFont {
-                    font_size: 48.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.2, 0.8, 1.0)),
-            ),
-            (
-                Text::new("PRESS ENTER TO START"),
-                TextFont {
-                    font_size: 26.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.9, 0.95, 1.0)),
-                Pulse {
-                    speed: 3.0,
-                    min: 0.25,
-                    max: 1.0,
-                },
-            ),
-        ],
+        BackgroundGradient::from(RadialGradient {
+            position: UiPosition::CENTER,
+            shape: RadialGradientShape::FarthestCorner,
+            stops: vec![
+                ColorStop::new(NIGHT.with_alpha(0.0), Val::Percent(35.0)),
+                ColorStop::new(NIGHT.with_alpha(0.85), Val::Percent(100.0)),
+            ],
+            ..default()
+        }),
     ));
+
+    // Headline and launch prompt.
+    commands
+        .spawn((
+            HowToPlayScreen,
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::SpaceBetween,
+                padding: UiRect::axes(Val::Px(0.0), Val::Px(S4 + S1)),
+                ..default()
+            },
+        ))
+        .with_children(|screen| {
+            screen.spawn((
+                Text::new(HEADLINE),
+                DISPLAY.fitted(HEADLINE, 52.0),
+                TextColor(PAPER),
+                TextShadow {
+                    offset: Vec2::new(0.0, 5.0),
+                    color: TITLE_SHADOW,
+                },
+            ));
+            screen
+                .spawn(card_with(
+                    &RAIL,
+                    Node {
+                        padding: UiRect::axes(Val::Px(S4), Val::Px(S2)),
+                        ..default()
+                    },
+                ))
+                .with_child((
+                    Text::new(LAUNCH_PROMPT),
+                    BODY.font(26.0),
+                    TextColor(PAPER),
+                    PROMPT_PULSE,
+                ));
+        });
 
     // Placeholder showcase item: swap for your game's real entities.
     let item = commands
@@ -119,21 +152,11 @@ pub fn spawn_how_to_play(
             ..default()
         },
         children![
-            (
-                Text::new("YOUR ITEM"),
-                TextFont {
-                    font_size: 17.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.2, 0.8, 1.0)),
-            ),
+            (Text::new("YOUR ITEM"), BODY.font(18.0), TextColor(SIGNAL),),
             (
                 Text::new("Describe it here"),
-                TextFont {
-                    font_size: 13.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.55, 0.6, 0.7)),
+                BODY.font(15.0),
+                TextColor(MUTED),
             ),
         ],
     ));

@@ -1,10 +1,15 @@
+use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 
+pub mod backdrop;
+pub mod card;
 pub mod fit;
+pub mod fonts;
 pub mod how_to_play;
 pub mod hud;
 pub mod menu;
 pub mod studio_logo;
+pub mod theme;
 pub mod transition;
 
 use crate::game::states::GameState;
@@ -19,6 +24,8 @@ impl Plugin for UiPlugin {
             .insert_resource(transition::ScreenFade::boot())
             .add_systems(Startup, transition::spawn_fade_overlay)
             .add_systems(Update, (transition::update_fade, transition::pulse_text))
+            // Card entrances and the title backdrop's drift (presentation).
+            .add_systems(Update, (card::animate_card_intro, backdrop::drift_grid))
             // Studio logo boot screen
             .add_systems(
                 OnEnter(GameState::StudioLogo),
@@ -64,5 +71,14 @@ impl Plugin for UiPlugin {
             // In-run HUD
             .add_systems(OnEnter(GameState::Playing), hud::spawn_hud)
             .add_systems(Update, hud::update_hud.run_if(in_state(GameState::Playing)));
+    }
+
+    /// Installs the embedded fonts before the first frame. Not a `Startup`
+    /// system: the initial state's `OnEnter` (the studio logo's text) runs
+    /// in `StateTransition`, ahead of `PreStartup`. See `fonts::install_fonts`.
+    fn finish(&self, app: &mut App) {
+        app.world_mut()
+            .run_system_once(fonts::install_fonts)
+            .expect("install_fonts runs once Assets<Font> exists (TextPlugin)");
     }
 }

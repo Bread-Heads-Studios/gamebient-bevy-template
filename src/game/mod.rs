@@ -188,7 +188,7 @@ fn cleanup_game_entities(mut commands: Commands, query: Query<Entity, With<GameE
     }
 }
 
-/// Marker for the "PAUSED" overlay so it can be despawned on unpause.
+/// Marker for the pause overlay so it can be despawned on unpause.
 #[derive(Component)]
 struct PauseOverlay;
 
@@ -256,13 +256,23 @@ fn toggle_pause(
     sfx.write(audio::SfxEvent::Pause);
 }
 
-/// Shows or hides the "PAUSED" overlay whenever `Paused` changes, whoever
-/// changed it (player input or a host command).
+/// Shows or hides the pause overlay whenever `Paused` changes, whoever
+/// changed it (player input or a host command): the run dimmed behind a
+/// card with the game's themed pause word and the two hints.
+///
+/// Fonts are read as `Option<Res<UiFonts>>`: this lives in game code, and
+/// the `tests/` harnesses build `GamePlugin` without `UiPlugin`.
+///
+/// TEMPLATE NOTE: the word and the card are themed in `src/ui/theme.rs`
+/// (`PAUSE_WORD`, `CARD`); keep ESC resume / ENTER quit.
 fn sync_pause_overlay(
     mut commands: Commands,
     paused: Res<states::Paused>,
+    fonts: Option<Res<crate::ui::fonts::UiFonts>>,
     overlay_query: Query<Entity, With<PauseOverlay>>,
 ) {
+    use crate::ui::{card, fonts, theme};
+
     if !paused.is_changed() {
         return;
     }
@@ -270,47 +280,66 @@ fn sync_pause_overlay(
         if !overlay_query.is_empty() {
             return;
         }
+        let fonts = fonts.as_deref();
         commands
             .spawn((
                 PauseOverlay,
                 Node {
                     width: Val::Percent(100.0),
                     height: Val::Percent(100.0),
-                    flex_direction: FlexDirection::Column,
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
-                    row_gap: Val::Px(16.0),
                     position_type: PositionType::Absolute,
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
+                BackgroundColor(theme::INK.with_alpha(0.62)),
                 GlobalZIndex(100),
             ))
             .with_children(|parent| {
-                parent.spawn((
-                    Text::new("PAUSED"),
-                    TextFont {
-                        font_size: 64.0,
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.2, 0.8, 1.0)),
-                ));
-                parent.spawn((
-                    Text::new("ESC: RESUME"),
-                    TextFont {
-                        font_size: 22.0,
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.9, 0.95, 1.0)),
-                ));
-                parent.spawn((
-                    Text::new("ENTER: QUIT TO TITLE"),
-                    TextFont {
-                        font_size: 22.0,
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.5, 0.6, 0.7)),
-                ));
+                parent
+                    .spawn((
+                        card::card_with(
+                            &theme::CARD,
+                            Node {
+                                flex_direction: FlexDirection::Column,
+                                align_items: AlignItems::Center,
+                                padding: UiRect::axes(Val::Px(card::S6), Val::Px(card::S4)),
+                                row_gap: Val::Px(card::S2),
+                                ..default()
+                            },
+                        ),
+                        card::intro(),
+                    ))
+                    .with_children(|card| {
+                        card.spawn((
+                            Text::new(theme::PAUSE_WORD),
+                            fonts::display_or_default(fonts, 60.0),
+                            TextColor(theme::PAPER),
+                            TextShadow {
+                                offset: Vec2::new(0.0, 5.0),
+                                color: theme::TITLE_SHADOW,
+                            },
+                        ));
+                        card.spawn((
+                            Node {
+                                width: Val::Px(card::S6 + card::S2),
+                                height: Val::Px(4.0),
+                                border_radius: BorderRadius::MAX,
+                                ..default()
+                            },
+                            BackgroundColor(theme::CORAL),
+                        ));
+                        card.spawn((
+                            Text::new(theme::PAUSE_RESUME),
+                            fonts::body_or_default(fonts, 22.0),
+                            TextColor(theme::PAPER),
+                        ));
+                        card.spawn((
+                            Text::new(theme::PAUSE_QUIT),
+                            fonts::body_or_default(fonts, 18.0),
+                            TextColor(theme::MUTED),
+                        ));
+                    });
             });
     } else {
         for entity in &overlay_query {
