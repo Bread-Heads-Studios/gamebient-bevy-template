@@ -110,6 +110,38 @@ one-responsibility files.
   added in `main.rs`) and web hosts both react. See "Cabinet frame" in
   `docs/conventions.md`.
 
+## Typography and cards
+
+Full rules: "Typography and cards" in `docs/conventions.md`.
+
+- **Two faces, one optional accent**, embedded in `src/ui/fonts.rs`:
+  `DISPLAY` (titles, headlines, big numbers) and `BODY` (prompts, HUD,
+  labels), plus the shared studio faces `STUDIO` / `STUDIO_ITALIC`. Each
+  is a `Face` (`include_bytes!` TTF, fixed `uuid_handle!`, real weight,
+  measured `advance_em`) with its licence beside it in `src/ui/fonts/`.
+  Set a face on every UI `Text` (`DISPLAY.font(size)`,
+  `BODY.fitted(text, max)`); nothing in the UI uses Fira Mono.
+- **Never touch the default font slot**: the cabinet frame's marquee and
+  caption use it.
+- **Fitting is per face.** `fit_font_size(face, text, max, view_w)` uses
+  `face.advance_em`; `fonts::tests` parses the TTFs and fails if a string
+  in `tests::fitted()` is wider than the declared metric. Add every string
+  you fit to that list.
+- **Text spawned from `src/game/` takes `Option<Res<UiFonts>>`** and
+  `fonts::body_or_default` / `display_or_default`: the verifier has no
+  `UiPlugin`. Never a required `Res`.
+- **Never animate `font_size`** (each size leaks a glyph atlas); animate
+  `UiTransform` or alpha.
+- **Title anatomy:** animated on-theme backdrop, display lockup with depth
+  in the upper ~45%, a prompt rail on a plate (pulsing verb prompt naming
+  the button, one controls line, best chip), settled by t = 1.0 s.
+- **Cards:** one `CardStyle` set per game in `src/ui/theme.rs`, built with
+  `card::card` / `card_with`, entering with `card::intro()` (<= 250 ms,
+  `UiTransform`), spaced on the 8 px scale (`card::S1..S6`). Game over and
+  pause are cards.
+- `fit.rs`, `card.rs` and `studio_logo.rs` are copied into games verbatim;
+  `fonts.rs`, `theme.rs`, `backdrop.rs` and the screens are the game's own.
+
 ## Build / CI / release model
 
 - **Scripts:** `build.sh <pi|x86|web>` compiles one target (`web` delegates to
