@@ -2,6 +2,9 @@ use bevy::prelude::*;
 
 use crate::game::GameEntity;
 use crate::game::scoring::GameData;
+use crate::ui::card::S2;
+use crate::ui::fonts::BODY;
+use crate::ui::theme::PAPER;
 
 #[derive(Component)]
 pub struct ScoreText;
@@ -13,10 +16,18 @@ pub fn spawn_hud(mut commands: Commands) {
         GameEntity,
         ScoreText,
         Text::new("Score: 0  Lives: 3"),
+        // TEMPLATE NOTE: the HUD is set in the body face; theme its colour
+        // (and a plate, if the world behind it is busy) in `theme.rs`.
+        BODY.font(22.0),
+        TextColor(PAPER),
+        TextShadow {
+            offset: Vec2::new(0.0, 2.0),
+            color: Color::srgba(0.0, 0.0, 0.0, 0.7),
+        },
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(16.0),
-            left: Val::Px(16.0),
+            top: Val::Px(S2),
+            left: Val::Px(S2),
             ..default()
         },
     ));

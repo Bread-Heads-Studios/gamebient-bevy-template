@@ -109,6 +109,12 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 # that walks the library forward must fail to resolve, not succeed quietly.
 wasm-bindgen = { version = "=0.2.108", optional = true }
 
+[dev-dependencies]
+# Reads the embedded TTFs in `ui::fonts::tests` to hold each face's declared
+# `advance_em` to the real glyph advances. Already in the lockfile through
+# Bevy's text stack; pinned to that version so it adds nothing.
+ttf-parser = "=0.25.1"
+
 [profile.dev]
 opt-level = 1
 
