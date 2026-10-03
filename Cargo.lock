@@ -2458,6 +2458,7 @@ dependencies = [
  "rand_xoshiro",
  "ttf-parser",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

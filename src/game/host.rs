@@ -17,6 +17,10 @@
 //! | host → game | pause / resume         | only while `Playing`; overlay follows  |
 //! | host → game | mute / unmute          | `GlobalVolume` + live sinks            |
 //!
+//! A developer can also mute a local run: `GX_MUTE=1` natively, `?mute=1` on
+//! the web page. That [`LocalMute`] silences sinks only, so the recorder still
+//! captures full audio, and a host `unmute` can't undo it.
+//!
 //! Hosts treat everything here as untrusted (a score is not a leaderboard
 //! entry); it exists for analytics, kiosk UX and the play-bonus timer. The
 //! `run` event is the one a verifier actually consumes, replaying its ticks
@@ -24,6 +28,7 @@
 
 use bevy::audio::{AudioSinkPlayback, Volume};
 use bevy::prelude::*;
+use bevy::transform::TransformSystems;
 use gamebient_input::{HostCommand, HostEvent};
 
 use crate::frame::Highlight;
@@ -37,11 +42,59 @@ use crate::game::states::{GameState, Paused};
 #[derive(Resource, Default)]
 pub struct Muted(pub bool);
 
+/// Set at startup by `GX_MUTE=1` (native) or `?mute=1` (web) so test runs
+/// stay quiet. Mutes sinks only and leaves `GlobalVolume` alone, so the
+/// recorder can still hear what a player would.
+#[derive(Resource, Default)]
+pub struct LocalMute(pub bool);
+
+impl LocalMute {
+    pub fn from_launch() -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        let on = env_mutes(std::env::var("GX_MUTE").ok().as_deref());
+        #[cfg(target_arch = "wasm32")]
+        let on = web_sys::window()
+            .and_then(|w| w.location().search().ok())
+            .is_some_and(|q| query_mutes(&q));
+        Self(on)
+    }
+}
+
+/// Whether the recorder should treat a sink as muted. A sink muted only by
+/// [`LocalMute`] is recorded at full volume: the developer silenced their
+/// speakers, not the footage.
+pub fn recorded_mute(sink_muted: bool, host_muted: bool, local_muted: bool) -> bool {
+    sink_muted && (host_muted || !local_muted)
+}
+
+/// `GX_MUTE` is on for any non-empty value but `0`.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn env_mutes(value: Option<&str>) -> bool {
+    value.is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+/// `?mute=1` (or bare `?mute`) in a page's query string.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn query_mutes(search: &str) -> bool {
+    search
+        .trim_start_matches('?')
+        .split('&')
+        .any(|pair| match pair.split_once('=') {
+            Some((key, value)) => key == "mute" && env_mutes(Some(value)),
+            None => pair == "mute",
+        })
+}
+
 pub struct HostBridgePlugin;
 
 impl Plugin for HostBridgePlugin {
     fn build(&self, app: &mut App) {
+        let local = LocalMute::from_launch();
+        if local.0 {
+            info!("GX_MUTE: audio muted for this run");
+        }
         app.init_resource::<Muted>()
+            .insert_resource(local)
             // Registered here, in the half every build shares, so a sim
             // system can write a highlight under the headless verifier.
             .add_message::<Highlight>()
@@ -49,11 +102,20 @@ impl Plugin for HostBridgePlugin {
                 Update,
                 (
                     apply_host_commands,
-                    mute_new_sinks.run_if(|m: Res<Muted>| m.0),
+                    mute_new_sinks.run_if(|m: Res<Muted>, l: Res<LocalMute>| m.0 || l.0),
                     report_score.run_if(resource_changed::<GameData>),
                     report_paused.run_if(resource_changed::<Paused>),
                     report_highlight,
                 ),
+            )
+            // Before the audio set (which runs after transform propagation),
+            // so a sound queued this frame starts muted instead of blipping
+            // for a frame until `mute_new_sinks` catches its sink.
+            .add_systems(
+                PostUpdate,
+                mute_new_players
+                    .run_if(|m: Res<Muted>, l: Res<LocalMute>| m.0 || l.0)
+                    .before(TransformSystems::Propagate),
             )
             .add_systems(OnEnter(GameState::Playing), report_started)
             .add_systems(OnEnter(GameState::GameOver), report_game_over);
@@ -68,6 +130,7 @@ fn apply_host_commands(
     state: Res<State<GameState>>,
     mut paused: ResMut<Paused>,
     mut muted: ResMut<Muted>,
+    local: Res<LocalMute>,
     // `GlobalVolume` is only inserted by `AudioPlugin`, which the headless
     // build (no window, no audio) never adds — read as optional so a host
     // `mute` doesn't panic there.
@@ -92,7 +155,7 @@ fn apply_host_commands(
                     volume.volume = Volume::Linear(if *mute { 0.0 } else { 1.0 });
                 }
                 for mut sink in &mut sinks {
-                    if *mute {
+                    if *mute || local.0 {
                         sink.mute();
                     } else {
                         sink.unmute();
@@ -105,7 +168,15 @@ fn apply_host_commands(
     }
 }
 
-/// Sinks that start while muted (music crossfades, SFX) are muted too.
+/// Sounds queued while muted are created with a muted sink.
+fn mute_new_players(mut players: Query<&mut PlaybackSettings, Added<PlaybackSettings>>) {
+    for mut settings in &mut players {
+        settings.muted = true;
+    }
+}
+
+/// Sinks that start while muted (host or local; music crossfades, SFX) are
+/// muted too.
 fn mute_new_sinks(mut sinks: Query<&mut AudioSink, Added<AudioSink>>) {
     for mut sink in &mut sinks {
         sink.mute();
@@ -155,6 +226,32 @@ mod tests {
         let events = app.world().resource::<Messages<HostEvent>>();
         let mut cursor = events.get_cursor();
         cursor.read(events).cloned().collect()
+    }
+
+    #[test]
+    fn gx_mute_is_on_for_any_value_but_zero() {
+        assert!(env_mutes(Some("1")));
+        assert!(env_mutes(Some("true")));
+        assert!(!env_mutes(Some("0")));
+        assert!(!env_mutes(Some("")));
+        assert!(!env_mutes(None));
+    }
+
+    #[test]
+    fn mute_query_parameter_is_found_among_others() {
+        assert!(query_mutes("?mute=1"));
+        assert!(query_mutes("?debug=1&mute"));
+        assert!(!query_mutes("?mute=0"));
+        assert!(!query_mutes("?unmute=1"));
+        assert!(!query_mutes(""));
+    }
+
+    #[test]
+    fn recorder_hears_through_a_local_mute_only() {
+        assert!(!recorded_mute(true, false, true), "local mute alone");
+        assert!(recorded_mute(true, true, true), "host mute still silences");
+        assert!(recorded_mute(true, true, false));
+        assert!(!recorded_mute(false, false, false));
     }
 
     #[test]

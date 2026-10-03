@@ -172,6 +172,8 @@ pub fn capture_audio(
     rec: Res<Recorder>,
     sources: Res<Assets<AudioSource>>,
     global: Option<Res<GlobalVolume>>,
+    host_mute: Option<Res<crate::game::host::Muted>>,
+    local_mute: Option<Res<crate::game::host::LocalMute>>,
     default_scale: Option<Res<DefaultSpatialScale>>,
     players: Query<(
         Entity,
@@ -273,6 +275,11 @@ pub fn capture_audio(
             cap.close(entity, now, Close::Silent, wall_dt);
             continue;
         }
+        let muted = crate::game::host::recorded_mute(
+            muted,
+            host_mute.as_ref().is_some_and(|m| m.0),
+            local_mute.as_ref().is_some_and(|m| m.0),
+        );
         let gain = if muted { 0.0 } else { volume };
         let (gl, gr) = if settings.spatial {
             let scale = settings

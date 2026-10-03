@@ -208,3 +208,6 @@ These cost real debugging time on the project this template was extracted from:
   it, and a game with any other capture feature makes it imply `capture` in
   `Cargo.toml` (docs/conventions.md, "Capture builds stay windowed"). `GX_WINDOW_SIZE=WxH`
   forces a window of that size on any native build.
+- **`GX_MUTE=1` (native) or `?mute=1` (web) starts a run silent.** It mutes
+  sinks only (`game::host::LocalMute`), so `record` footage keeps full audio
+  and a host `unmute` can't undo it. Set it whenever an agent launches a game.
