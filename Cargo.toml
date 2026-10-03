@@ -103,6 +103,9 @@ bevy = { version = "0.18", features = ["bevy_gilrs", "wayland", "x11"] }
 # (.cargo/config.toml sets --cfg getrandom_backend="wasm_js")
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.3", features = ["wasm_js"] }
+# Reads `?mute=1` from the page URL (game::host::LocalMute). Already in the
+# lockfile through Bevy's web backend.
+web-sys = { version = "0.3", features = ["Location", "Window"] }
 # Pinned EXACTLY (`=`), not as a caret range: install.sh and both workflows
 # install wasm-bindgen-cli@0.2.108, and a CLI/lib skew produces a bundle that
 # fails to load at runtime with nothing in CI to catch it. A `cargo update`
