@@ -65,6 +65,9 @@ jobs:
         working-directory: tools
         run: python3 -m unittest test_cut_clips -v
 
+      - name: Entitlement middleware tests
+        run: node --test tools/test_entitlement.mjs
+
       - name: Game size tests
         run: tools/test_game_size.sh
 
