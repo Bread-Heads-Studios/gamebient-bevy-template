@@ -16,7 +16,7 @@
             { "uri": "https://gamebient-game.vercel.app/assets/cartridge.png", "type": "image/png" }
         ],
         "category": "game",
-        "game_url": "https://gamebient-game.vercel.app",
+        "game_url": "https://gamebient-game.vercel.app/full/",
         "demo_url": "https://gamebient-game.vercel.app",
         "verify_url": "https://gamebient-game.vercel.app/verify.zip",
         "binary_url": "https://gamebient-game.vercel.app/assets/gamebient-game.tar.gz",
