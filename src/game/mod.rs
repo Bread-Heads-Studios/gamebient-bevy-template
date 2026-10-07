@@ -3,6 +3,7 @@ use bevy::prelude::*;
 pub mod audio;
 #[cfg(feature = "autopilot")]
 pub mod autopilot;
+pub mod demo;
 pub mod host;
 pub mod input;
 pub mod player;
@@ -119,6 +120,21 @@ impl Plugin for GamePlugin {
                 sim::restore_tick_frame_while_paused
                     .after(sim::SimSet)
                     .run_if(in_state(GameState::Playing).and(|p: Res<states::Paused>| p.0)),
+            )
+            // The demo bundle's content cap. After the sim so the capped
+            // tick is simulated and recorded in full; `run_not_over` keeps it
+            // from firing twice. Both modes: the headless verifier is never
+            // built with `demo`; replay apps carry `DemoCutOff` and skip it.
+            .add_systems(
+                FixedUpdate,
+                demo::end_demo
+                    .after(sim::SimSet)
+                    .run_if(
+                        in_state(GameState::Playing)
+                            .and(sim::run_not_over)
+                            .and(not(resource_exists::<demo::DemoCutOff>)),
+                    )
+                    .run_if(|| cfg!(feature = "demo")),
             )
             .add_systems(
                 OnExit(GameState::Playing),

@@ -58,6 +58,7 @@ const MUSIC: &[(GameState, Option<&str>)] = &[
     (GameState::HowToPlay, None),
     (GameState::Playing, None),
     (GameState::GameOver, None),
+    (GameState::DemoEnd, None),
 ];
 
 /// Currently-playing track path, if any.

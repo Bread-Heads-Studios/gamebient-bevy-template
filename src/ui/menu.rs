@@ -1,11 +1,13 @@
 use bevy::prelude::*;
 
 use crate::game::audio::SfxEvent;
+use crate::game::demo;
 use crate::game::input::GameInput;
 use crate::game::scoring::GameData;
 use crate::game::states::GameState;
 use crate::ui::backdrop::spawn_backdrop;
 use crate::ui::card::{S1, S2, S4, S6, card, card_with, chip_node, intro};
+use crate::ui::demo_end::spawn_demo_tag;
 use crate::ui::fonts::{BODY, DISPLAY};
 use crate::ui::how_to_play::{SeenHowToPlay, start_target};
 use crate::ui::theme::{self, BADGE, CHIP, CORAL, MUTED, PAPER, RAIL, SIGNAL, TITLE_SHADOW};
@@ -108,6 +110,9 @@ pub fn spawn_menu(mut commands: Commands, data: Res<GameData>) {
                     BODY.fitted(TAGLINE, 20.0),
                     TextColor(SIGNAL),
                 ));
+                if demo::DEMO {
+                    spawn_demo_tag(lockup);
+                }
             });
 
             // Prompt rail: themed plate, pulsing verb prompt, one controls
@@ -223,6 +228,13 @@ pub fn spawn_game_over(mut commands: Commands, data: Res<GameData>) {
                             TextColor(SIGNAL),
                         ));
                     }
+                    if demo::DEMO {
+                        card.spawn(card_with(&CHIP, chip_node())).with_child((
+                            Text::new(crate::ui::demo_end::FULL_GAME_LINE),
+                            BODY.font(14.0),
+                            TextColor(MUTED),
+                        ));
+                    }
                 });
             root.spawn(card_with(
                 &RAIL,
@@ -262,7 +274,7 @@ pub fn menu_input(
     }
     let target = match state.get() {
         GameState::Menu => Some(start_target(seen.0)),
-        GameState::GameOver => Some(GameState::Menu),
+        GameState::GameOver | GameState::DemoEnd => Some(GameState::Menu),
         _ => None,
     };
     if let Some(t) = target

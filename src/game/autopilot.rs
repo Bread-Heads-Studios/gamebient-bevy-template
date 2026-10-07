@@ -242,7 +242,7 @@ fn drive_autopilot(
             }
             drive_bot(t, &mut virt, &mut scores, &player);
         }
-        GameState::GameOver => {
+        GameState::GameOver | GameState::DemoEnd => {
             virt.set_held(Buttons::NONE);
             if t > 1.0 && auto.once("shot") {
                 shot(&mut commands, "09-game-over");
