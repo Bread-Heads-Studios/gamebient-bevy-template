@@ -41,6 +41,7 @@ export default async function middleware(request: Request): Promise<Response | u
         location: url.pathname + url.search,
         "set-cookie": cookieHeader(t),
         "cache-control": "no-store",
+        "referrer-policy": "no-referrer",
       },
     });
   }
