@@ -27,7 +27,7 @@ function forbidden(reason: string): Response {
 }
 
 export default async function middleware(request: Request): Promise<Response> {
-  const { verifyToken, splitFullPath } = await entitlement;
+  const { verifyToken, splitFullPath, cacheControlFor } = await entitlement;
   const pubkey = process.env.GX_ENTITLEMENT_PUBKEY;
   if (!pubkey) return forbidden("unconfigured");
   const url = new URL(request.url);
@@ -42,7 +42,7 @@ export default async function middleware(request: Request): Promise<Response> {
   return new Response(null, {
     headers: {
       "x-middleware-rewrite": target.toString(),
-      "cache-control": "no-store",
+      "cache-control": cacheControlFor(split.rest),
       "referrer-policy": "no-referrer",
     },
   });

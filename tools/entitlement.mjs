@@ -68,6 +68,15 @@ export async function verifyToken(token, publicKeyB64, ctx) {
   return { ok: true, payload };
 }
 
+/** Cache policy for a file served behind a token segment. Hashed bundle files
+ * are immutable (the token is in the URL, so `private` keeps shared caches out);
+ * everything else (index.html, assets that change per release) is never stored. */
+export function cacheControlFor(rest) {
+  return /\.[0-9a-f]{8}\.(wasm|wasm\.br|js)$/.test(rest)
+    ? "private, max-age=31536000, immutable"
+    : "no-store";
+}
+
 /** Splits "/full/<token>/<rest>" into { token, rest } ("" rest for the directory itself); null when there is no token segment. */
 export function splitFullPath(pathname) {
   const m = /^\/full\/([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)(?:\/(.*))?$/.exec(pathname);

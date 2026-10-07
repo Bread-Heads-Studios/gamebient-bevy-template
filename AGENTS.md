@@ -122,7 +122,7 @@ the segment and rewrites to the real static path, so the bundle's relative
 loads (`/full/<token>/gamebient-game.<hash>.js`, `.../assets/...`) carry the
 token too. There are no cookies: the game is framed cross-site and Safari
 blocks third-party cookies. Every `/full/` path without a valid token segment,
-including `/full/`, `/full/index.html` and the bare hashed files, is 403. Native, Pi, `verify`, `autopilot`
+including `/full/`, `/full/index.html` and the bare hashed files, is 403. The middleware sets the cache policy of rewritten files (`cacheControlFor`): hashed bundle files are `private, immutable`, everything else `no-store`. Native, Pi, `verify`, `autopilot`
 and `record` builds are always the full game.
 
 The cut lives in `src/game/demo.rs` and nowhere else:

@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
-import { splitFullPath, verifyToken } from "./entitlement.mjs";
+import { splitFullPath, verifyToken, cacheControlFor } from "./entitlement.mjs";
 
 const subtle = webcrypto.subtle;
 const enc = new TextEncoder();
@@ -56,4 +56,14 @@ test("splitFullPath extracts the token segment and the rest", () => {
   for (const p of ["/full/", "/full", "/full/nodot/x", "/full/abc.def.ghi/x", "/other/abc.def/"]) {
     assert.equal(splitFullPath(p), null, p);
   }
+});
+
+test("cacheControlFor returns immutable for hashed bundle files, no-store otherwise", () => {
+  assert.equal(cacheControlFor("gamebient-game_bg.44888a2b.wasm"), "private, max-age=31536000, immutable");
+  assert.equal(cacheControlFor("gamebient-game_bg.44888a2b.wasm.br"), "private, max-age=31536000, immutable");
+  assert.equal(cacheControlFor("gamebient-game.1ea2da30.js"), "private, max-age=31536000, immutable");
+  assert.equal(cacheControlFor(""), "no-store");
+  assert.equal(cacheControlFor("index.html"), "no-store");
+  assert.equal(cacheControlFor("assets/info.json"), "no-store");
+  assert.equal(cacheControlFor("gamebient-game_bg.wasm"), "no-store");
 });
