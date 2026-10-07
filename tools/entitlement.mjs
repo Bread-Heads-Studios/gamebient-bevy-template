@@ -3,9 +3,6 @@
 // middleware and under `node --test`. Mirror of the website's
 // src/lib/entitlement/payload.ts + sign.ts.
 
-export const MAX_AGE = 43_200;
-export const COOKIE = "gx_full";
-
 const B64URL = /^[A-Za-z0-9_-]+$/;
 
 function fromBase64Url(s) {
@@ -71,15 +68,9 @@ export async function verifyToken(token, publicKeyB64, ctx) {
   return { ok: true, payload };
 }
 
-export function cookieHeader(token, maxAge = MAX_AGE) {
-  return `${COOKIE}=${token}; Path=/full; Max-Age=${maxAge}; Secure; HttpOnly; SameSite=None`;
-}
-
-export function readCookie(cookieHeaderValue, name) {
-  if (!cookieHeaderValue) return null;
-  for (const pair of cookieHeaderValue.split(";")) {
-    const [k, ...v] = pair.trim().split("=");
-    if (k === name) return v.join("=");
-  }
-  return null;
+/** Splits "/full/<token>/<rest>" into { token, rest } ("" rest for the directory itself); null when there is no token segment. */
+export function splitFullPath(pathname) {
+  const m = /^\/full\/([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)(?:\/(.*))?$/.exec(pathname);
+  if (!m) return null;
+  return { token: m[1], rest: m[2] ?? "" };
 }

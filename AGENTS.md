@@ -113,10 +113,16 @@ one-responsibility files.
 ### Demo and full bundles
 
 Every web deploy carries two bundles from one commit: the **demo** at `/`
-(built with `--features demo`) and the **full game** at `/full/`, which
-`middleware.ts` serves only to a request carrying a valid ColecoVision GX
-entitlement (a 12 h Ed25519 token the website signs for an owner; public key
-in the Vercel env `GX_ENTITLEMENT_PUBKEY`). Native, Pi, `verify`, `autopilot`
+(built with `--features demo`) and the **full game** under `/full/`, which
+`middleware.ts` serves only when the URL carries a valid ColecoVision GX
+entitlement as a path segment: the website frames
+`https://<host>/full/<token>/` (a 12 h Ed25519 token it signs for an owner;
+public key in the Vercel env `GX_ENTITLEMENT_PUBKEY`). The middleware verifies
+the segment and rewrites to the real static path, so the bundle's relative
+loads (`/full/<token>/gamebient-game.<hash>.js`, `.../assets/...`) carry the
+token too. There are no cookies: the game is framed cross-site and Safari
+blocks third-party cookies. Every `/full/` path without a valid token segment,
+including `/full/`, `/full/index.html` and the bare hashed files, is 403. Native, Pi, `verify`, `autopilot`
 and `record` builds are always the full game.
 
 The cut lives in `src/game/demo.rs` and nowhere else:
@@ -134,7 +140,7 @@ The cut lives in `src/game/demo.rs` and nowhere else:
   fixtures and the verifier never see the cut; a game whose test harness
   builds its own headless app and runs long fixtures must insert it too.
 - `assets/info.json`: `demo_url` is the host root, `game_url` is
-  `<host>/full/`.
+  `<host>/full/`; the website appends `<token>/`.
 
 Port checklist: feature in `Cargo.toml`; `DemoEnd` in `states.rs` plus every
 `match` on `GameState`; `demo.rs` with the game's cut and tests;
@@ -142,12 +148,34 @@ Port checklist: feature in `Cargo.toml`; `DemoEnd` in `states.rs` plus every
 `middleware.ts`, `tools/entitlement.mjs`, `tools/test_entitlement.mjs`,
 `vercel.json` headers and the CI step copied from the template; `game_url`;
 `GX_ENTITLEMENT_PUBKEY` on the game's Vercel project; then release and run the
-production checks below.
+production checks below. Also:
 
-Production checks after a release: `/` plays and stops at the cut with the
-card; `curl -sI https://<host>/full/` is 403; `/play/<pda>` as an owner on
-colecovisiongx.com runs past the cut; the cabinet paired to that wallet does
-too; a `/play` run still lands on the verified leaderboard.
+- Register `end_demo` in `game/mod.rs`.
+- Insert `DemoCutOff` in `replay/mod.rs`.
+- Add the `DemoEnd` row to a MUSIC table (a table, not a `match`).
+- `"framework": null` goes first in `vercel.json`, plus the `.vercel` and
+  `.env*` lines in `.gitignore`.
+- Add the four `fitted()` rows. A new fitted row may force a display-font
+  `advance_em` bump (Voidrunner's Audiowide needed 0.77 -> 0.78 for
+  `DEMO OVER`).
+- In games whose `menu_input` or game-over flow differs (name entry,
+  leaderboard screens, `OnEnter(GameOver)` side effects), Confirm in
+  `DemoEnd` goes to `Menu` and skips those effects; decide per game.
+- Edit `FULL_GAME_LINE` (grep `MORE LEVELS`).
+
+Production checks after a release:
+
+- `curl -sI https://<host>/full/` is 403 with `x-gx-entitlement: missing`.
+- `curl -sI https://<host>/full/garbage.garbage/` is 403 with
+  `x-gx-entitlement: signature` or `format`.
+- With a token minted for `<host>`,
+  `curl -s https://<host>/full/<token>/ | grep -o 'gamebient-game_bg\.[0-9a-f]*\.wasm'`
+  prints the full bundle's hash, and `curl -sI https://<host>/full/<token>/<that wasm>`
+  is 200.
+- `/play/<pda>` on colecovisiongx.com as an owner runs past the cut, on iOS
+  Safari too; the cabinet paired to that wallet does too; a `/play` run still
+  lands on the verified leaderboard.
+- `/` plays and stops at the cut with the card.
 
 ## Typography and cards
 

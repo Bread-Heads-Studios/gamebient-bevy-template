@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
-import { MAX_AGE, cookieHeader, readCookie, verifyToken } from "./entitlement.mjs";
+import { splitFullPath, verifyToken } from "./entitlement.mjs";
 
 const subtle = webcrypto.subtle;
 const enc = new TextEncoder();
@@ -49,11 +49,11 @@ test("expired, wrong host, wrong key, tampered and malformed tokens fail", async
   assert.equal((await verifyToken(badShape, pubB64, { host: HOST, now: NOW })).reason, "payload");
 });
 
-test("cookie helpers", () => {
-  const c = cookieHeader("abc.def");
-  assert.equal(c, `gx_full=abc.def; Path=/full; Max-Age=${MAX_AGE}; Secure; HttpOnly; SameSite=None`);
-  assert.equal(MAX_AGE, 43200);
-  assert.equal(readCookie("a=1; gx_full=abc.def; b=2", "gx_full"), "abc.def");
-  assert.equal(readCookie("a=1", "gx_full"), null);
-  assert.equal(readCookie(null, "gx_full"), null);
+test("splitFullPath extracts the token segment and the rest", () => {
+  assert.deepEqual(splitFullPath("/full/abc.def/"), { token: "abc.def", rest: "" });
+  assert.deepEqual(splitFullPath("/full/abc.def"), { token: "abc.def", rest: "" });
+  assert.deepEqual(splitFullPath("/full/abc.def/assets/x.png"), { token: "abc.def", rest: "assets/x.png" });
+  for (const p of ["/full/", "/full", "/full/nodot/x", "/full/abc.def.ghi/x", "/other/abc.def/"]) {
+    assert.equal(splitFullPath(p), null, p);
+  }
 });

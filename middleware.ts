@@ -1,7 +1,9 @@
-// Vercel Routing Middleware: gates the full-game bundle under /full/ behind
-// a ColecoVision GX entitlement token (docs: AGENTS.md "Demo and full
-// bundles"). Runs before the edge cache. No npm dependencies: Web APIs only.
-// Vercel runs this file on the Node.js runtime as CommonJS without bundling, so
+// Vercel Routing Middleware: serves the full-game bundle under
+// /full/<token>/... only when <token> is a valid ColecoVision GX entitlement
+// for this host (AGENTS.md "Demo and full bundles"). No cookies: the game is
+// framed cross-site from colecovisiongx.com, where third-party cookies are
+// blocked by Safari. Runs before the edge cache. Web APIs only, no npm deps.
+// Vercel runs this file on the Node runtime as CommonJS without bundling, so
 // the ESM verifier must be loaded with import(), not a static import.
 const entitlement = import("./tools/entitlement.mjs");
 
@@ -24,35 +26,24 @@ function forbidden(reason: string): Response {
   });
 }
 
-export default async function middleware(request: Request): Promise<Response | undefined> {
-  const { COOKIE, cookieHeader, readCookie, verifyToken } = await entitlement;
-
+export default async function middleware(request: Request): Promise<Response> {
+  const { verifyToken, splitFullPath } = await entitlement;
   const pubkey = process.env.GX_ENTITLEMENT_PUBKEY;
   if (!pubkey) return forbidden("unconfigured");
   const url = new URL(request.url);
-  const ctx = { host: url.host, now: Math.floor(Date.now() / 1000) };
-
-  // Entry: the website frames /full/?t=<token>. Verify, set the cookie, and
-  // redirect to the clean URL so the bundle's relative asset loads carry it.
-  const t = url.searchParams.get("t");
-  if (t) {
-    const r = await verifyToken(t, pubkey, ctx);
-    if (!r.ok) return forbidden(r.reason);
-    url.searchParams.delete("t");
-    return new Response(null, {
-      status: 302,
-      headers: {
-        location: url.pathname + url.search,
-        "set-cookie": cookieHeader(t),
-        "cache-control": "no-store",
-        "referrer-policy": "no-referrer",
-      },
-    });
-  }
-
-  const cookie = readCookie(request.headers.get("cookie"), COOKIE);
-  if (!cookie) return forbidden("missing");
-  const r = await verifyToken(cookie, pubkey, ctx);
+  const split = splitFullPath(url.pathname);
+  if (!split) return forbidden("missing");
+  const r = await verifyToken(split.token, pubkey, { host: url.host, now: Math.floor(Date.now() / 1000) });
   if (!r.ok) return forbidden(r.reason);
-  return undefined; // fall through to the static file
+  // Serve the static file behind the token segment. Vercel reads
+  // x-middleware-rewrite and serves that path from this deployment.
+  const target = new URL(`/full/${split.rest || "index.html"}`, request.url);
+  target.search = url.search;
+  return new Response(null, {
+    headers: {
+      "x-middleware-rewrite": target.toString(),
+      "cache-control": "no-store",
+      "referrer-policy": "no-referrer",
+    },
+  });
 }

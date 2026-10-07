@@ -4,7 +4,8 @@
 //! moment the capped unit is complete; `end_demo` then ends the run exactly
 //! the way `sim::end_run` does, through the fade into `GameState::DemoEnd`.
 //!
-//! Compiled in only with `--features demo`. The sim, seed and replay code
+//! The module is always compiled; `end_demo` is registered with a `cfg!`
+//! run condition that is true only with `--features demo`. The sim, seed and replay code
 //! never see the flag: a demo run and a full run are identical up to the cut.
 
 use bevy::prelude::*;
