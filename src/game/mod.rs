@@ -124,12 +124,16 @@ impl Plugin for GamePlugin {
             // The demo bundle's content cap. After the sim so the capped
             // tick is simulated and recorded in full; `run_not_over` keeps it
             // from firing twice. Both modes: the headless verifier is never
-            // built with `demo`, and the headless test app exercises it.
+            // built with `demo`; replay apps carry `DemoCutOff` and skip it.
             .add_systems(
                 FixedUpdate,
                 demo::end_demo
                     .after(sim::SimSet)
-                    .run_if(in_state(GameState::Playing).and(sim::run_not_over))
+                    .run_if(
+                        in_state(GameState::Playing)
+                            .and(sim::run_not_over)
+                            .and(not(resource_exists::<demo::DemoCutOff>)),
+                    )
                     .run_if(|| cfg!(feature = "demo")),
             )
             .add_systems(

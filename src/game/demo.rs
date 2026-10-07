@@ -22,6 +22,13 @@ pub const DEMO: bool = cfg!(feature = "demo");
 /// A port replaces this with its own unit ("after level 2": `level >= 3`).
 pub const DEMO_CAP: u32 = 1_000;
 
+/// Present on apps that must never cut a run short: the headless replay
+/// apps (`replay::build_headless_app`) replay whole runs, and the demo cut
+/// is a UI-layer concern. The demo's own tests build plain headless apps
+/// without it, so they still exercise the cut.
+#[derive(Resource, Default)]
+pub struct DemoCutOff;
+
 /// The cut, as a pure function of whatever the game already tracks.
 /// TEMPLATE NOTE: a port reads its own progression resource instead of
 /// `GameData` (change the `end_demo` parameter to match).
@@ -118,6 +125,41 @@ mod tests {
             .collect();
         assert_eq!(custom.len(), 1, "exactly one demo_end event");
         assert!(matches!(&custom[0], HostEvent::Custom { data, .. } if data == "{}"));
+    }
+
+    #[cfg(feature = "demo")]
+    #[test]
+    fn demo_cut_off_keeps_the_run_going_past_the_cap() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(StatesPlugin)
+            .add_plugins(InputPlugin)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(sim::tick_duration()))
+            .insert_resource(DemoCutOff)
+            .add_plugins(GamePlugin { headless: true });
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        app.update();
+        app.world_mut().resource_mut::<GameData>().score = DEMO_CAP + 50;
+        let mut cursor = app.world().resource::<Messages<HostEvent>>().get_cursor();
+        let mut n = 0;
+        for _ in 0..5 {
+            app.update();
+            let events = app.world().resource::<Messages<HostEvent>>();
+            n += cursor
+                .read(events)
+                .filter(|e| matches!(e, HostEvent::Custom { name, .. } if name == "demo_end"))
+                .count();
+        }
+        assert_eq!(n, 0, "no demo_end event");
+        assert!(!app.world().resource::<sim::RunOver>().0);
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::Playing
+        );
     }
 
     #[cfg(feature = "demo")]

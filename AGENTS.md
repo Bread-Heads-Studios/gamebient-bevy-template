@@ -130,6 +130,9 @@ The cut lives in `src/game/demo.rs` and nowhere else:
 - `src/ui/demo_end.rs` draws `DEMO OVER` / `OWN <TITLE> TO KEEP PLAYING`;
   set `FULL_GAME_LINE` to name what the full game has more of. The title
   card shows a `DEMO` chip in the demo bundle (`demo::DEMO`).
+- `demo::DemoCutOff` is inserted by `replay::build_headless_app`, so replay
+  fixtures and the verifier never see the cut; a game whose test harness
+  builds its own headless app and runs long fixtures must insert it too.
 - `assets/info.json`: `demo_url` is the host root, `game_url` is
   `<host>/full/`.
 

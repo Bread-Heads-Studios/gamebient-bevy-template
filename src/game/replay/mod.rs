@@ -224,6 +224,8 @@ pub fn build_headless_app() -> App {
         .add_plugins(StatesPlugin)
         .add_plugins(bevy::input::InputPlugin)
         .insert_resource(TimeUpdateStrategy::ManualDuration(tick_duration()))
+        // Replays are full runs; never apply the demo cut.
+        .insert_resource(super::demo::DemoCutOff)
         .add_plugins(GamePlugin { headless: true });
     app
 }
