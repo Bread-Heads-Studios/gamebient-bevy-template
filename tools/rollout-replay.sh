@@ -1432,7 +1432,24 @@ sub spit {
                           . "bash tools/build_verify.sh\n"
                           . "cp dist-verify.zip dist/verify.zip\n";
             my $idx = index($c, $anchor);
-            if ($idx >= 0) {
+            # Two-bundle layout (demo in dist/, full in dist/full/ through a
+            # bundle() function): the step goes after both bundle calls and
+            # the fetch-cartridge line, before the final blank echo, so it
+            # runs after every game wasm build.
+            my $two_bundle = ($c =~ /^bundle dist\/full ""$/m);
+            if ($two_bundle) {
+                my $tb = "# The headless replay verifier, once, from the full sim: dist/verify.zip is\n"
+                       . "# what properties.verify_url names. Built last so the `find` above never sees\n"
+                       . "# verify.wasm before it is excluded by name.\n"
+                       . "bash tools/build_verify.sh\n"
+                       . "cp dist-verify.zip dist/verify.zip\n\n";
+                if ($c =~ /^echo ""\n(?=echo "Build complete)/m) {
+                    substr($c, $-[0], 0) = $tb;
+                } else {
+                    hand_edit("build_web.sh: two-bundle layout but no 'echo \"\"' line before the 'Build complete' echo; add 'bash tools/build_verify.sh' + 'cp dist-verify.zip dist/verify.zip' after the last bundle call by hand, or the deploy ships without dist/verify.zip and verify_url 404s");
+                    $verify_step_reported = 1;
+                }
+            } elsif ($idx >= 0) {
                 substr($c, $idx + length($anchor), 0) = $addition;
             } else {
                 hand_edit("build_web.sh: wasm-opt output line ('dist/${pkg}_bg.wasm -o dist/${pkg}_bg.wasm') not found; add 'bash tools/build_verify.sh' + 'cp dist-verify.zip dist/verify.zip' by hand after wasm-opt, or the deploy ships without dist/verify.zip and verify_url 404s");

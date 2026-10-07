@@ -644,11 +644,9 @@ import sys
 path = sys.argv[1] + "/build_web.sh"
 src = open(path).read()
 step = """
-# Build the headless replay verifier and publish it alongside the game bundle
-# as dist/verify.zip — the site fetches it from properties.verify_url. Run
-# after this script's own wasm-bindgen/wasm-opt steps (and after the `find`
-# above, which already excludes verify.wasm by name) so there's no ambiguity
-# about which .wasm is the game bundle.
+# The headless replay verifier, once, from the full sim: dist/verify.zip is
+# what properties.verify_url names. Built last so the `find` above never sees
+# verify.wasm before it is excluded by name.
 bash tools/build_verify.sh
 cp dist-verify.zip dist/verify.zip
 """
@@ -656,7 +654,7 @@ assert src.count(step) == 1, "part (g) setup: build_web.sh's verify.zip step is 
 open(path, "w").write(src.replace(step, "", 1))
 PYEOF
 
-grep -q "verify.wasm is excluded by name" "$COPY_G/build_web.sh" \
+grep -q "verify.wasm is excluded$" "$COPY_G/build_web.sh" \
   || fail "(g) setup: the comment block containing the literal 'tools/build_verify.sh' is gone, so the bug's precondition isn't reproduced"
 if grep -qx "bash tools/build_verify.sh" "$COPY_G/build_web.sh"; then
   fail "(g) setup: the verify.zip step is still in build_web.sh after stripping it"
