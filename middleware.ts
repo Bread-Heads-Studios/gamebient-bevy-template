@@ -1,7 +1,9 @@
 // Vercel Routing Middleware: gates the full-game bundle under /full/ behind
 // a ColecoVision GX entitlement token (docs: AGENTS.md "Demo and full
 // bundles"). Runs before the edge cache. No npm dependencies: Web APIs only.
-import { COOKIE, cookieHeader, readCookie, verifyToken } from "./tools/entitlement.mjs";
+// Vercel runs this file on the Node.js runtime as CommonJS without bundling, so
+// the ESM verifier must be loaded with import(), not a static import.
+const entitlement = import("./tools/entitlement.mjs");
 
 export const config = {
   matcher: ["/full/:path*"],
@@ -23,6 +25,8 @@ function forbidden(reason: string): Response {
 }
 
 export default async function middleware(request: Request): Promise<Response | undefined> {
+  const { COOKIE, cookieHeader, readCookie, verifyToken } = await entitlement;
+
   const pubkey = process.env.GX_ENTITLEMENT_PUBKEY;
   if (!pubkey) return forbidden("unconfigured");
   const url = new URL(request.url);
