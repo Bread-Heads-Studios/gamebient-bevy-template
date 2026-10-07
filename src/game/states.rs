@@ -11,6 +11,9 @@ pub enum GameState {
     HowToPlay,
     Playing,
     GameOver,
+    /// The demo bundle's content cap was reached (src/game/demo.rs). Only
+    /// entered when the `demo` feature is on; the card is src/ui/demo_end.rs.
+    DemoEnd,
 }
 
 /// Whether the game is currently paused. Only meaningful in `Playing`.

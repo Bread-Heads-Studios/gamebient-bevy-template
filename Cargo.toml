@@ -36,6 +36,10 @@ record = ["autopilot"]
 # Replay verifier entry point (src/bin/verify.rs): native CLI and the
 # wasm-bindgen module the site runs under Node. See docs/replay-verification.md.
 verify = ["dep:wasm-bindgen"]
+# Demo bundle: the run ends at `game::demo::demo_reached` with a DEMO OVER
+# card and a `demo_end` host event. build_web.sh builds it into dist/ and the
+# full game into dist/full/. Never for native, Pi, verify, autopilot or record.
+demo = []
 
 [dependencies]
 # Curated Bevy feature set — drops bevy_gltf, bevy_animation, bevy_gizmos,
