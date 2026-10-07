@@ -49,7 +49,12 @@ export async function verifyToken(token, publicKeyB64, ctx) {
   const parts = token.split(".");
   if (parts.length !== 2 || !B64URL.test(parts[0]) || !B64URL.test(parts[1])) return { ok: false, reason: "format" };
   const [part, sigB64] = parts;
-  const sig = fromBase64Url(sigB64);
+  let sig;
+  try {
+    sig = fromBase64Url(sigB64);
+  } catch {
+    return { ok: false, reason: "format" };
+  }
   if (sig.length !== 64) return { ok: false, reason: "format" };
   let key;
   try {

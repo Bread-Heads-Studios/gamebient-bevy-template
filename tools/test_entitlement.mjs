@@ -44,6 +44,7 @@ test("expired, wrong host, wrong key, tampered and malformed tokens fail", async
   assert.equal((await verifyToken(tampered, pubB64, { host: "x.vercel.app", now: NOW })).reason, "signature");
   assert.equal((await verifyToken("nodot", pubB64, { host: HOST, now: NOW })).reason, "format");
   assert.equal((await verifyToken(`${part}.!!!`, pubB64, { host: HOST, now: NOW })).reason, "format");
+  assert.equal((await verifyToken(`${part}.A`, pubB64, { host: HOST, now: NOW })).reason, "format");
   const badShape = await mint(priv, { h: HOST, w: "W", exp: NOW + 60 });
   assert.equal((await verifyToken(badShape, pubB64, { host: HOST, now: NOW })).reason, "payload");
 });
