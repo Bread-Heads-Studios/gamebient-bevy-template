@@ -110,6 +110,42 @@ one-responsibility files.
   added in `main.rs`) and web hosts both react. See "Cabinet frame" in
   `docs/conventions.md`.
 
+### Demo and full bundles
+
+Every web deploy carries two bundles from one commit: the **demo** at `/`
+(built with `--features demo`) and the **full game** at `/full/`, which
+`middleware.ts` serves only to a request carrying a valid ColecoVision GX
+entitlement (a 12 h Ed25519 token the website signs for an owner; public key
+in the Vercel env `GX_ENTITLEMENT_PUBKEY`). Native, Pi, `verify`, `autopilot`
+and `record` builds are always the full game.
+
+The cut lives in `src/game/demo.rs` and nowhere else:
+
+- `DEMO_CAP` and `demo_reached(..)` express the cap in the game's own unit
+  ("after level 2" is `level >= 3`, checked when the next unit begins).
+  Change the `end_demo` parameter to whatever resource holds that unit.
+- `end_demo` runs in `FixedUpdate` after `SimSet`, latches `sim::RunOver`
+  (the sim freezes, as on `sim::end_run`), posts `HostEvent::Custom
+  { name: "demo_end" }`, and fades into `GameState::DemoEnd`.
+- `src/ui/demo_end.rs` draws `DEMO OVER` / `OWN <TITLE> TO KEEP PLAYING`;
+  set `FULL_GAME_LINE` to name what the full game has more of. The title
+  card shows a `DEMO` chip in the demo bundle (`demo::DEMO`).
+- `assets/info.json`: `demo_url` is the host root, `game_url` is
+  `<host>/full/`.
+
+Port checklist: feature in `Cargo.toml`; `DemoEnd` in `states.rs` plus every
+`match` on `GameState`; `demo.rs` with the game's cut and tests;
+`ui/demo_end.rs`, `ui/mod.rs`, `ui/menu.rs` edits; `build_web.sh`,
+`middleware.ts`, `tools/entitlement.mjs`, `tools/test_entitlement.mjs`,
+`vercel.json` headers and the CI step copied from the template; `game_url`;
+`GX_ENTITLEMENT_PUBKEY` on the game's Vercel project; then release and run the
+production checks below.
+
+Production checks after a release: `/` plays and stops at the cut with the
+card; `curl -sI https://<host>/full/` is 403; `/play/<pda>` as an owner on
+colecovisiongx.com runs past the cut; the cabinet paired to that wallet does
+too; a `/play` run still lands on the verified leaderboard.
+
 ## Typography and cards
 
 Full rules: "Typography and cards" in `docs/conventions.md`.
@@ -155,6 +191,8 @@ Full rules: "Typography and cards" in `docs/conventions.md`.
 - **`release.yml`** runs on `v*` tags only: a matrix builds web/x86/pi, packages
   tarballs + the flat cartridge, and publishes a GitHub Release. Heavy cross-compiles
   do **not** run per-PR.
+- **`build_web.sh` runs `bundle` twice** (demo, then full); `dist/verify.zip` is
+  built once from the full sim. **CI runs** `node --test tools/test_entitlement.mjs`.
 - **Cartridge binary is not in git.** It's a release asset, fetched at build time by
   `fetch-cartridge.sh`. Vercel needs `GH_TOKEN` (fine-grained PAT, Contents: Read).
 
@@ -211,3 +249,10 @@ These cost real debugging time on the project this template was extracted from:
 - **`GX_MUTE=1` (native) or `?mute=1` (web) starts a run silent.** It mutes
   sinks only (`game::host::LocalMute`), so `record` footage keeps full audio
   and a host `unmute` can't undo it. Set it whenever an agent launches a game.
+- **`/full/` is open when served locally** (`python3 -m http.server`): only
+  Vercel runs `middleware.ts`. Never mirror `dist/full/` anywhere else.
+- **`cargo test --all-features` includes `demo`.** A test that scores past
+  `DEMO_CAP` in a windowed or headless `GamePlugin` app lands in `DemoEnd`,
+  not `GameOver`; keep fixtures below the cap or run them without the feature.
+- **`fonts::tests::fitted()` must list `demo_end::own_line(menu::TITLE)`**
+  (it does in the template); a game with a longer title re-checks that row.
