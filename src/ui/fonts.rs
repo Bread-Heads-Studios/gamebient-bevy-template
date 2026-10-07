@@ -147,8 +147,8 @@ mod tests {
 
     /// Every string the template's UI renders at a fitted size, with the
     /// face it is set in. A game lists its own here.
-    fn fitted() -> Vec<(&'static Face, &'static str)> {
-        vec![
+    fn fitted() -> Vec<(&'static Face, String)> {
+        let rows: Vec<(&'static Face, &str)> = vec![
             (&DISPLAY, menu::TITLE),
             (&BODY, menu::TAGLINE),
             (&BODY, menu::START_PROMPT),
@@ -162,7 +162,13 @@ mod tests {
             (&DISPLAY, how_to_play::HEADLINE),
             (&STUDIO, studio_logo::STUDIO_NAME),
             (&STUDIO_ITALIC, studio_logo::PRESENTS),
-        ]
+        ];
+        let mut rows: Vec<(&'static Face, String)> =
+            rows.into_iter().map(|(f, t)| (f, t.to_string())).collect();
+        // The demo card's "OWN <TITLE> TO KEEP PLAYING" line. This row is the
+        // template title; a game with a longer title must re-check it.
+        rows.push((&DISPLAY, demo_end::own_line(menu::TITLE)));
+        rows
     }
 
     /// Real advance of `text` in `face`, in ems: the sum of the glyphs'
@@ -204,7 +210,7 @@ mod tests {
     fn declared_advance_covers_every_fitted_string() {
         for (face, text) in fitted() {
             let chars = text.chars().count() as f32;
-            let real = real_advance_em(face, text);
+            let real = real_advance_em(face, &text);
             assert!(
                 real <= chars * face.advance_em,
                 "{:?} in {}: real {real:.3} em > declared {:.3} em ({} x {})",
@@ -243,8 +249,8 @@ mod tests {
     fn fitted_strings_fit_at_every_ratio() {
         for (face, text) in fitted() {
             for view_w in [720.0, 960.0] {
-                let size = crate::ui::fit::fit_font_size(face, text, 200.0, view_w);
-                let width = real_advance_em(face, text) * size;
+                let size = crate::ui::fit::fit_font_size(face, &text, 200.0, view_w);
+                let width = real_advance_em(face, &text) * size;
                 assert!(width <= view_w * MAX_LINE_SHARE, "{text:?} at {view_w}");
             }
         }

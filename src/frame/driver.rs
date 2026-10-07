@@ -30,10 +30,12 @@ fn is_record(higher_is_better: bool, best: u64, score: u64) -> bool {
     }
 }
 
-/// The frame's view of each game state. Only `Playing` and `GameOver` are
-/// named, which every game has; any other state, including ones a game adds
+/// The frame's view of each game state. `Playing`, `GameOver` and `DemoEnd`
+/// are named: every template-derived game has all three (the `demo` feature
+/// adds `DemoEnd` fleet-wide). Any other state, including ones a game adds
 /// or renames (Voidrunner's `ItemKey`), is `Attract`. This file is copied
-/// into games unchanged, so it must not name states some games lack.
+/// into games; a game that genuinely lacks one of the three must edit this
+/// arm when it copies the file.
 pub fn phase_for(state: GameState) -> FramePhase {
     match state {
         GameState::Playing => FramePhase::Playing,
