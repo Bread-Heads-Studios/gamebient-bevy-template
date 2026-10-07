@@ -143,7 +143,7 @@ pub fn install_fonts(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
 mod tests {
     use super::*;
     use crate::ui::fit::MAX_LINE_SHARE;
-    use crate::ui::{how_to_play, menu, studio_logo, theme};
+    use crate::ui::{demo_end, how_to_play, menu, studio_logo, theme};
 
     /// Every string the template's UI renders at a fitted size, with the
     /// face it is set in. A game lists its own here.
@@ -155,6 +155,9 @@ mod tests {
             (&BODY, menu::CONTROLS),
             (&DISPLAY, menu::GAME_OVER_HEADLINE),
             (&BODY, menu::CONTINUE_PROMPT),
+            (&DISPLAY, demo_end::DEMO_HEADLINE),
+            (&BODY, demo_end::RESTART_PROMPT),
+            (&BODY, demo_end::FULL_GAME_LINE),
             (&DISPLAY, theme::PAUSE_WORD),
             (&DISPLAY, how_to_play::HEADLINE),
             (&STUDIO, studio_logo::STUDIO_NAME),

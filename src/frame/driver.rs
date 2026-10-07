@@ -37,7 +37,7 @@ fn is_record(higher_is_better: bool, best: u64, score: u64) -> bool {
 pub fn phase_for(state: GameState) -> FramePhase {
     match state {
         GameState::Playing => FramePhase::Playing,
-        GameState::GameOver => FramePhase::GameOver,
+        GameState::GameOver | GameState::DemoEnd => FramePhase::GameOver,
         _ => FramePhase::Attract,
     }
 }
@@ -283,6 +283,7 @@ mod tests {
         assert_eq!(phase_for(GameState::HowToPlay), FramePhase::Attract);
         assert_eq!(phase_for(GameState::Playing), FramePhase::Playing);
         assert_eq!(phase_for(GameState::GameOver), FramePhase::GameOver);
+        assert_eq!(phase_for(GameState::DemoEnd), FramePhase::GameOver);
     }
 
     #[test]

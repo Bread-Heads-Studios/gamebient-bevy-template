@@ -3,6 +3,7 @@ use bevy::prelude::*;
 
 pub mod backdrop;
 pub mod card;
+pub mod demo_end;
 pub mod fit;
 pub mod fonts;
 pub mod how_to_play;
@@ -67,6 +68,8 @@ impl Plugin for UiPlugin {
             .add_systems(OnExit(GameState::Menu), menu::despawn_menu)
             .add_systems(OnEnter(GameState::GameOver), menu::spawn_game_over)
             .add_systems(OnExit(GameState::GameOver), menu::despawn_menu)
+            .add_systems(OnEnter(GameState::DemoEnd), demo_end::spawn_demo_end)
+            .add_systems(OnExit(GameState::DemoEnd), menu::despawn_menu)
             .add_systems(Update, menu::menu_input)
             // In-run HUD
             .add_systems(OnEnter(GameState::Playing), hud::spawn_hud)
