@@ -1,3 +1,6 @@
+# Vercel CLI link + prebuilt output (deploy.yml)
+/.vercel
+
 # Rust build output
 /target
 

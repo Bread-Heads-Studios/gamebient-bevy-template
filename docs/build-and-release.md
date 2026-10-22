@@ -90,10 +90,26 @@ cartridge itself, so the PNGs ship in `assets/` like the cover.
 To save runner minutes it skips docs-only changes (except this file, which the
 Stale-size lint reads) and pushes to `main` that land an already-tested PR
 (merge commits, and squash commits ending `(#N)`). It does **not** build the
-wasm bundle: Vercel runs `build_web.sh` on every push, and that script ends with
-the replay fixture gate (`node tools/verify_fixture.mjs
-tests/fixtures/selftest-wasm.gxr`), so a determinism break fails the deploy.
-Heavy cross-compiles are intentionally **not** run per-PR.
+wasm bundle; that is `deploy.yml`. Heavy cross-compiles are intentionally **not**
+run per-PR.
+
+## Deploy
+
+`.github/workflows/deploy.yml` builds the web bundle on a GitHub runner (warm
+rust-cache, ~10 min) and uploads it to Vercel prebuilt: `vercel pull`, then
+`vercel build` (which runs `install.sh` and `build_web.sh` from `vercel.json` and
+compiles `middleware.ts`), then `vercel deploy --prebuilt`. Pushes to `main`
+deploy to production; running it by hand from the Actions tab gives a preview
+(tick *production* to promote). Vercel's own Git builds are disabled in
+`vercel.json` (`git.deploymentEnabled: false`).
+
+`build_web.sh` ends with the replay fixture gate (`node tools/verify_fixture.mjs
+tests/fixtures/selftest-wasm.gxr`), so a determinism break fails the build and
+production keeps its last good deployment.
+
+Setup per repo: secret `VERCEL_TOKEN` (a Vercel access token for the team) and
+variables `VERCEL_ORG_ID` (the team id) and `VERCEL_PROJECT_ID`; org-level
+secrets/variables work too. Without `VERCEL_PROJECT_ID` the job is skipped.
 
 ## Release
 

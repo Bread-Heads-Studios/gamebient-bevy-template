@@ -1,0 +1,88 @@
+name: Deploy
+
+# Builds the web bundle here and uploads it to Vercel prebuilt. Vercel's own
+# Git builds are off (vercel.json `git.deploymentEnabled: false`): a GitHub
+# runner with a warm rust-cache builds both bundles + the verifier in ~10 min
+# at $0.006/min, where a cold Vercel build machine paid per CPU-minute and
+# never kept a cargo cache. build_web.sh ends with the replay fixture gate, so
+# a determinism break stops the deploy and production keeps the last good one.
+#
+# Pushes to main deploy to production. Previews are on demand: run this
+# workflow from the Actions tab on any branch (production unticked).
+#
+# Needs, per repo: secret VERCEL_TOKEN, variables VERCEL_ORG_ID and
+# VERCEL_PROJECT_ID (org-level secret/variable work too). Without
+# VERCEL_PROJECT_ID the job is skipped, not failed.
+on:
+  push:
+    branches: [main]
+    paths: ['**', '!docs/**']
+  workflow_dispatch:
+    inputs:
+      production:
+        description: Deploy to production (unticked = preview URL)
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  deploy:
+    name: build + deploy (Vercel prebuilt)
+    if: vars.VERCEL_PROJECT_ID != ''
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      # fetch-cartridge.sh reads the latest release of this repo (non-fatal).
+      GH_TOKEN: ${{ github.token }}
+      PROD: ${{ github.event_name == 'push' || inputs.production }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
+
+      # Pinned to the wasm-bindgen *library* version in Cargo.lock. A CLI/lib
+      # version skew produces a bundle that fails to load at runtime, so this
+      # must be bumped in lockstep with the dependency (and install.sh).
+      - name: Install wasm-bindgen-cli
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@0.2.108
+
+      - name: Install binaryen (wasm-opt)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends binaryen
+
+      # The replay gate's verifier require()s an ESM snippet: Node >= 22.12.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel@64
+
+      - name: Pull Vercel project settings
+        run: vercel pull --yes --environment="$([ "$PROD" = true ] && echo production || echo preview)" --token "$VERCEL_TOKEN"
+
+      # Runs vercel.json's installCommand (install.sh, a no-op once the tools
+      # above are present) and buildCommand (build_web.sh), and compiles
+      # middleware.ts, into .vercel/output.
+      - name: Build
+        run: vercel build $([ "$PROD" = true ] && echo --prod) --token "$VERCEL_TOKEN"
+
+      - name: Deploy
+        run: vercel deploy --prebuilt $([ "$PROD" = true ] && echo --prod) --token "$VERCEL_TOKEN"

@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     # Strict gate: deny plain rustc warnings here too (unused imports, etc.).
     # Scoped to this job; the wasm bundle is built (warning-tolerant) by
-    # Vercel alone, which also runs the replay fixture gate in build_web.sh.
+    # deploy.yml on pushes to main, which runs the replay gate in build_web.sh.
     env:
       RUSTFLAGS: -D warnings
       # Debug info, not code, is what fills a runner's disk here. Five Bevy

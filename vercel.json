@@ -1,5 +1,8 @@
 {
   "framework": null,
+  "git": {
+    "deploymentEnabled": false
+  },
   "buildCommand": "bash build_web.sh",
   "installCommand": "bash install.sh",
   "outputDirectory": "dist",
