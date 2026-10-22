@@ -1494,7 +1494,12 @@ sub spit {
                     . "        run: node tools/verify_fixture.mjs tests/fixtures/selftest.gxr\n";
     if (defined $c) {
         my $orig = $c;
-        if ($c !~ /verify_fixture\.mjs/) {
+        # The gate now runs at the end of build_web.sh (Vercel enforces it);
+        # a game whose build_web.sh carries it needs no CI step.
+        my $bw = slurp("$game/build_web.sh") // '';
+        if ($bw =~ /verify_fixture\.mjs/) {
+            # nothing to add
+        } elsif ($c !~ /verify_fixture\.mjs/) {
             my $anchor = "      - name: Build web bundle\n        run: bash build_web.sh\n";
             my $addition = "\n      - uses: actions/setup-node\@v4\n"
                           . "        with:\n"

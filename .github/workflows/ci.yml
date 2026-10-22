@@ -1,9 +1,14 @@
 name: CI
 
+# Docs-only changes don't run CI (docs/build-and-release.md stays in: the
+# Stale-size lint reads it). `paths` rather than `paths-ignore` so that one
+# file can be re-included; later patterns override earlier ones.
 on:
   push:
     branches: [main]
+    paths: ['**', '!docs/**', 'docs/build-and-release.md']
   pull_request:
+    paths: ['**', '!docs/**', 'docs/build-and-release.md']
 
 # Cancel superseded runs on the same ref to save runner minutes.
 concurrency:
@@ -16,10 +21,17 @@ env:
 jobs:
   check:
     name: fmt · clippy · test
+    # A push to main that lands a PR already ran this job on the PR, so skip
+    # it: merge commits start "Merge pull request #", squash commits end
+    # "(#N)". A skipped job bills no runner minutes. Direct pushes still run.
+    if: >-
+      github.event_name != 'push' ||
+      !(startsWith(github.event.head_commit.message, 'Merge pull request #') ||
+        contains(github.event.head_commit.message, ' (#'))
     runs-on: ubuntu-latest
     # Strict gate: deny plain rustc warnings here too (unused imports, etc.).
-    # Scoped to this job so it doesn't also fail the deploy-bundle build, which
-    # mirrors the warning-tolerant Vercel build.
+    # Scoped to this job; the wasm bundle is built (warning-tolerant) by
+    # Vercel alone, which also runs the replay fixture gate in build_web.sh.
     env:
       RUSTFLAGS: -D warnings
       # Debug info, not code, is what fills a runner's disk here. Five Bevy
@@ -76,6 +88,13 @@ jobs:
 
   rollout:
     name: rollout-replay.sh
+    # A push to main that lands a PR already ran this job on the PR, so skip
+    # it: merge commits start "Merge pull request #", squash commits end
+    # "(#N)". A skipped job bills no runner minutes. Direct pushes still run.
+    if: >-
+      github.event_name != 'push' ||
+      !(startsWith(github.event.head_commit.message, 'Merge pull request #') ||
+        contains(github.event.head_commit.message, ' (#'))
     runs-on: ubuntu-latest
     steps:
       # The rollout script and its test suite drive git history (they classify
@@ -113,71 +132,3 @@ jobs:
       # changing the script.
       - name: Rollout script test suite (no sibling game checkout)
         run: bash tools/test_rollout_replay.sh --no-game
-
-  build-web:
-    name: build wasm bundle
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          # Separate cache key from the native `check` job — different target,
-          # different artifacts.
-          key: wasm
-
-      # Pinned to the wasm-bindgen *library* version in Cargo.lock. A CLI/lib
-      # version skew produces a bundle that fails to load at runtime, so this
-      # must be bumped in lockstep with the dependency.
-      - name: Install wasm-bindgen-cli
-        uses: taiki-e/install-action@v2
-        with:
-          tool: wasm-bindgen-cli@0.2.108
-
-      - name: Install binaryen (wasm-opt)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends binaryen
-
-      # build_web.sh: cargo build (wasm-release) → wasm-bindgen → wasm-opt -Oz
-      # → replay verifier (tools/build_verify.sh, -> dist/verify.zip) → brotli.
-      # node is preinstalled on ubuntu-latest for the brotli step.
-      - name: Build web bundle
-        run: bash build_web.sh
-
-      # The wasm-bindgen nodejs module require()s an ESM snippet, which needs
-      # Node >= 20.19 / >= 22.12. ubuntu-latest's preinstalled node is older
-      # than that on some runner images, so pin it explicitly.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      # The gate. tests/fixtures/selftest-wasm.gxr was RECORDED by this same
-      # wasm module (node tools/verify_fixture.mjs --record ...), so both
-      # sides of the comparison are wasm arithmetic — which is what actually
-      # ships (wasm-in-browser records, wasm-in-Node verifies) and is
-      # spec-deterministic. A failure here is a real determinism regression.
-      - name: Verify the wasm-recorded fixture under Node
-        run: node tools/verify_fixture.mjs tests/fixtures/selftest-wasm.gxr
-
-      # Informational only. tests/fixtures/selftest.gxr was recorded by the
-      # NATIVE build, so this step compares native arithmetic against wasm.
-      # They agree for a sim that sticks to add/sub/mul, but native libm and
-      # wasm are not required to round sin/cos/powf identically, and an ulp
-      # of drift snowballs over enough ticks — so for a game with
-      # transcendentals this can go red without anything being wrong. See
-      # docs/replay-verification.md, "Two fixtures, and which one is the gate".
-      - name: Cross-check the native fixture under Node (informational)
-        continue-on-error: true
-        run: node tools/verify_fixture.mjs tests/fixtures/selftest.gxr
-
-      - name: Upload web bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: gamebient-game-web
-          path: dist/
-          retention-days: 14

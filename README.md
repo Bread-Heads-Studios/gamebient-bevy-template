@@ -142,8 +142,9 @@ Porting this into a game (not the template) is `tools/rollout-replay.sh
 
 ## Releases
 
-Push a `v*` tag (e.g. `v0.0.1`) to trigger `.github/workflows/release.yml`, which
-builds all three targets and publishes a GitHub Release with:
+Releases are manual for now (web-first; tags no longer trigger a build). Run
+`.github/workflows/release.yml` from the Actions tab (`gh workflow run release.yml
+--ref v0.0.1`), which builds all three targets and publishes a GitHub Release with:
 `gamebient-game-pi.tar.gz`, `gamebient-game-x86.tar.gz`, `gamebient-game-web.zip`,
 and the flat cartridge `gamebient-game.tar.gz`.
 
