@@ -29,6 +29,8 @@ jobs:
       !(startsWith(github.event.head_commit.message, 'Merge pull request #') ||
         contains(github.event.head_commit.message, ' (#'))
     runs-on: ubuntu-latest
+    # Cap a hung job; GitHub's default is 6 h of billed minutes.
+    timeout-minutes: 45
     # Strict gate: deny plain rustc warnings here too (unused imports, etc.).
     # Scoped to this job; the wasm bundle is built (warning-tolerant) by
     # deploy.yml on pushes to main, which runs the replay gate in build_web.sh.
@@ -96,6 +98,8 @@ jobs:
       !(startsWith(github.event.head_commit.message, 'Merge pull request #') ||
         contains(github.event.head_commit.message, ' (#'))
     runs-on: ubuntu-latest
+    # Cap a hung job; GitHub's default is 6 h of billed minutes.
+    timeout-minutes: 45
     steps:
       # The rollout script and its test suite drive git history (they classify
       # a game's copy of a file against every committed template version), so
