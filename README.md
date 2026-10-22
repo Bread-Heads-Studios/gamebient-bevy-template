@@ -131,7 +131,11 @@ Porting this into a game (not the template) is `tools/rollout-replay.sh
 
 ## Deploying (web)
 
-**Vercel** runs `build_web.sh` to build `dist/` and serves it as a static site.
+`.github/workflows/deploy.yml` builds `dist/` with `build_web.sh` on GitHub and
+uploads it to **Vercel** prebuilt, which serves it as a static site (plus
+`middleware.ts`). Pushes to `main` go to production; run the workflow by hand for
+a preview. It needs secret `VERCEL_TOKEN` and variables `VERCEL_ORG_ID` /
+`VERCEL_PROJECT_ID`. See [docs/build-and-release.md](docs/build-and-release.md).
 
 > **Required env var:** set `GH_TOKEN` in the Vercel project — a GitHub
 > **fine-grained PAT** with **Contents: Read** on this repo. The build uses it to

@@ -219,8 +219,15 @@ Full rules: "Typography and cards" in `docs/conventions.md`.
   rendered with `rsvg-convert` — `brew install librsvg`).
 - **`ci.yml`** runs on PRs and direct pushes to `main`: `fmt --check`,
   `clippy -D warnings`, `cargo test`. It skips docs-only changes and pushes that
-  merely land an already-tested PR. No wasm build: Vercel builds the bundle and
-  `build_web.sh` runs the replay fixture gate, so a determinism break fails the deploy.
+  merely land an already-tested PR. No wasm build: that is `deploy.yml`'s job.
+- **`deploy.yml`** builds the web bundle on GitHub and uploads it to Vercel
+  prebuilt (`vercel pull` → `vercel build` → `vercel deploy --prebuilt`): pushes
+  to `main` go to production; a manual run gives a preview. Vercel's own Git builds
+  are off (`vercel.json` `git.deploymentEnabled: false`) because its build machines
+  cost ~5x more per build and keep no cargo cache. `build_web.sh` ends with the
+  replay fixture gate, so a determinism break stops the deploy. Needs secret
+  `VERCEL_TOKEN` and variables `VERCEL_ORG_ID` / `VERCEL_PROJECT_ID`; without
+  `VERCEL_PROJECT_ID` the job is skipped.
 - **`release.yml`** is **manual only** (`workflow_dispatch`) while the fleet ships
   web-first: a matrix builds web/x86/pi, packages tarballs + the flat cartridge,
   and publishes a GitHub Release. Re-add the `v*` tag trigger to restore it.
