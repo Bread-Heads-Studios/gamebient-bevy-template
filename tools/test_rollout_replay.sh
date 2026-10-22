@@ -792,6 +792,9 @@ OLD_CI_SHA="$(git -C "$TEMPLATE" rev-list HEAD -- .github/workflows/ci.yml \
 COPY_H="$SCRATCH_ROOT/template-copy-h"
 snapshot_as_git_baseline "$TEMPLATE" "$COPY_H"
 git -C "$TEMPLATE" show "$OLD_CI_SHA:.github/workflows/ci.yml" >"$COPY_H/.github/workflows/ci.yml"
+# Such a game also predates the gate moving into build_web.sh; with it there
+# the rollout rightly leaves ci.yml's Node steps alone.
+perl -ni -e 'print unless /verify_fixture\.mjs/' "$COPY_H/build_web.sh"
 grep -q 'selftest-wasm.gxr' "$COPY_H/.github/workflows/ci.yml" \
   && fail "(h) setup: the old ci.yml already mentions selftest-wasm.gxr, so the branch under test can't fire"
 
@@ -837,6 +840,7 @@ snapshot_as_git_baseline "$TEMPLATE" "$COPY_H2"
 git -C "$TEMPLATE" show "$OLD_CI_SHA:.github/workflows/ci.yml" \
   | sed 's/- name: Verify the committed fixture under Node/- name: Replay fixture check (renamed by hand)/' \
   >"$COPY_H2/.github/workflows/ci.yml"
+perl -ni -e 'print unless /verify_fixture\.mjs/' "$COPY_H2/build_web.sh"
 grep -q 'Replay fixture check (renamed by hand)' "$COPY_H2/.github/workflows/ci.yml" \
   || fail "(h) setup: the rename did not take"
 cp "$COPY_H2/.github/workflows/ci.yml" "$SCRATCH_ROOT/h2-ci-before.yml"
@@ -954,9 +958,9 @@ COPY_J="$SCRATCH_ROOT/template-copy-j"
 snapshot_as_git_baseline "$TEMPLATE" "$COPY_J"
 # An inert one-line change the script itself has no opinion about, so what
 # the advisory reports is drift and nothing else.
-sed -i.bak 's/retention-days: 14/retention-days: 7/' "$COPY_J/.github/workflows/ci.yml"
+sed -i.bak 's/cancel-in-progress: true/cancel-in-progress: false/' "$COPY_J/.github/workflows/ci.yml"
 rm -f "$COPY_J/.github/workflows/ci.yml.bak"
-grep -q 'retention-days: 7' "$COPY_J/.github/workflows/ci.yml" \
+grep -q 'cancel-in-progress: false' "$COPY_J/.github/workflows/ci.yml" \
   || fail "(j) setup: the one-line ci.yml change did not take"
 
 bash "$TEMPLATE/tools/rollout-replay.sh" --upgrade "$COPY_J" >"$SCRATCH_ROOT/j-output.txt" 2>&1
@@ -965,7 +969,7 @@ cat "$SCRATCH_ROOT/j-output.txt"
 grep -q "HAND EDIT (advisory): .github/workflows/ci.yml differs from the template" \
   "$SCRATCH_ROOT/j-output.txt" \
   || fail "(j) a drifted ci.yml printed no drift advisory"
-grep -q "retention-days: 7" "$SCRATCH_ROOT/j-output.txt" \
+grep -q "cancel-in-progress: false" "$SCRATCH_ROOT/j-output.txt" \
   || fail "(j) the advisory did not list the line that actually differs"
 grep -q "review with: diff" "$SCRATCH_ROOT/j-output.txt" \
   || fail "(j) the advisory did not print a command to reproduce the diff"

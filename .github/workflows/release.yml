@@ -1,8 +1,12 @@
 name: Release
 
+# Manual only for now: the fleet ships web-first (Vercel builds the web
+# bundle) and the Pi/x86 cartridges aren't in use, so tags no longer spend
+# runner minutes. To restore tag-triggered releases, add back:
+#   push:
+#     tags: ['v*']
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
 
 # Required for the release job to create a GitHub Release.
 permissions:

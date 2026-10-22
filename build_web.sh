@@ -112,6 +112,17 @@ bash fetch-cartridge.sh || true
 bash tools/build_verify.sh
 cp dist-verify.zip dist/verify.zip
 
+# The replay gate (formerly a CI job; Vercel builds the bundle anyway, so the
+# check runs here and a failure fails the deploy). selftest-wasm.gxr was
+# recorded by this same wasm module, so both sides are wasm arithmetic: a
+# mismatch is a real determinism regression. Needs Node >= 20.19 / 22.12 for
+# the verifier's ESM snippet. See docs/replay-verification.md.
+node tools/verify_fixture.mjs tests/fixtures/selftest-wasm.gxr
+# Informational: selftest.gxr was recorded natively, so this compares native
+# libm against wasm and can drift by an ulp on a sim that calls sin/cos/powf.
+node tools/verify_fixture.mjs tests/fixtures/selftest.gxr \
+    || echo "WARNING: native fixture disagrees under wasm (informational; see docs/replay-verification.md)" >&2
+
 echo ""
 echo "Build complete! Demo in dist/, full game in dist/full/ (gated by middleware.ts)."
 echo "To test locally: cd dist && python3 -m http.server 8080  (full: /full/ is open locally; only Vercel runs the middleware)"

@@ -217,13 +217,16 @@ Full rules: "Typography and cards" in `docs/conventions.md`.
   `make-cartridge.sh` regenerates the `assets/cartridge.png` box cover (an
   autopilot gameplay screenshot composed into `tools/cartridge-cover.svg`,
   rendered with `rsvg-convert` — `brew install librsvg`).
-- **`ci.yml`** runs on PRs/pushes: `fmt --check`, `clippy -D warnings`, `cargo test`,
-  and a `build-web` job mirroring Vercel.
-- **`release.yml`** runs on `v*` tags only: a matrix builds web/x86/pi, packages
-  tarballs + the flat cartridge, and publishes a GitHub Release. Heavy cross-compiles
-  do **not** run per-PR.
+- **`ci.yml`** runs on PRs and direct pushes to `main`: `fmt --check`,
+  `clippy -D warnings`, `cargo test`. It skips docs-only changes and pushes that
+  merely land an already-tested PR. No wasm build: Vercel builds the bundle and
+  `build_web.sh` runs the replay fixture gate, so a determinism break fails the deploy.
+- **`release.yml`** is **manual only** (`workflow_dispatch`) while the fleet ships
+  web-first: a matrix builds web/x86/pi, packages tarballs + the flat cartridge,
+  and publishes a GitHub Release. Re-add the `v*` tag trigger to restore it.
 - **`build_web.sh` runs `bundle` twice** (demo, then full); `dist/verify.zip` is
-  built once from the full sim. **CI runs** `node --test tools/test_entitlement.mjs`.
+  built once from the full sim. **CI runs** `node --test tools/test_entitlement.mjs`; `build_web.sh` runs the
+  replay fixture gate.
 - **Cartridge binary is not in git.** It's a release asset, fetched at build time by
   `fetch-cartridge.sh`. Vercel needs `GH_TOKEN` (fine-grained PAT, Contents: Read).
 

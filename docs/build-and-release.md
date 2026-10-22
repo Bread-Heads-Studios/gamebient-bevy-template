@@ -82,18 +82,23 @@ cartridge itself, so the PNGs ship in `assets/` like the cover.
 
 ## CI
 
-`.github/workflows/ci.yml`, on PRs and pushes:
+`.github/workflows/ci.yml`, on PRs and pushes to `main`:
 
 - **`check`** — `cargo fmt --check`, `cargo clippy --all-targets -D warnings`,
   `cargo test`, with the Linux build deps and a cargo cache.
-- **`build-web`** — reproduces the Vercel build (wasm bundle) and uploads it.
 
-Heavy cross-compiles are intentionally **not** run per-PR — a Pi/x86-only break is
-caught at release time.
+To save runner minutes it skips docs-only changes (except this file, which the
+Stale-size lint reads) and pushes to `main` that land an already-tested PR
+(merge commits, and squash commits ending `(#N)`). It does **not** build the
+wasm bundle: Vercel runs `build_web.sh` on every push, and that script ends with
+the replay fixture gate (`node tools/verify_fixture.mjs
+tests/fixtures/selftest-wasm.gxr`), so a determinism break fails the deploy.
+Heavy cross-compiles are intentionally **not** run per-PR.
 
 ## Release
 
-`.github/workflows/release.yml`, on `v*` tags only:
+`.github/workflows/release.yml`, **manual only** (`workflow_dispatch`) while the
+fleet ships web-first; re-add `push: tags: ['v*']` to make tags build again:
 
 1. A matrix builds `web`, `x86`, and `pi`.
    - The Pi job relaxes to **thin LTO + `codegen-units=16`** (via
@@ -108,7 +113,7 @@ caught at release time.
 The ~45 MB Pi cartridge binary is **not** committed to git. Instead:
 
 ```
-release.yml (on tag)            Vercel build (on deploy)
+release.yml (manual)            Vercel build (on deploy)
   build pi  ──► gamebient-game.tar.gz ──► GitHub Release asset
                                               │
                                               ▼  fetch-cartridge.sh (needs GH_TOKEN)

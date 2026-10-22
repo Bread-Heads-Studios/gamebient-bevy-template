@@ -374,7 +374,7 @@ instead. Those belong in a game-local `docs/replay-notes.md`.
 cargo test --all-features                                   # codec, selftest, fixtures
 cargo run --features verify --bin verify -- --selftest --write tests/fixtures/selftest.gxr   # regenerate after a sim change
 bash tools/build_verify.sh                                   # -> dist-verify/ (the wasm module)
-node tools/verify_fixture.mjs --record tests/fixtures/selftest-wasm.gxr   # regenerate the CI gate's fixture
+node tools/verify_fixture.mjs --record tests/fixtures/selftest-wasm.gxr   # regenerate the build gate's fixture
 node tools/verify_fixture.mjs tests/fixtures/selftest-wasm.gxr
 GX_REPLAY_DIR=build/replays cargo run                        # play; each run writes build/replays/<ms>.gxr
 cargo run --features verify --bin verify -- build/replays/<ms>.gxr
@@ -425,7 +425,7 @@ drift.
    header bytes cannot buy unbounded verifier CPU. Both are `rejected`, not
    `unverified`.
 6. **Runtime.** The verifier module is wasm-bindgen's `nodejs` target and
-   `require()`s an ESM snippet: Node 20.19+ or 22.12+ (CI pins Node 22).
+   `require()`s an ESM snippet: Node 20.19+ or 22.12+ (Vercel builds run Node 24).
 7. **Ranking order is the site's, per game.** A replay carries one `u32`
    (rule 9's `leaderboard_score()`); it does not say which direction is
    better, and the board sorts descending. Games whose native number is
@@ -474,7 +474,7 @@ determinism failure dressed as a timeout.
 
 | File | Recorded by | Verified by | Role |
 |---|---|---|---|
-| `selftest-wasm.gxr` | the wasm verifier module | wasm, under Node (CI) | **the gate** |
+| `selftest-wasm.gxr` | the wasm verifier module | wasm, under Node (`build_web.sh`) | **the gate** |
 | `selftest.gxr` | the native build | native (`cargo test`), and informationally by Node | native regression check |
 
 Both files' header `build` lags `HEAD` by construction: it is the
@@ -484,7 +484,7 @@ from the seed and inputs alone, and `build` only matters to the *site*, which
 uses it to pick which release's verifier module to load. A fixture whose
 `build` disagrees with `HEAD` is normal, not stale.
 
-`selftest-wasm.gxr` is the one CI blocks on, because both sides of that
+`selftest-wasm.gxr` is the one the build (`build_web.sh`, so every Vercel deploy) blocks on, because both sides of that
 comparison are wasm arithmetic — which is exactly what ships: the browser
 records a run in a wasm build of this crate and Node re-simulates it in
 another wasm build of the same crate, and wasm arithmetic is
@@ -492,8 +492,8 @@ spec-deterministic. It is produced by the module's own `selftest_record()`
 export; native code cannot write it, which is the point.
 
 `selftest.gxr` is recorded and verified natively by `cargo test`, so it stays
-the fast local regression check on the sim. CI *also* runs it through Node,
-but with `continue-on-error: true`: that step compares native arithmetic
+the fast local regression check on the sim. `build_web.sh` *also* runs it
+through Node, but only as a warning: that step compares native arithmetic
 against wasm, and native libm and wasm are not required to round
 transcendental functions (`sin`, `cos`, `powf`) identically. A game whose sim
 calls them may see the two disagree by an ulp that snowballs over enough
