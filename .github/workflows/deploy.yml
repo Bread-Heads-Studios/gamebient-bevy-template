@@ -36,6 +36,8 @@ jobs:
     name: build + deploy (Vercel prebuilt)
     if: vars.VERCEL_PROJECT_ID != ''
     runs-on: ubuntu-latest
+    # Cap a hung job; GitHub's default is 6 h of billed minutes.
+    timeout-minutes: 45
     env:
       VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
