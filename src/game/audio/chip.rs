@@ -29,6 +29,10 @@ pub const ATTEN_GAIN: [f32; 16] = [
 /// Attenuation index that silences a voice.
 pub const OFF: u8 = 15;
 
+/// Lowest pitch the chip can play (divider 1023): about 109.3 Hz, just under
+/// A2. Write bass lines at A2 and above; lower thumps are periodic noise.
+pub const FLOOR_HZ: f32 = CLOCK_HZ / (32.0 * 1023.0);
+
 /// Low-pass corner that takes the aliasing edge off the naive squares.
 const LOWPASS_HZ: f32 = 9_000.0;
 
@@ -265,6 +269,14 @@ mod tests {
         let n = divider_for_hz(440.0);
         assert_eq!(n, 254);
         assert!((hz_for_divider(n) - 440.3).abs() < 0.2);
+    }
+
+    #[test]
+    fn floor_is_just_under_a2() {
+        let floor = hz_for_divider(1023);
+        assert!((floor - FLOOR_HZ).abs() < 1e-3);
+        assert!(floor < note_hz("a2").unwrap() && floor > 109.0, "{floor}");
+        assert_eq!(divider_for_hz(floor), 1023);
     }
 
     #[test]

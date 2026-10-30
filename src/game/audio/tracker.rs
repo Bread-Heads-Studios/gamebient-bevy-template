@@ -31,7 +31,7 @@
 
 use bevy::audio::AudioSource;
 
-use super::chip::{Chip, NoiseMode, NoiseRate, OFF, note_hz, semitones};
+use super::chip::{Chip, FLOOR_HZ, NoiseMode, NoiseRate, OFF, note_hz, semitones};
 use super::synth::{MASTER_GAIN, SAMPLE_RATE, create_wav_audio_source};
 
 /// Envelope / arpeggio clock.
@@ -144,6 +144,13 @@ pub enum SongError {
         voice: &'static str,
         index: usize,
     },
+    /// A note below the chip's divider floor (`chip::FLOOR_HZ`, just under
+    /// A2): it would silently clamp to the same pitch as every other note
+    /// down there. Write it an octave up, or use periodic noise.
+    Pitch {
+        voice: &'static str,
+        token: String,
+    },
 }
 
 const VOICE_NAMES: [&str; 4] = ["tone1", "tone2", "tone3", "noise"];
@@ -239,6 +246,12 @@ fn parse_voice(voice: &'static str, text: &str, is_noise: bool) -> Result<Vec<St
             None => (false, body),
         };
         let hz = note_hz(body).ok_or_else(err)?;
+        if hz < FLOOR_HZ {
+            return Err(SongError::Pitch {
+                voice,
+                token: raw.to_string(),
+            });
+        }
         steps.push(Step {
             kind: Kind::Note(hz),
             len,
@@ -858,6 +871,18 @@ mod tests {
             render_song_samples(&s, 0.0),
             Err(SongError::Parse { voice: "noise", .. })
         ));
+    }
+
+    #[test]
+    fn notes_below_the_chip_floor_are_an_error() {
+        assert_eq!(
+            render_song_samples(&song("g2:16"), 0.0).unwrap_err(),
+            SongError::Pitch {
+                voice: "tone1",
+                token: "g2:16".to_string()
+            }
+        );
+        assert!(render_song_samples(&song("a2:16"), 0.0).is_ok());
     }
 
     #[test]
