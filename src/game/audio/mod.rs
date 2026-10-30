@@ -1,3 +1,4 @@
+pub mod chip;
 pub mod synth;
 
 use bevy::audio::{PlaybackMode, Volume};
