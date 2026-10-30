@@ -1,5 +1,6 @@
 pub mod chip;
 pub mod synth;
+pub mod tracker;
 
 use bevy::audio::{PlaybackMode, Volume};
 use bevy::prelude::*;
