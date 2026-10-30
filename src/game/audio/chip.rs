@@ -84,10 +84,12 @@ pub fn note_hz(name: &str) -> Option<f32> {
 /// One square-wave voice.
 #[derive(Clone, Copy, Debug)]
 pub struct Tone {
-    /// Requested pitch; quantized to the divider on every sample.
+    /// Requested pitch; quantized to the divider when it changes.
     pub hz: f32,
     pub atten: u8,
     phase: f32,
+    last_hz: f32,
+    step: f32,
 }
 
 impl Tone {
@@ -96,13 +98,18 @@ impl Tone {
             hz: 440.0,
             atten: OFF,
             phase: 0.0,
+            last_hz: 0.0,
+            step: 0.0,
         }
     }
 
     fn sample(&mut self) -> f32 {
         let gain = ATTEN_GAIN[(self.atten.min(OFF)) as usize];
-        let hz = quantize_hz(self.hz);
-        self.phase = (self.phase + hz / SAMPLE_RATE as f32).fract();
+        if self.hz != self.last_hz {
+            self.last_hz = self.hz;
+            self.step = quantize_hz(self.hz) / SAMPLE_RATE as f32;
+        }
+        self.phase = (self.phase + self.step).fract();
         let level = if self.phase < 0.5 { 1.0 } else { -1.0 };
         level * gain
     }

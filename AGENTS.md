@@ -48,6 +48,15 @@ one-responsibility files.
   the model.
 - **An asset:** load/create it in `AssetsPlugin` (a `Startup` system inserting a
   resource of handles), then reference that resource where you spawn.
+- **A sound:** add an `SfxEvent` variant and its `bake` arm (a `tracker::Fx`
+  program on the house chip, in the game's key), list it in `SfxEvent::ALL`,
+  emit it from gameplay. Mark fanfares with `is_sting` so they duck the music.
+- **Music:** compose a `Song` in `src/game/audio/songs.rs` and point a `MUSIC`
+  row at it with `Cue::loop_baked` / `sting_baked` (or `loop_file` for an
+  authored `.ogg`); layers via `.with_layers`, boss/leg changes via
+  `CueEvent::Switch`. Then `GX_AUDIO_EXPORT=<dir> cargo test --test audio_export
+  -- --nocapture` and listen. Rules: `docs/conventions.md` "Audio" and the
+  game's `docs/audio-identity.md`.
 - **A test:** pull the rule into a pure method/function, add a `#[cfg(test)] mod tests`.
   `cargo test` runs in CI.
 - **A visual check:** `cargo run --features autopilot` plays a scripted ~60 s
@@ -287,6 +296,9 @@ These cost real debugging time on the project this template was extracted from:
   it, and a game with any other capture feature makes it imply `capture` in
   `Cargo.toml` (docs/conventions.md, "Capture builds stay windowed"). `GX_WINDOW_SIZE=WxH`
   forces a window of that size on any native build.
+- **`chip.rs`, `tracker.rs` and `house.rs` are verbatim copies** (`tools/frame-accept.sh
+  --check-copies`). The house sting is also hash-pinned; a game that wants a
+  different studio sound is wrong, that sound is the label.
 - **`GX_MUTE=1` (native) or `?mute=1` (web) starts a run silent.** It mutes
   sinks only (`game::host::LocalMute`), so `record` footage keeps full audio
   and a host `unmute` can't undo it. Set it whenever an agent launches a game.

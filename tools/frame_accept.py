@@ -402,6 +402,10 @@ def check_copies(game_arg):
                     problems.append(f"{label}: differs (binary)\n")
 
     exact("src/ui/fit.rs", "src/fit.rs" if flat else "src/ui/fit.rs")
+    # The house chip, the tracker and the shared studio sting: a game
+    # composes in songs.rs and mod.rs, never here.
+    for f in ("chip.rs", "tracker.rs", "house.rs"):
+        exact(f"src/game/audio/{f}", f"src/audio/{f}" if flat else f"src/game/audio/{f}")
     exact_tree("src/game/record", "src/record" if flat else "src/game/record")
 
     # tests/display_shape.rs: the crate name only.

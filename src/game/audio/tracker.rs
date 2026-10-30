@@ -44,6 +44,10 @@ pub const SFX_PEAK: f32 = 0.708;
 pub const DEFAULT_VIBRATO: (f32, f32) = (25.0, 6.0);
 
 const SAMPLES_PER_FRAME: f32 = SAMPLE_RATE as f32 / FRAME_HZ;
+/// Voice parameters (pitch, envelope, vibrato) are recomputed every this
+/// many samples (~1.5 ms, a 690 Hz control rate); the chip itself runs per
+/// sample. Keeps a 30 s loop under the render budget on a Pi 4.
+const CONTROL_SAMPLES: usize = 64;
 
 /// How a voice plays a note. All `const fn` so songs are `const` data.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -468,22 +472,25 @@ fn render_raw(song: &Song, tail_secs: f32) -> Result<Vec<f32>, SongError> {
     let mut chip = Chip::new();
     let mut out = Vec::with_capacity(total);
     for s in 0..total {
-        for v in 0..3 {
-            let o = cursors[v].at(s);
-            if o.hz > 0.0 {
-                chip.tones[v].hz = o.hz;
+        if s % CONTROL_SAMPLES == 0 {
+            let (tones, noise) = cursors.split_at_mut(3);
+            for (cursor, tone) in tones.iter_mut().zip(chip.tones.iter_mut()) {
+                let o = cursor.at(s);
+                if o.hz > 0.0 {
+                    tone.hz = o.hz;
+                }
+                tone.atten = o.atten;
             }
-            chip.tones[v].atten = o.atten;
+            let n = noise[0].at(s);
+            if let Some((mode, rate)) = n.noise {
+                chip.noise.mode = mode;
+                chip.noise.rate = rate;
+            }
+            if n.retrigger {
+                chip.noise.reset();
+            }
+            chip.noise.atten = n.atten;
         }
-        let n = cursors[3].at(s);
-        if let Some((mode, rate)) = n.noise {
-            chip.noise.mode = mode;
-            chip.noise.rate = rate;
-        }
-        if n.retrigger {
-            chip.noise.reset();
-        }
-        chip.noise.atten = n.atten;
         out.push(chip.sample());
     }
     Ok(out)
@@ -724,6 +731,10 @@ impl Fx {
         let mut out = Vec::with_capacity(total);
         let mut last_noise_seg: Option<usize> = None;
         for s in 0..total {
+            if s % CONTROL_SAMPLES != 0 {
+                out.push(chip.sample());
+                continue;
+            }
             let f = s as f32 / SAMPLES_PER_FRAME;
             for (v, segs) in self.tones.iter().enumerate() {
                 match locate(segs.iter().map(|g| g.frames), f) {
