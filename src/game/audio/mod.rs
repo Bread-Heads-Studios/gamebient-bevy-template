@@ -1,4 +1,6 @@
 pub mod chip;
+pub mod house;
+pub mod songs;
 pub mod synth;
 pub mod tracker;
 
