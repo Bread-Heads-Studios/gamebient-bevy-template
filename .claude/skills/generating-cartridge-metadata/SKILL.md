@@ -46,7 +46,7 @@ genre, hosts) and verifying every URL.
 
 | Field | Rule |
 |-------|------|
-| `description` | One or two sentences, 20–45 words: the hook, then the core loop, in the game's own voice. Facts come from README, design spec, and in-game copy. |
+| `description` | One or two sentences, 20–45 words: the hook, then the core loop, in the game's own voice. Facts come from `docs/game-brief.md` (pitch, core loop) when present, README, design spec, and in-game copy. |
 | `Genre` | A recognizable genre phrase of one to three words, specific to this game ("Rail Shooter", "Rhythm Fighter", "Arcade Golf", "Arena Eater"), never bare "Arcade" when something truer exists. |
 | `Players` | "1" or "2" as the game actually supports. |
 | extra attributes | Only a gameplay fact a player cares about (`Missions: 5`, `Holes: 9`). Nothing else. |
