@@ -80,6 +80,9 @@ def load_cases():
 def cargo_env(work: Path):
     env = dict(os.environ)
     env["CARGO_TARGET_DIR"] = str(work / "target")
+    # Without debug info: with it, each test binary is ~1.5 GB and one
+    # case's build fills a disk.
+    env["CARGO_PROFILE_DEV_DEBUG"] = "false"
     env["GX_MUTE"] = "1"
     return env
 
@@ -98,19 +101,24 @@ def prepare_fixture(work: Path) -> str:
     git(["add", "-A"], fx)
     git(["commit", "-q", "-m", "Coin Run fixture"], fx)
     sha = git(["rev-parse", "HEAD"], fx).stdout.strip()
-    print("warming the build cache (first run takes several minutes)...", flush=True)
-    for _, cmd in GATES[1:]:
-        sh(cmd, fx, env=cargo_env(work))
+    print("building the fixture and running its CI gates (first run takes ~15 min)...", flush=True)
+    for name, cmd in GATES:
+        p = sh(cmd, fx, env=cargo_env(work))
+        if p.returncode != 0:
+            sys.exit(f"the fixture itself fails {name}; fix eval/vibe/fixture first:\n"
+                     f"{p.stdout[-3000:]}\n{p.stderr[-3000:]}")
     stamp.write_text(sha)
     return sha
 
 
-def new_worktree(work: Path, name: str, sha: str) -> Path:
-    d = work / "cases" / name
+def new_worktree(work: Path, sha: str) -> Path:
+    """The one directory every case is built in. Cargo keys a path
+    dependency's artifacts by its path, so a directory per case would leave
+    a full set of game and test binaries behind for each one."""
+    d = work / "case"
     if d.exists():
         git(["worktree", "remove", "--force", str(d)], REPO, check=False)
         shutil.rmtree(d, ignore_errors=True)
-    d.parent.mkdir(parents=True, exist_ok=True)
     git(["worktree", "add", "--detach", str(d), sha], REPO)
     return d
 
@@ -226,7 +234,7 @@ def run_case(case: dict, sha: str, work: Path, results: Path, args, tag: str = "
         print(f"{name}: already done, skipping (--force to redo)")
         return json.loads(out_file.read_text())
     t0 = time.monotonic()
-    d = new_worktree(work, name, sha)
+    d = new_worktree(work, sha)
     r = {"id": case["id"], "run": name, "category": case["category"], "text": case["text"],
          "expect": case["expect"], "setup": apply_setup(d, case["id"])}
     print(f"{name}: agent working on {case['text']!r}", flush=True)
@@ -245,7 +253,7 @@ def run_case(case: dict, sha: str, work: Path, results: Path, args, tag: str = "
 
 
 def run_chain(cases: dict, sha: str, work: Path, results: Path, args):
-    d = new_worktree(work, "chain", sha)
+    d = new_worktree(work, sha)
     log = []
     for i, cid in enumerate(CHAIN):
         case = cases[cid]
@@ -363,7 +371,7 @@ def main():
     ap.add_argument("--model", help="model for the agent (default: Claude Code's default)")
     ap.add_argument("--repeat", type=int, default=1, help="runs per case (the spec asks for 5)")
     ap.add_argument("--agent-timeout", type=int, default=1800, help="seconds per agent run")
-    ap.add_argument("--keep", action="store_true", help="keep each case's worktree")
+    ap.add_argument("--keep", action="store_true", help="keep the last case's worktree")
     ap.add_argument("--force", action="store_true", help="redo cases that already have results")
     args = ap.parse_args()
 
