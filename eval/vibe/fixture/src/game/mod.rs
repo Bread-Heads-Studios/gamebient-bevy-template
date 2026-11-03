@@ -151,10 +151,7 @@ impl Plugin for GamePlugin {
 
         if !self.headless {
             app.init_resource::<audio::CurrentTrack>()
-                .add_systems(
-                    Startup,
-                    (setup_scene, audio::setup_sfx, things::setup_thing_art),
-                )
+                .add_systems(Startup, (setup_scene, audio::setup_sfx))
                 .add_systems(
                     Update,
                     (
@@ -201,7 +198,7 @@ fn setup_scene(mut commands: Commands) {
         Camera3d::default(),
         Projection::from(OrthographicProjection {
             scaling_mode: bevy::camera::ScalingMode::FixedVertical {
-                viewport_height: crate::display::GAME_HEIGHT as f32,
+                viewport_height: crate::display::GAME_HEIGHT as f32, // allow-display: camera framing
             },
             ..OrthographicProjection::default_3d()
         }),

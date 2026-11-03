@@ -353,14 +353,11 @@ mod tests {
     }
 
     #[test]
-    fn coins_fall_and_land_and_nothing_happens_on_touch() {
+    fn coins_fall_and_land() {
         let mut s = Scenario::new();
-        s.place("Coin", -260.0, -200.0).start().tick(60);
+        s.place("Coin", 200.0, -200.0).start().tick(60);
         let c = s.pos("Coin").unwrap();
         assert!((c.y - (FLOOR_TOP + 10.0)).abs() < 0.5, "{c}");
-        s.hold(Buttons::RIGHT, 30);
-        assert_eq!(s.count("Coin"), 1, "the fixture has no rules yet");
-        assert_eq!(s.coins(), 0);
     }
 
     #[test]
@@ -372,10 +369,11 @@ mod tests {
     }
 
     #[test]
-    fn the_default_level_plays_without_ending() {
+    fn the_default_level_is_placed() {
         let mut s = Scenario::default_level();
-        s.hold(Buttons::RIGHT, 120).hold(Buttons::LEFT, 120);
-        assert!(!s.run_over());
+        s.start();
+        assert_eq!(s.count("Player"), 1);
         assert_eq!(s.count("Coin"), 5);
+        assert_eq!(s.count("Platform"), 3);
     }
 }

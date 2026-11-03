@@ -1,0 +1,66 @@
+diff --git a/src/game/coins.rs b/src/game/coins.rs
+new file mode 100644
+index 0000000..1eab646
+--- /dev/null
++++ b/src/game/coins.rs
+@@ -0,0 +1,29 @@
++//! Coin rule: when the Player touches a Coin, the Coin disappears and the
++//! player scores 10 points.
++
++use bevy::prelude::*;
++
++use super::scoring::GameData;
++use super::sim::SpawnOrder;
++use super::things::{Coin, Player, Size, overlaps};
++
++pub fn collect_coins(
++    mut commands: Commands,
++    mut data: ResMut<GameData>,
++    player: Query<(&Transform, &Size), With<Player>>,
++    coins: Query<(Entity, &SpawnOrder, &Transform, &Size), With<Coin>>,
++) {
++    let Ok((p_tf, p_size)) = player.single() else {
++        return;
++    };
++    let p = p_tf.translation.truncate();
++    let mut touched: Vec<_> = coins
++        .iter()
++        .filter(|(_, _, tf, size)| overlaps(p, p_size.0, tf.translation.truncate(), size.0))
++        .collect();
++    touched.sort_unstable_by_key(|(_, order, _, _)| **order);
++    for (e, ..) in touched {
++        commands.entity(e).despawn();
++        data.add_score(10);
++    }
++}
+diff --git a/src/game/mod.rs b/src/game/mod.rs
+index 124d070..254d1c0 100644
+--- a/src/game/mod.rs
++++ b/src/game/mod.rs
+@@ -3,6 +3,7 @@ use bevy::prelude::*;
+ pub mod audio;
+ #[cfg(feature = "autopilot")]
+ pub mod autopilot;
++pub mod coins;
+ pub mod demo;
+ pub mod host;
+ pub mod input;
+@@ -110,6 +111,7 @@ impl Plugin for GamePlugin {
+                     physics::step_bodies,
+                     // Coin Run's rules go here, after physics and before
+                     // scoring, each one a system of its own.
++                    coins::collect_coins,
+                     scoring::handle_score_events,
+                     sim::checksum_tick,
+                     things::checksum_things,
+diff --git a/tests/fixtures/selftest.gxr b/tests/fixtures/selftest.gxr
+index c69fafb87ea542529a7bd9abfc133fff269a90ff..068e330cd85d66c07bea43cadad4ba839d809801 100644
+GIT binary patch
+literal 237
+zcmZ>d2r}d~&@<FC&`vcsOi4*Kwqb}P02m^e7#QRjARt8Y)+gCl3<@GZE(e1EkYohX
+TAYhHbXMxJIK;_Z-wAK#*74{d^
+
+literal 237
+zcmZ>d2r}d~&@<FC&^Ao8Fflhzv0;cK02m^e7~tTk>#J1H1n%o1KoJfG0U*f;q(Q(M
+QgU<q$XMxJ2^J%Rg02|sD{r~^~
+

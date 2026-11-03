@@ -111,9 +111,9 @@ pub fn props(kind: &str) -> Option<ThingProps> {
     })
 }
 
-/// Mesh and material handles for drawing things. Inserted at `Startup` in the
-/// windowed game only; the headless verifier and `scenario.rs` have none, so
-/// [`Spawner`] reads it as optional.
+/// Mesh and material handles for drawing things. Inserted at `Startup` by
+/// `AssetsPlugin`, which the headless verifier and `scenario.rs` don't add,
+/// so [`Spawner`] reads it as optional.
 #[derive(Resource)]
 pub struct ThingArt {
     pub cube: Handle<Mesh>,

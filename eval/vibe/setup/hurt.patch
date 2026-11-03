@@ -1,0 +1,67 @@
+diff --git a/src/game/hurt.rs b/src/game/hurt.rs
+new file mode 100644
+index 0000000..0ee9f0f
+--- /dev/null
++++ b/src/game/hurt.rs
+@@ -0,0 +1,32 @@
++//! Hurt rule: when an Enemy starts touching the Player, the Player loses a
++//! life (once per touch, not once per tick of contact).
++
++use bevy::prelude::*;
++
++use super::scoring::GameData;
++use super::things::{Enemy, Player, Size, overlaps};
++
++/// On an Enemy that was touching the Player last tick.
++#[derive(Component)]
++pub struct TouchingPlayer;
++
++pub fn hurt_player(
++    mut commands: Commands,
++    mut data: ResMut<GameData>,
++    player: Query<(&Transform, &Size), With<Player>>,
++    enemies: Query<(Entity, &Transform, &Size, Has<TouchingPlayer>), With<Enemy>>,
++) {
++    let Ok((p_tf, p_size)) = player.single() else {
++        return;
++    };
++    let p = p_tf.translation.truncate();
++    for (e, tf, size, was_touching) in &enemies {
++        let touching = overlaps(p, p_size.0, tf.translation.truncate(), size.0);
++        if touching && !was_touching {
++            data.lives = data.lives.saturating_sub(1);
++            commands.entity(e).insert(TouchingPlayer);
++        } else if !touching && was_touching {
++            commands.entity(e).remove::<TouchingPlayer>();
++        }
++    }
++}
+diff --git a/src/game/mod.rs b/src/game/mod.rs
+index 124d070..5797faa 100644
+--- a/src/game/mod.rs
++++ b/src/game/mod.rs
+@@ -5,6 +5,7 @@ pub mod audio;
+ pub mod autopilot;
+ pub mod demo;
+ pub mod host;
++pub mod hurt;
+ pub mod input;
+ pub mod level;
+ pub mod physics;
+@@ -110,6 +111,7 @@ impl Plugin for GamePlugin {
+                     physics::step_bodies,
+                     // Coin Run's rules go here, after physics and before
+                     // scoring, each one a system of its own.
++                    hurt::hurt_player,
+                     scoring::handle_score_events,
+                     sim::checksum_tick,
+                     things::checksum_things,
+diff --git a/tests/fixtures/selftest.gxr b/tests/fixtures/selftest.gxr
+index c69fafb87ea542529a7bd9abfc133fff269a90ff..cc541ac5a5fd7608f6fcbbedf7151c58b29026bf 100644
+GIT binary patch
+delta 40
+qcmaFM_?A(`JtD}E*Feuu&p<oX+%P32)!2q%qN4Cb0~RPU-UR^VEekUM
+
+delta 40
+qcmaFM_?A(`JtD}E*Feuu&p_KS(Za;sJjI4#qN4Cb0~RPU-UR^NK?>FY
+

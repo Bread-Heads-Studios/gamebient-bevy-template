@@ -278,13 +278,17 @@ def run_chain(cases: dict, sha: str, work: Path, results: Path, args):
 PASS_ON_FIXTURE = {"a12", "a17"}
 
 
-def run_baseline(work: Path):
-    """Every hidden test on the untouched fixture. All but PASS_ON_FIXTURE
-    must fail, or the test can't tell a change from no change."""
-    d = work / "fixture"
+def run_baseline(work: Path, sha: str):
+    """Every hidden test on the untouched fixture (plus the case's setup
+    rule, for g-cases). All but PASS_ON_FIXTURE must fail, or the test can't
+    tell a change from no change."""
     bad = []
     for src in sorted(HIDDEN.glob("*.rs")):
         cid = src.stem
+        d = work / "fixture"
+        if cid in SETUPS:
+            d = new_worktree(work, sha)
+            apply_setup(d, cid)
         got = run_hidden(d, work, cid)["hidden"]
         want = "pass" if cid in PASS_ON_FIXTURE else "fail"
         flag = "" if got == want else "   <-- expected " + want
@@ -386,7 +390,7 @@ def main():
     if args.fixture_only:
         return
     if args.baseline:
-        run_baseline(args.work)
+        run_baseline(args.work, sha)
         return
     if args.chain:
         run_chain(cases, sha, args.work, results, args)
