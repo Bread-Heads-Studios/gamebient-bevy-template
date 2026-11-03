@@ -519,17 +519,71 @@ together (`src/lib/cabinetFrame/` in the website repo).
 
 ## Audio
 
-The kit is asset-free by default: SFX are synthesized at startup
-(`src/game/audio/synth.rs` — pure `f(t)` generators rendered to in-memory
-WAV). To add a sound: add an `SfxEvent` variant, bake its source in
-`setup_sfx`, emit the event from gameplay. Never play audio directly from
-gameplay systems — always go through the bus (keeps mixing/despawn policy in
-one place).
+Every game owns a complete, unique sound; what is shared is the grammar.
+The fleet rules are in the workspace spec
+(`docs/plans/2026-10-30-audio-identity-pass.md`) and each game writes its
+own `docs/audio-identity.md` (this template's is the form).
 
-Music is table-driven: fill a slot in `MUSIC` (src/game/audio/mod.rs) with a
-path under `assets/audio/music/` and the crossfade director handles the rest.
-`None` slots load nothing. A `GameState` variant absent from the table also
-resolves to silence — when you add a state, add its row. Authored-asset
-precedent: voidrunner / Gravestone_Gauntlet; procedural precedent: Hunted.
+**The house chip.** `src/game/audio/chip.rs` models the ColecoVision's TI
+SN76489: three square tones, one noise voice (white or periodic; three rates
+or clocked by tone 3) and sixteen 2 dB volume steps. Chip games render all
+their music and SFX through it, so the fleet sounds like one console and a
+game's composition is its identity. Chords are fast arpeggios, vibrato is a
+wobbling pitch, drums are shaped noise. Authored-track games (Hunted,
+voidrunner, Gravestone, the Suno-scored ocean games) are exempt from the
+chip but not from the rest of these rules.
+
+**Songs.** `src/game/audio/tracker.rs` renders a `Song` (bpm, bars, four
+voice strings, `const` instruments) to an in-memory WAV of exactly its bars,
+normalized to -12 dBFS for loops and -3 dBFS for stings, then `MASTER_GAIN`.
+Compose in `src/game/audio/songs.rs`. Notation, one string per voice,
+whitespace-separated, `|` ignored:
+
+| token | meaning |
+|---|---|
+| `c4` `f#3` `bb2` | note on, one step |
+| `c4:3` | held three steps |
+| `.` `.:3` | rest |
+| `-` | extend the previous token one step |
+| `/c5` | glide from the previous pitch over this note |
+| `c4~` | vibrato (the instrument's, or 25 cents at 6 Hz) |
+| `@2` | following notes use instrument 2 |
+| `v4` | following notes 4 steps (8 dB) quieter |
+| `x` `x:2` | noise voice: a hit |
+
+Instruments are `Instrument::tone(env)` / `Instrument::noise(mode, rate,
+env)` with `.with_release(frames)`, `.with_arp(&[0, 4, 7])` and
+`.with_vibrato(cents, hz)`; `env` is attenuation per 60 Hz frame, last value
+held. Every voice must tile to the song's length; `render_loop` names the
+voice that does not. Sound effects are `tracker::Fx` programs (`.hit`,
+`.slide`, `.tone`, `.noise`, `.then`, `.with`) baked in `audio::bake`.
+
+**Cues.** `MUSIC` in `src/game/audio/mod.rs` maps every `GameState` to a
+`Cue`: a `Source::Baked(fn)` or `Source::File("audio/music/x.ogg")`, looping
+or one-shot, its fades and volume, and `layers` of the same length that
+start with it at zero volume and fade in on `LayerEvent::Start(i)`. Gameplay
+changes the music within a state with `CueEvent::Switch(&CUE)` (a boss, a
+race leg); the table wins again on the next state change. A `None` row is a
+deliberate silence, written up in the identity doc; a state missing from the
+table is a test failure. Baked cues render once into `MusicCache`, all of
+them while the title screen is up (`prewarm_music`). Stings flagged by
+`SfxEvent::is_sting` duck the music by 6 dB while they play.
+
+**State coverage.** `StudioLogo` plays the house sting (`house.rs`, the one
+shared sound, hash-pinned and copied verbatim like `chip.rs` and
+`tracker.rs`); `Menu` and `HowToPlay` share the menu loop; `Playing` has
+its loop and layers or switches; `GameOver` and `DemoEnd` are non-looping
+stings that end in silence.
+
+**No stock sounds.** `synth.rs` palette functions may be building blocks,
+but no shipped sound equals another game's or the template's (the house
+sting excepted). Confirm, Pause and ScreenSweep are re-voiced in every game
+in its own key. Never play audio directly from a gameplay system; emit a
+message so mixing and despawn policy stay in one place.
+
+**Listen before you ship.** `GX_AUDIO_EXPORT=<dir> cargo test --test
+audio_export -- --nocapture` writes every baked cue, layer and SFX to WAV.
+Authored files live under `assets/audio/music/` and `assets/audio/sfx/` as
+OGG Vorbis; a missing `File` cue plays silence (Bevy logs once).
 
 Web autoplay is already handled by the boot flow's AudioContext unlock.

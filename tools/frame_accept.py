@@ -402,6 +402,10 @@ def check_copies(game_arg):
                     problems.append(f"{label}: differs (binary)\n")
 
     exact("src/ui/fit.rs", "src/fit.rs" if flat else "src/ui/fit.rs")
+    # The house chip, the tracker and the shared studio sting: a game
+    # composes in songs.rs and mod.rs, never here.
+    for f in ("chip.rs", "tracker.rs", "house.rs"):
+        exact(f"src/game/audio/{f}", f"src/audio/{f}" if flat else f"src/game/audio/{f}")
     exact_tree("src/game/record", "src/record" if flat else "src/game/record")
 
     # tests/display_shape.rs: the crate name only.
@@ -440,7 +444,12 @@ def check_copies(game_arg):
             for p in sorted(tools.glob("*"))
             if p.is_file()
             and (
-                (p.name.startswith("test_") and p.name != "test_cut_clips.py")
+                (
+                    p.name.startswith("test_")
+                    # The two tests a game does carry: cut_clips and the
+                    # Vercel middleware's entitlement check, which ci.yml runs.
+                    and p.name not in ("test_cut_clips.py", "test_entitlement.mjs")
+                )
                 or p.name.startswith("rollout-")
             )
         ]

@@ -59,6 +59,10 @@ impl Plugin for GamePlugin {
             .init_resource::<replay::recorder::ReplayRecorder>()
             .add_message::<scoring::ScoreEvent>()
             .add_message::<audio::SfxEvent>()
+            // Music control from gameplay (switches, layers). Registered in
+            // both modes so sim code can emit them under the verifier too.
+            .add_message::<audio::CueEvent>()
+            .add_message::<audio::LayerEvent>()
             // Three clauses, and every game needs all three: the run is
             // live, it is not paused, and it is not already over.
             // `sim::run_not_over` freezes the sim on the tick the run ends
@@ -142,15 +146,27 @@ impl Plugin for GamePlugin {
             );
 
         if !self.headless {
-            app.init_resource::<audio::CurrentTrack>()
+            app.init_resource::<audio::MusicCache>()
+                .init_resource::<audio::CurrentCue>()
+                .init_resource::<audio::Duck>()
                 .add_systems(Startup, (setup_scene, audio::setup_sfx))
                 .add_systems(
                     Update,
                     (
                         audio::play_sfx,
                         audio::music_director,
-                        audio::update_music_fades,
-                    ),
+                        audio::layer_control,
+                        audio::update_music_voices,
+                    )
+                        .chain(),
+                )
+                // Renders the baked cues one per frame while the title is
+                // up, so entering a state never waits on a render.
+                .add_systems(
+                    Update,
+                    audio::prewarm_music
+                        .run_if(in_state(GameState::Menu))
+                        .after(audio::update_music_voices),
                 )
                 .add_systems(
                     Update,
