@@ -93,6 +93,17 @@ handful of cases.
 `chain.md` shows after each step how many earlier requests still pass their
 hidden tests.
 
+## Sample run
+
+`sample-run/` holds the first real agent run: case a01, "If the player
+touches a coin, they collect it." The agent took 293 s and 51 turns, and cost
+$2.96. It added a 121-line rule file with its own tests and regenerated the
+replay fixture. All gates and the hidden test passed. Its readback: "When
+the player runs into a coin, the coin disappears, the coin counter in the
+corner goes up by one, and a pickup sound plays. I assumed collecting is just
+a count, so the score stays the same; tell me if you want each coin to be
+worth points."
+
 ## Grading
 
 The automatic numbers are a first pass. A person still grades:
@@ -115,6 +126,12 @@ many it attempts, and of those, how many work.
 
 - **Native builds only.** The timing is a native incremental build. A web
   preview means a wasm build, which is slower.
+- **The wasm replay gate isn't checked.** `build_web.sh` also verifies
+  `tests/fixtures/selftest-wasm.gxr` under the wasm verifier before a
+  deploy. Neither the fixture nor the runner regenerates or checks it (it
+  needs the wasm toolchain), so a change that passes here can still stop a
+  deploy until that file is re-recorded. The first real agent run (a01)
+  spotted this by itself and said so.
 - **The agent runs cargo itself**, so agent time already includes several
   builds. Some agents will skip the gates, and the runner catches that.
 - **One fixture, one prompt.** Both arms share the eval set's bias: the

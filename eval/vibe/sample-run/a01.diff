@@ -1,0 +1,174 @@
+diff --git a/AGENTS.md b/AGENTS.md
+index 7d8e6bb..6536ca1 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -60,8 +60,9 @@ Coin Run is a small side-view platformer built on the template. Its parts:
+   with each other; use `things::overlaps` for touching.
+ - **Rules** are systems of their own in `SimSet`, registered in
+   `src/game/mod.rs` after `physics::step_bodies` (look for "Coin Run's rules
+-  go here"). The fixture starts with none: touching a coin, an enemy or the
+-  goal does nothing yet, and there is no jump or shooting.
++  go here"). The rules so far: `coins::collect_coins` (touching a coin
++  removes it, counts it and plays `Pickup`; no score). Touching an enemy or
++  the goal does nothing yet, and there is no jump or shooting.
+ - **Counters:** `scoring::GameData` has `score` (the leaderboard score),
+   `lives` (starts at 3) and `coins`.
+ - **Sounds:** `audio::SfxEvent::{Pickup, Hit, Jump, Shoot, Win, Lose}`.
+diff --git a/src/game/coins.rs b/src/game/coins.rs
+new file mode 100644
+index 0000000..23a430d
+--- /dev/null
++++ b/src/game/coins.rs
+@@ -0,0 +1,121 @@
++//! Coin Run rule: the Player collects a Coin by touching it.
++//!
++//! Runs in `SimSet` right after `physics::step_bodies`, so it sees where
++//! everything ended up this tick. A touched coin is removed, `GameData::coins`
++//! goes up by one and a `Pickup` sound is asked for. The score is untouched:
++//! collecting is a count, and what coins are worth is a rule of its own.
++
++use bevy::prelude::*;
++
++use super::audio::SfxEvent;
++use super::scoring::GameData;
++use super::things::{Coin, Player, Size, overlaps};
++
++impl GameData {
++    /// Collects `n` coins: pure logic, unit-tested below.
++    pub fn collect_coins(&mut self, n: u32) {
++        self.coins += n;
++    }
++}
++
++/// Every coin the player's box overlaps this tick is collected: removed from
++/// the level, counted, and announced with a `Pickup` sound. The outcome is
++/// the same whatever order the query yields coins in (each coin is judged
++/// on its own and the count is a sum), so no `SpawnOrder` sort is needed.
++pub fn collect_coins(
++    mut commands: Commands,
++    players: Query<(&Transform, &Size), With<Player>>,
++    coins: Query<(Entity, &Transform, &Size), With<Coin>>,
++    mut data: ResMut<GameData>,
++    mut sfx: MessageWriter<SfxEvent>,
++) {
++    let mut collected = 0;
++    for (coin, coin_tf, coin_size) in &coins {
++        let touched = players.iter().any(|(player_tf, player_size)| {
++            overlaps(
++                player_tf.translation.truncate(),
++                player_size.0,
++                coin_tf.translation.truncate(),
++                coin_size.0,
++            )
++        });
++        if touched {
++            commands.entity(coin).despawn();
++            collected += 1;
++            sfx.write(SfxEvent::Pickup);
++        }
++    }
++    if collected > 0 {
++        data.collect_coins(collected);
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::game::scenario::{Buttons, FLOOR_TOP, START, Scenario};
++
++    #[test]
++    fn collect_coins_counts_up() {
++        let mut d = GameData::default();
++        d.collect_coins(1);
++        d.collect_coins(2);
++        assert_eq!(d.coins, 3);
++        assert_eq!(d.score, 0, "collecting is a count, not points");
++    }
++
++    #[test]
++    fn walking_into_a_coin_collects_it() {
++        let mut s = Scenario::new();
++        s.place("Coin", START.x + 40.0, FLOOR_TOP + 10.0).start();
++        assert_eq!(s.count("Coin"), 1);
++        assert_eq!(s.coins(), 0);
++        s.hold(Buttons::RIGHT, 30);
++        assert_eq!(s.count("Coin"), 0, "the coin is gone");
++        assert_eq!(s.coins(), 1);
++        assert_eq!(s.score(), 0, "no points were awarded");
++        assert!(
++            s.sounds().iter().any(|(_, e)| *e == SfxEvent::Pickup),
++            "a pickup sound was asked for: {:?}",
++            s.sounds()
++        );
++    }
++
++    #[test]
++    fn a_coin_out_of_reach_stays() {
++        let mut s = Scenario::new();
++        // Resting on the floor far to the right; the player walks 120 px.
++        s.place("Coin", START.x + 300.0, FLOOR_TOP + 10.0).start();
++        s.hold(Buttons::RIGHT, 30);
++        assert_eq!(s.count("Coin"), 1);
++        assert_eq!(s.coins(), 0);
++        assert!(s.sounds().is_empty(), "{:?}", s.sounds());
++    }
++
++    #[test]
++    fn a_coin_falling_onto_the_player_is_collected_too() {
++        let mut s = Scenario::new();
++        // Dropped from above the player's head; it falls through the
++        // player's box (bodies never collide with each other).
++        s.place("Coin", START.x, START.y + 80.0).start();
++        s.tick(60);
++        assert_eq!(s.count("Coin"), 0);
++        assert_eq!(s.coins(), 1);
++    }
++
++    #[test]
++    fn each_coin_is_collected_once_and_the_rest_of_the_level_is_untouched() {
++        let mut s = Scenario::new();
++        s.place("Coin", START.x + 40.0, FLOOR_TOP + 10.0)
++            .place("Coin", START.x + 80.0, FLOOR_TOP + 10.0)
++            .place("Enemy", START.x + 60.0, START.y)
++            .start();
++        s.hold(Buttons::RIGHT, 30);
++        assert_eq!(s.count("Coin"), 0);
++        assert_eq!(s.coins(), 2);
++        assert_eq!(s.count("Enemy"), 1, "only coins are collected");
++        assert_eq!(s.count("Player"), 1);
++        s.tick(30);
++        assert_eq!(s.coins(), 2, "nothing counts twice");
++    }
++}
+diff --git a/src/game/mod.rs b/src/game/mod.rs
+index 124d070..254d1c0 100644
+--- a/src/game/mod.rs
++++ b/src/game/mod.rs
+@@ -3,6 +3,7 @@ use bevy::prelude::*;
+ pub mod audio;
+ #[cfg(feature = "autopilot")]
+ pub mod autopilot;
++pub mod coins;
+ pub mod demo;
+ pub mod host;
+ pub mod input;
+@@ -110,6 +111,7 @@ impl Plugin for GamePlugin {
+                     physics::step_bodies,
+                     // Coin Run's rules go here, after physics and before
+                     // scoring, each one a system of its own.
++                    coins::collect_coins,
+                     scoring::handle_score_events,
+                     sim::checksum_tick,
+                     things::checksum_things,
+diff --git a/tests/fixtures/selftest.gxr b/tests/fixtures/selftest.gxr
+index c69fafb87ea542529a7bd9abfc133fff269a90ff..c0fe0bdd0c61fd07f8a28fddd1df51581d4eadb7 100644
+GIT binary patch
+literal 237
+zcmZ>d2r}d~&@<FC(6%s7OfyX~vtfuM02m^e7~r5_LPeHi38RMyP=td)07x<dX%Mi+
+Q;IlyGS)lUhd|K-V0Em+p4FCWD
+
+literal 237
+zcmZ>d2r}d~&@<FC&^Ao8Fflhzv0;cK02m^e7~tTk>#J1H1n%o1KoJfG0U*f;q(Q(M
+QgU<q$XMxJ2^J%Rg02|sD{r~^~
+
