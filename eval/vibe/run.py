@@ -52,6 +52,11 @@ CHAIN = [
     "a13", "b02", "d01", "c02", "d03", "c03", "b03", "a11",
 ]
 
+ALLOWED_TOOLS = ",".join([
+    "Read", "Edit", "Write", "Glob", "Grep",
+    "Bash(cargo:*)", "Bash(git diff:*)", "Bash(git status:*)", "Bash(ls:*)",
+])
+
 GATES = [
     ("fmt", ["cargo", "fmt", "--all", "--", "--check"]),
     ("clippy", ["cargo", "clippy", "--all-targets", "--all-features", "--", "-D", "warnings"]),
@@ -134,12 +139,24 @@ def apply_setup(d: Path, case_id: str):
 
 
 def run_agent(d: Path, text: str, args, work: Path) -> dict:
+    if args.apply:
+        # Dry run: a known change stands in for the agent, so the rest of the
+        # pipeline can be checked without spending anything.
+        t0 = time.monotonic()
+        git(["apply", str(args.apply)], d)
+        return {"agent_secs": round(time.monotonic() - t0, 1), "agent_rc": 0,
+                "agent_error": False, "agent_stderr": "", "turns": 0, "cost_usd": 0.0,
+                "reply": f"READBACK: applied {args.apply.name}",
+                **parse_reply(f"READBACK: applied {args.apply.name}")}
     prompt = PROMPT.replace("{request}", text)
-    cmd = ["claude", "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"]
+    # Edits are accepted, and the only commands the agent may run are cargo
+    # and read-only git. Anything else is denied, not asked about: there is
+    # no one at the prompt in -p mode.
+    cmd = ["claude", "-p", prompt, "--output-format", "json",
+           "--permission-mode", "acceptEdits", "--allowedTools", ALLOWED_TOOLS]
     if args.model:
         cmd += ["--model", args.model]
     env = cargo_env(work)
-    env["IS_SANDBOX"] = "1"  # allow skipping permissions when running as root
     t0 = time.monotonic()
     try:
         p = sh(cmd, d, env=env, timeout=args.agent_timeout)
@@ -375,11 +392,15 @@ def main():
     ap.add_argument("--model", help="model for the agent (default: Claude Code's default)")
     ap.add_argument("--repeat", type=int, default=1, help="runs per case (the spec asks for 5)")
     ap.add_argument("--agent-timeout", type=int, default=1800, help="seconds per agent run")
+    ap.add_argument("--apply", type=Path,
+                    help="dry run: apply this patch instead of running the agent")
     ap.add_argument("--keep", action="store_true", help="keep the last case's worktree")
     ap.add_argument("--force", action="store_true", help="redo cases that already have results")
     args = ap.parse_args()
 
-    if not shutil.which("claude") and not (args.fixture_only or args.baseline):
+    if args.apply:
+        args.apply = args.apply.resolve()
+    if not shutil.which("claude") and not (args.fixture_only or args.baseline or args.apply):
         sys.exit("needs the Claude Code CLI (`claude`) on PATH, signed in")
     args.work.mkdir(parents=True, exist_ok=True)
     results = args.work / "results"

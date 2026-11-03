@@ -52,12 +52,21 @@ python3 eval/vibe/run.py --all --repeat 5    # what the spec asks for
 python3 eval/vibe/run.py --chain             # 17 requests piled onto one game
 ```
 
+`--apply PATCH` replaces the agent with a known change. It's a free dry run
+for checking the pipeline itself; for example,
+`--cases a01 --apply eval/vibe/setup/coin_counts.patch` should come out green.
+
+**Permissions:** the agent runs headless (`claude -p`) with edits accepted and
+an allowlist of commands: `cargo`, read-only `git` and `ls`. Everything else
+is denied, because nobody is there to approve a prompt. It can't commit, push
+or reach outside the case's worktree with a shell command.
+
 `--model` picks the agent's model. Work, the shared cargo target directory and
 results go to `~/.cache/gamebient-vibe-eval` (`--work` to change it). Cases
 that already have results are skipped unless you pass `--force`.
 
 **Cost:** each case is a full agent session that edits code and runs cargo
-several times. Expect roughly 5–20 minutes and a few dollars of model usage per
+several times. My guess, not yet measured: 5–20 minutes and a few dollars of model usage per
 case, so `--all --repeat 5` is a few hundred agent sessions. Start with a
 handful of cases.
 
