@@ -26,7 +26,7 @@ Supporting files: [fonts.md](fonts.md) (what renders under rsvg on macOS),
    fix `src/game/autopilot.rs` first ([autopilot.md](autopilot.md)). Read the
    shots as images; pick the beat with the most action.
 2. **Write a design brief before touching SVG.** Five lines, from the game's
-   README, spec, and in-game copy:
+   brief (`docs/game-brief.md`, "Voice", if the game has one), README, spec, and in-game copy:
    - *Mood* in three words (deadpan bureaucratic; soda-fountain cheer; abyssal dread).
    - *Typeface voice* that mood implies (typewriter, chalk, chrome, serif field guide) → one or two faces from [fonts.md](fonts.md).
    - *Words*: the tagline and one sticker/stamp line, in the game's voice, not a generic "CATCH • STACK • DELIVER" cadence.

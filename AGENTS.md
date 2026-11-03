@@ -10,6 +10,14 @@ from the Gamebient Bevy template. Targets native (x86_64 Linux, aarch64 Pi) and 
 (wasm32 + WebGL2). Geometry is procedural; the codebase favors small, focused,
 one-responsibility files.
 
+**Bevy is pinned at 0.18.** Models are often trained on older Bevy and newer
+upstream releases exist; before writing a Bevy API from memory, check
+[docs/bevy-reference.md](docs/bevy-reference.md).
+
+**What the game is** lives in [docs/game-brief.md](docs/game-brief.md): pitch,
+core loop, MVP (seven items at most), build order, demo cut and voice. Fill it
+in before the first gameplay code; the cover and metadata skills read it.
+
 ## Architecture & conventions
 
 - **One file per system/feature.** A module (`src/game/player.rs`,
@@ -239,6 +247,40 @@ Full rules: "Typography and cards" in `docs/conventions.md`.
 
 Deeper detail: [docs/build-and-release.md](docs/build-and-release.md) and
 [docs/conventions.md](docs/conventions.md).
+
+## Writing checks
+
+Applies to tests, `tools/test_*`, gate scripts (`frame-accept.sh`,
+`frame-art.sh`'s refusals) and skills. Adapted from Claude-Code-Game-Studios
+(MIT).
+
+- **Watch it fail.** A check you have not seen fail is not known to check
+  anything. Break what it guards, confirm it fails, restore. A regression test
+  must fail on the unfixed code before the fix goes in; a fixture that cannot
+  exercise the bug passes against it and looks authoritative doing so.
+- **"Could not run" is its own result.** A check whose input is missing (no
+  screenshots, no fixture, no tool on PATH) says so by name (`SKIP: ...`,
+  `NOT RUN`) and never prints the pass line. Zero files scanned is not zero
+  problems. It must not outrank a real failure either.
+- **Assert something that cannot be true by accident.** A distinctive token,
+  not a word a path or another identifier also contains.
+- **Derive the covered set** (walk `src/game/`, list `tools/*.sh`) rather than
+  enumerate it, so a new file cannot land outside coverage. If you keep a hand
+  list, say why next to it.
+
+## Claude Code setup
+
+`.claude/` holds Claude-only helpers; everything binding is also in this file
+or `docs/`.
+
+- **Path-scoped rules** in `.claude/rules/` load when matching files are
+  edited: `sim.md` (`src/game/**`), `ui.md`, `frame.md`, `tools.md`,
+  `checks.md`. They are short checklists that point at `docs/conventions.md`;
+  change the doc first, then the rule.
+- **`.claude/settings.json`** sets `GX_MUTE=1` for every command Claude runs,
+  denies reading `.env*` and force pushes, and runs
+  `.claude/hooks/sim-changed.sh`, which reminds once per session to regenerate
+  `tests/fixtures/selftest.gxr` after a sim edit. Hooks are shellchecked in CI.
 
 ## Gotchas & hard-won lessons
 

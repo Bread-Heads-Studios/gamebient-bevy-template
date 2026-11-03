@@ -186,7 +186,8 @@ src/
 
 Geometry is procedural — no external model files. See
 [docs/conventions.md](docs/conventions.md) for the patterns to follow and
-[AGENTS.md](AGENTS.md) for agent-oriented guidance.
+[AGENTS.md](AGENTS.md) for agent-oriented guidance. What the game itself is
+(pitch, core loop, MVP) goes in [docs/game-brief.md](docs/game-brief.md).
 
 ## About this template
 
