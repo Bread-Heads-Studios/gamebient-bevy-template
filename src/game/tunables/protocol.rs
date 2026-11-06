@@ -299,28 +299,46 @@ mod tests {
         });
     }
 
+    /// Changes a number or a bool; leaves other kinds alone.
+    fn bump(v: &Value) -> Value {
+        match v {
+            Value::Float(f) => Value::Float(f + 1.0),
+            Value::Int(i) => Value::Int(i + 1),
+            Value::Bool(b) => Value::Bool(!b),
+            other => other.clone(),
+        }
+    }
+
+    /// Generic over the game's first tunable, so this test survives a game
+    /// replacing `tuning.rs` (this file is copied into every game).
     #[test]
     fn list_set_and_report_over_host_messages() {
+        use crate::game::tunables::read;
         let mut app = build_headless_app();
         app.update();
         drain_custom(&mut app);
+        let entry = app.world().resource::<TunableIndex>().entries[0].clone();
+        let group = app.world().resource::<TunableIndex>().groups[entry.group].clone();
         send(&mut app, "tunables.list", "null");
         app.update();
         let events = drain_custom(&mut app);
         assert_eq!(events[0].0, "tunables");
         let j: Json = serde_json::from_str(&events[0].1).unwrap();
-        assert_eq!(j["tunables"][0]["path"], "run.spare");
-        assert_eq!(j["tunables"][0]["type"], "i32");
-        assert_eq!(j["tunables"][0]["value"], 1);
-        assert_eq!(j["tunables"][0]["applies"], "tick");
-        assert_eq!(j["groups"][0]["kind"], "rule");
+        assert_eq!(j["tunables"][0]["path"], entry.path);
+        assert_eq!(j["tunables"][0]["type"], entry.tune.kind.name());
+        assert_eq!(j["tunables"][0]["value"], entry.default.to_json());
+        assert_eq!(j["tunables"][0]["default"], entry.default.to_json());
+        assert_eq!(j["groups"][entry.group]["kind"], group.kind.name());
+        assert_eq!(j["groups"][entry.group]["label"], group.label);
         assert!(j["content"].is_string());
         assert!(j["build"].as_str().unwrap().contains('+'));
+        assert!(j["checks"].is_array() && j["sounds"].is_array());
 
+        let path = entry.path.clone();
         send(
             &mut app,
             "tunables.set",
-            "{\"run.spare\":4,\"nope.x\":1,\"run.spare\":\"x\"}",
+            &format!("{{\"nope.x\":1,\"{path}\":[\"wrong\",\"shape\",1,2,3]}}"),
         );
         app.update();
         let events = drain_custom(&mut app);
@@ -329,28 +347,31 @@ mod tests {
             .filter(|e| e.0 == "tunable")
             .map(|e| serde_json::from_str(&e.1).unwrap())
             .collect();
-        // serde_json keeps the last duplicate key, so "x" wins and is
-        // rejected; the unknown path is reported too (order is the map's).
-        let spare = applied.iter().find(|j| j["path"] == "run.spare").unwrap();
-        assert_eq!(spare["error"], "not a i32");
+        let wrong = applied.iter().find(|j| j["path"] == path).unwrap();
+        assert_eq!(wrong["error"], format!("not a {}", entry.tune.kind.name()));
         let nope = applied.iter().find(|j| j["path"] == "nope.x").unwrap();
         assert_eq!(nope["error"], "unknown tunable");
         assert_eq!(applied.len(), 2);
+        assert_eq!(
+            read(app.world(), &entry),
+            Some(entry.default.clone()),
+            "untouched"
+        );
 
-        send(&mut app, "tunables.set", "{\"run.spare\":4}");
+        let next = bump(&entry.default);
+        send(
+            &mut app,
+            "tunables.set",
+            &serde_json::json!({ path.clone(): next.to_json() }).to_string(),
+        );
         app.update();
         let events = drain_custom(&mut app);
-        let j: Json = serde_json::from_str(&events[0].1).unwrap();
         assert_eq!(events[0].0, "tunable");
-        assert_eq!(j["path"], "run.spare");
-        assert_eq!(j["value"], 4);
+        let j: Json = serde_json::from_str(&events[0].1).unwrap();
+        assert_eq!(j["path"], path);
+        assert_eq!(j["value"], next.to_json());
         assert_eq!(j["applied"], "now");
-        assert_eq!(
-            app.world()
-                .resource::<crate::game::tuning::RunTuning>()
-                .spare,
-            4
-        );
+        assert_eq!(read(app.world(), &entry), Some(next));
     }
 
     #[test]
