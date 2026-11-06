@@ -134,12 +134,15 @@ mod tests {
         assert!(f.next().is_none());
     }
 
+    /// Generic over the game's first tunable (this file is copied into
+    /// every game, which has its own `tuning.rs`).
     #[test]
     fn a_recorded_change_is_queued_on_its_tick() {
         use crate::game::replay::build_headless_app;
         use crate::game::sim::SimTick;
         use gamebient_input::TickInputSet;
         let mut app = build_headless_app();
+        let entry = app.world().resource::<TunableIndex>().entries[0].clone();
         let mut r = Replay {
             build: String::new(),
             tick_hz: 60,
@@ -152,8 +155,8 @@ mod tests {
             starts: Vec::new(),
             tunes: vec![TuneRecord {
                 tick: 2,
-                id: 0,
-                bytes: Value::Int(3).to_bytes(),
+                id: entry.id,
+                bytes: entry.default.to_bytes(),
             }],
             runs: Vec::new(),
         };
@@ -171,7 +174,7 @@ mod tests {
         app.world_mut().run_system_cached(feed_tick).unwrap();
         assert_eq!(
             app.world().resource::<PendingTunes>().0,
-            vec![(0, Value::Int(3))]
+            vec![(entry.id, entry.default.clone())]
         );
         assert_eq!(app.world().resource::<ReplayFeeder>().tune_at, 1);
     }
