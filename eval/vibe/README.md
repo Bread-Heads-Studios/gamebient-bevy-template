@@ -104,6 +104,22 @@ corner goes up by one, and a pickup sound plays. I assumed collecting is just
 a count, so the score stays the same; tell me if you want each coin to be
 worth points."
 
+A four-case batch followed (results in the same folder, `summary.md` for the
+table). It cost $2.15 in total:
+
+| Case | Reply | Time | Cost | Automatic | Read by a person |
+|---|---|---|---|---|---|
+| d03 ammo | change (5 ammo, HUD counter) | 334 s | $0.91 | pass | good; names its number and assumptions |
+| e01 "spikes kill" | change (lose a life, respawn) | 188 s | $0.65 | no test; set wanted a question | guessed, but said so plainly; acceptable |
+| f06 3 hits | question: shoot, stomp or bump? | 19 s | $0.29 | fail | right: Coin Run has no way to hit an enemy |
+| g03 stomp | question: add a jump first? | 25 s | $0.30 | fail | right: Coin Run has no jump |
+
+**Eval-set flaw this exposed:** several sentences assume a jump or shooting
+that Coin Run doesn't have (f06, g03, and likely c02, c05, b05, b06), so for
+this fixture they're really ambiguous and a question is a correct answer.
+Before a full run, either give the fixture a jump and shooting, or accept a
+question for those cases.
+
 ## Grading
 
 The automatic numbers are a first pass. A person still grades:

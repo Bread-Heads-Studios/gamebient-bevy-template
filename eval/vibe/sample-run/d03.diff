@@ -1,0 +1,254 @@
+diff --git a/src/game/mod.rs b/src/game/mod.rs
+index 124d070..0e0f585 100644
+--- a/src/game/mod.rs
++++ b/src/game/mod.rs
+@@ -14,6 +14,7 @@ pub mod record;
+ pub mod replay;
+ pub mod scenario;
+ pub mod scoring;
++pub mod shooting;
+ pub mod sim;
+ pub mod states;
+ pub mod things;
+@@ -110,6 +111,8 @@ impl Plugin for GamePlugin {
+                     physics::step_bodies,
+                     // Coin Run's rules go here, after physics and before
+                     // scoring, each one a system of its own.
++                    shooting::shoot,
++                    shooting::remove_offscreen_bullets,
+                     scoring::handle_score_events,
+                     sim::checksum_tick,
+                     things::checksum_things,
+diff --git a/src/game/scenario.rs b/src/game/scenario.rs
+index c674fdc..7ae0732 100644
+--- a/src/game/scenario.rs
++++ b/src/game/scenario.rs
+@@ -311,6 +311,16 @@ impl Scenario {
+         self.data().coins
+     }
+ 
++    pub fn ammo(&self) -> u32 {
++        self.data().ammo
++    }
++
++    pub fn set_ammo(&mut self, ammo: u32) -> &mut Self {
++        self.start();
++        self.app.world_mut().resource_mut::<GameData>().ammo = ammo;
++        self
++    }
++
+     pub fn set_lives(&mut self, lives: u32) -> &mut Self {
+         self.start();
+         self.app.world_mut().resource_mut::<GameData>().lives = lives;
+diff --git a/src/game/scoring.rs b/src/game/scoring.rs
+index 63055e6..9530ee3 100644
+--- a/src/game/scoring.rs
++++ b/src/game/scoring.rs
+@@ -13,6 +13,8 @@ pub struct GameData {
+     pub high_score: u32,
+     pub lives: u32,
+     pub coins: u32,
++    /// Shots left; pressing B uses one (see `shooting.rs`).
++    pub ammo: u32,
+ }
+ 
+ impl Default for GameData {
+@@ -22,6 +24,7 @@ impl Default for GameData {
+             high_score: 0,
+             lives: 3,
+             coins: 0,
++            ammo: super::shooting::STARTING_AMMO,
+         }
+     }
+ }
+@@ -37,6 +40,15 @@ impl GameData {
+             self.high_score = self.score;
+         }
+     }
++
++    /// Uses one ammo if there is any. Returns whether there was.
++    pub fn use_ammo(&mut self) -> bool {
++        if self.ammo == 0 {
++            return false;
++        }
++        self.ammo -= 1;
++        true
++    }
+ }
+ 
+ /// Score order of this game, read by the cabinet frame (`src/frame/`). A game
+diff --git a/src/game/shooting.rs b/src/game/shooting.rs
+new file mode 100644
+index 0000000..0777a76
+--- /dev/null
++++ b/src/game/shooting.rs
+@@ -0,0 +1,110 @@
++//! Shooting: pressing B fires a Bullet the way the Player faces, but only
++//! while the Player has ammo, and each shot uses one (`GameData::ammo`,
++//! starting at [`STARTING_AMMO`]). With no ammo, B does nothing.
++
++use bevy::prelude::*;
++
++use super::audio::SfxEvent;
++use super::scoring::GameData;
++use super::things::{BULLET_SPEED, Bullet, Facing, Player, Size, Spawner, props};
++
++/// Ammo the Player starts each run with.
++pub const STARTING_AMMO: u32 = 5;
++
++/// Half the screen's width and height, in game pixels: a Bullet past these
++/// has left the screen.
++const HALF_SCREEN: Vec2 = Vec2::new(480.0, 360.0);
++
++/// Fires a Bullet on a B press if there is ammo left, using one.
++pub fn shoot(
++    input: Res<gamebient_input::TickInput>,
++    mut data: ResMut<GameData>,
++    player: Query<(&Transform, &Size, &Facing), With<Player>>,
++    mut spawner: Spawner,
++    mut sfx: MessageWriter<SfxEvent>,
++) {
++    if !input.secondary_just_pressed {
++        return;
++    }
++    let Ok((tf, size, facing)) = player.single() else {
++        return;
++    };
++    if !data.use_ammo() {
++        return;
++    }
++    let bullet_w = props("Bullet").map_or(0.0, |p| p.size.x);
++    let at = tf.translation.truncate() + Vec2::X * facing.0 * (size.0.x + bullet_w) * 0.5;
++    spawner.spawn_moving("Bullet", at, Vec2::X * facing.0 * BULLET_SPEED);
++    sfx.write(SfxEvent::Shoot);
++}
++
++/// Removes Bullets once they have flown off the screen.
++pub fn remove_offscreen_bullets(
++    mut commands: Commands,
++    bullets: Query<(Entity, &Transform, &Size), With<Bullet>>,
++) {
++    for (e, tf, size) in &bullets {
++        let p = tf.translation.truncate().abs() - size.0 * 0.5;
++        if p.x > HALF_SCREEN.x || p.y > HALF_SCREEN.y {
++            commands.entity(e).despawn();
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::game::scenario::{Buttons, Scenario};
++
++    #[test]
++    fn b_fires_a_bullet_and_uses_one_ammo() {
++        let mut s = Scenario::new();
++        s.start();
++        assert_eq!(s.ammo(), STARTING_AMMO);
++        s.press(Buttons::B).tick(1);
++        assert_eq!(s.count("Bullet"), 1);
++        assert_eq!(s.ammo(), STARTING_AMMO - 1);
++        assert!(s.velocity("Bullet").unwrap().x > 0.0);
++        assert!(s.sounds().iter().any(|(_, e)| *e == SfxEvent::Shoot));
++    }
++
++    #[test]
++    fn no_ammo_no_shot() {
++        let mut s = Scenario::new();
++        s.set_ammo(0).press(Buttons::B).tick(1);
++        assert_eq!(s.count("Bullet"), 0);
++        assert_eq!(s.ammo(), 0);
++        assert!(!s.sounds().iter().any(|(_, e)| *e == SfxEvent::Shoot));
++    }
++
++    #[test]
++    fn ammo_runs_out() {
++        let mut s = Scenario::new();
++        s.start();
++        for _ in 0..STARTING_AMMO + 3 {
++            s.press(Buttons::B).tick(1);
++        }
++        assert_eq!(s.ammo(), 0);
++        assert_eq!(s.count("Bullet"), STARTING_AMMO as usize);
++    }
++
++    #[test]
++    fn bullets_go_the_way_the_player_faces_and_leave_the_screen() {
++        let mut s = Scenario::new();
++        s.hold(Buttons::LEFT, 1).press(Buttons::B).tick(1);
++        assert!(s.velocity("Bullet").unwrap().x < 0.0);
++        s.tick(120);
++        assert_eq!(s.count("Bullet"), 0);
++    }
++
++    #[test]
++    fn use_ammo_stops_at_zero() {
++        let mut d = GameData {
++            ammo: 1,
++            ..GameData::default()
++        };
++        assert!(d.use_ammo());
++        assert!(!d.use_ammo());
++        assert_eq!(d.ammo, 0);
++    }
++}
+diff --git a/src/game/things.rs b/src/game/things.rs
+index c301408..79edf5b 100644
+--- a/src/game/things.rs
++++ b/src/game/things.rs
+@@ -238,7 +238,7 @@ pub fn overlaps(a_pos: Vec2, a_size: Vec2, b_pos: Vec2, b_size: Vec2) -> bool {
+ }
+ 
+ /// Folds the run state Coin Run adds to the template into the replay
+-/// checksum (determinism rule 6): lives and coins, then every thing's
++/// checksum (determinism rule 6): lives, coins and ammo, then every thing's
+ /// position in `SpawnOrder`. Registered right after `sim::checksum_tick`.
+ pub fn checksum_things(
+     data: Res<GameData>,
+@@ -247,6 +247,7 @@ pub fn checksum_things(
+ ) {
+     sum.fold(u64::from(data.lives));
+     sum.fold(u64::from(data.coins));
++    sum.fold(u64::from(data.ammo));
+     let mut all: Vec<_> = things.iter().collect();
+     all.sort_unstable_by_key(|(order, _)| **order);
+     for (order, tf) in all {
+diff --git a/src/ui/hud.rs b/src/ui/hud.rs
+index 9aeac51..2756d04 100644
+--- a/src/ui/hud.rs
++++ b/src/ui/hud.rs
+@@ -15,7 +15,10 @@ pub fn spawn_hud(mut commands: Commands) {
+     commands.spawn((
+         GameEntity,
+         ScoreText,
+-        Text::new("Score: 0  Lives: 3  Coins: 0"),
++        Text::new(format!(
++            "Score: 0  Lives: 3  Coins: 0  Ammo: {}",
++            crate::game::shooting::STARTING_AMMO
++        )),
+         // TEMPLATE NOTE: the HUD is set in the body face; theme its colour
+         // (and a plate, if the world behind it is busy) in `theme.rs`.
+         BODY.font(22.0),
+@@ -40,8 +43,8 @@ pub fn update_hud(data: Res<GameData>, mut query: Query<&mut Text, With<ScoreTex
+     }
+     for mut text in &mut query {
+         text.0 = format!(
+-            "Score: {}  Lives: {}  Coins: {}",
+-            data.score, data.lives, data.coins
++            "Score: {}  Lives: {}  Coins: {}  Ammo: {}",
++            data.score, data.lives, data.coins, data.ammo
+         );
+     }
+ }
+diff --git a/tests/fixtures/selftest.gxr b/tests/fixtures/selftest.gxr
+index c69fafb87ea542529a7bd9abfc133fff269a90ff..12a4027b99ec4cd9bfac8adccb4eced5142c49ae 100644
+GIT binary patch
+literal 237
+zcmZ>d2r}d~&@<FC(6%s7OfyX~vtfuM02m^e7~tR`>#rsIOr}(d07W<$1b`$XkOl#3
+Q3_c4~o&_q8&Zo700GomsumAu6
+
+literal 237
+zcmZ>d2r}d~&@<FC&^Ao8Fflhzv0;cK02m^e7~tTk>#J1H1n%o1KoJfG0U*f;q(Q(M
+QgU<q$XMxJ2^J%Rg02|sD{r~^~
+
