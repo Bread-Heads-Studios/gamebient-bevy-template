@@ -16,10 +16,11 @@ readbacks and "three layers, one game" still apply and are referenced below.
   control changes the running game at the next sim tick, with no model call
   and no rebuild.
 - **The editor is a local web app** (Vite + React + TypeScript) with a small
-  Node sidecar. It frames the game's wasm bundle in an iframe and talks to it
+  Rust backend, and ships as an **installable desktop app** (Tauri 2) that
+  wraps both. It frames the game's wasm bundle in an iframe and talks to it
   over the existing `gamebient-input` host protocol, extended by one generic
-  message (`gx:custom`). The sidecar holds the Claude API key and is the seam
-  for the code-writing agent.
+  message (`gx:custom`). The backend holds the Claude API key and is the
+  seam for the code-writing agent.
 - **Tunables are reflected Rust resources** carrying labels, ranges and units
   as `bevy_reflect` custom attributes. The game reports them, accepts value
   changes at tick boundaries, folds them into the replay checksum, and
@@ -36,7 +37,8 @@ readbacks and "three layers, one game" still apply and are referenced below.
 
 | Question | Chosen | Alternatives considered |
 |---|---|---|
-| Where the editor runs | **Local-first**: Vite dev server + Node sidecar next to a game checkout | Hosted on colecovisiongx.com (needs server-side cargo builds and sandboxing; later). Pure browser, no server (can't hold an API key, can't rebuild). |
+| Where the editor runs | **Local-first, installable**: a Tauri 2 desktop app wrapping the web UI and a Rust backend; in development the same UI runs in a browser against the same backend | Hosted on colecovisiongx.com (needs server-side cargo builds and sandboxing; later). Pure browser, no server (can't hold an API key, can't rebuild). A Node sidecar (works in dev, but an installable app would have to ship Node). |
+| Desktop shell | **Tauri 2** (system webview, ~10 MB, backend in Rust, the team's language) | Electron (bundled Chromium, ~200 MB, Node backend; most predictable WebGL2 but the heaviest install) |
 | Protocol extension | **One generic host→game message `gx:custom`** in `gamebient-input` v0.5.0, mirroring the existing `custom` event; the tunables layer is named messages on top | Typed `gx:tune` / `gx:tunables` messages in the crate (crate learns game concepts; every layer needs a crate release). A second `postMessage` channel (rejected by the brief). |
 | Where checks run | **In the game wasm**, as non-panicking scenario checks behind `--features editor` | `cargo test` in the sidecar per release (20 s+ per round trip, kills the "instant" feel). Both, with cargo as the authoritative gate on "Save" (deferred; the seam allows it). |
 | Replay format | **`GXR2`**: `content` hash in the header, start values and mid-run changes in a tune log | Keep `GXR1` and fold values only into the checksum (a replay could not say *which* game it is; the verifier could never reproduce a mid-run change). |
@@ -63,15 +65,48 @@ readbacks and "three layers, one game" still apply and are referenced below.
 │  │ built with --features editor      │   origin localhost)     │
 │  └───────────────────────────────────┘                         │
 └───────────────────────────────────────────────────────────────┘
-          │ HTTP (localhost)
-┌─────────▼────────────── Node sidecar (server/) ───────────────┐
-│ serves <game>/dist-editor/  ·  POST /api/agent (Claude, tools) │
-│ seam: POST /api/change → eval/vibe runner → rebuild → reload   │
+          │ HTTP (127.0.0.1:<port>)
+┌─────────▼────────────── Rust backend (crates/editor-server) ──┐
+│ serves the UI and <game>/dist-editor/  ·  POST /api/agent      │
+│ (Claude, tools)  ·  seam: POST /api/change → code agent →      │
+│ rebuild → reload                                               │
+└─────────┬──────────────────────────────────────────────────────┘
+          │ embedded in
+┌─────────▼────────────── Desktop app (crates/editor-app, Tauri) ┐
+│ one window at http://127.0.0.1:<port>/ · key in the OS keychain│
+│ · installers for macOS / Windows / Linux                       │
 └────────────────────────────────────────────────────────────────┘
 ```
 
-Three processes, no database. The editor never sees Rust; the sidecar never
-sees UI.
+No database. The editor never sees Rust; the backend never sees UI.
+
+### Installable app
+
+Reducing friction is the point, so the local server is not something a
+person starts by hand. The desktop app (Tauri 2) starts the backend on a
+free 127.0.0.1 port and opens one window on it. Serving the UI from
+`http://127.0.0.1:<port>/` rather than from the webview's own
+`tauri://localhost` origin matters: the game's `gx.js` only answers hosts
+whose origin matches `localhost` / `127.0.0.1`, so the app looks to the game
+exactly like a browser tab does, and the same UI build runs unchanged in a
+browser for development and for the Playwright suite.
+
+- Backend: `crates/editor-server` (axum), with three jobs now (static
+  files, `/api/agent`, `/api/game`) and the `/api/change` seam. The Claude
+  key is read from the OS keychain (`keyring` crate) with an env-var
+  override for development; the app's settings screen is where a person
+  pastes it once.
+- Game bundles: the app opens a game checkout (`GAME_DIR`) or a downloaded
+  `dist-editor` bundle. Tuning needs no toolchain at all. The code-writing
+  path needs Rust, the wasm target and the Claude Code CLI on the machine
+  **or** a remote build service; the `/api/change` seam is an HTTP call so
+  either backend can stand behind it. Which one ships to beginners is a
+  later decision; the app detects what is installed and says so in plain
+  words.
+- Webview: WKWebView (macOS), WebView2 (Windows), WebKitGTK (Linux). All
+  three run WebGL2; the Linux one is the least tested and is checked in
+  milestone 5. Electron stays the fallback if a webview cannot run the
+  game.
 
 ## Hosting the game
 
@@ -349,7 +384,7 @@ type AgentEvent =
 
 - `mock.ts`: canned replies for a01 and d03 (the sample run's readbacks as
   card text), no network.
-- `tune.ts`: `POST /api/agent` → the sidecar calls the Claude Messages API
+- `tune.ts`: `POST /api/agent` → the backend calls the Claude Messages API
   with one tool, `show_card` (input schema = the card schema, plus
   `set: { "<path>": value }` for values the agent chose). The system prompt
   carries the tunable catalog and the current values; the agent is told it
@@ -387,6 +422,9 @@ recommended because nothing on the project uses it.
 ```
 gamebient-editor/
   package.json  vite.config.ts  tsconfig.json  playwright.config.ts
+  Cargo.toml                 (workspace: editor-server, editor-app)
+  crates/editor-server/      axum backend: static files, /api/agent, /api/game, /api/change seam
+  crates/editor-app/         Tauri 2 shell: starts the server, opens the window, keychain, installers
   src/
     main.tsx  App.tsx  store.ts
     host/      protocol.ts  useGameHost.ts  tunables.ts
@@ -398,12 +436,11 @@ gamebient-editor/
     agent/     types.ts  mock.ts  tune.ts  code.ts
     preview/   Preview.tsx  StageOverlay.tsx
     a11y/      prefs.ts
-  server/      index.ts  agent.ts  games.ts
   e2e/         axe.spec.ts  keyboard.spec.ts  screenshots.spec.ts
   docs/        (this spec, mockup, card schema notes)
 ```
 
-The game under edit is a separate checkout, given as `GAME_DIR`. The sidecar
+The game under edit is a separate checkout, given as `GAME_DIR`. The backend
 serves `$GAME_DIR/dist-editor/` (built by `tools/build_editor.sh` in the
 game: `cargo build --features editor --target wasm32-unknown-unknown` +
 `wasm-bindgen`, no `wasm-opt`, no brotli, no demo bundle).
@@ -422,18 +459,20 @@ in `eval/vibe/` stays as it is.
 | 2 | `gamebient-input` v0.5.0 (`gx:custom`); template `editor` branch: `tunables/`, `GXR2`, checks, `build_editor.sh`; Coin Run with ammo and coins tunable | `cargo test --all-targets --all-features` green incl. `windowed_shape`, `archetype_order`, selftest fixtures; `tests/tunables.rs` mid-run change replays; `node tools/verify_fixture.mjs` on the wasm fixture; a conformance log of `tunables.list` → `tunables` |
 | 3 | Editor shell: preview, inspector bound to live tunables, all nine controls | axe clean on the main screen; keyboard-only walkthrough spec passes; Playwright screenshots light/dark committed under `e2e/__screenshots__` |
 | 4 | Chat with cards: mock agent (a01, d03), then the Claude tune agent | Mock: cards render, controls move the game, checks re-run, undo works. Real: "make bullets faster" moves the slider and shows a validated card; an invalid card from the model is rejected with the plain message |
+| 5 | Installable app: Tauri shell around the backend and UI, key in the keychain, macOS installer (Windows/Linux in CI) | A fresh machine installs the `.dmg`, opens Coin Run, tunes a value and runs a check with no terminal |
 
 ## Not verifiable here
 
 - A real phone and the cabinet (no device; the editor is desktop-first, the
   game preview is the same bundle the website would frame).
 - Vercel deployment of an editor build (local only in this session).
+- Windows and Linux installers and their webviews (macOS only here).
 - Leaderboard acceptance of `GXR2` runs (website change; noted as policy).
 
-## Open points for the owner
+## Owner decisions (2026-11-06)
 
-1. **Where the editor lives**: a new `gamebient-editor` repository (your
-   default; recommended) or a folder in the template repo for the prototype.
-2. Coin Run as its own repo at `games/coin-run` (assumed above).
-3. `gamebient-input` v0.5.0 is a public-repo release; the editor branch pins
+1. Design approved. The editor lives in a new `gamebient-editor` repository.
+2. The local server ships inside an installable desktop app (above).
+3. Coin Run as its own repo at `games/coin-run` (assumed, not objected to).
+4. `gamebient-input` v0.5.0 is a public-repo release; the editor branch pins
    it by tag once published, or by git rev until then.
