@@ -61,7 +61,7 @@ readbacks and "three layers, one game" still apply and are referenced below.
 │  └─────┬───────────────────────────────────────────────────┘   │
 │        │                                                       │
 │  ┌─────▼─────────────────────────────┐                         │
-│  │ Game iframe: Coin Run wasm,       │  (served by sidecar,    │
+│  │ Game iframe: Coin Run wasm,       │  (served by backend,    │
 │  │ built with --features editor      │   origin localhost)     │
 │  └───────────────────────────────────┘                         │
 └───────────────────────────────────────────────────────────────┘
@@ -197,8 +197,9 @@ Rules the implementation must keep:
    return `Err(String)` through an `ensure!` macro; the `#[test]` wrapper in
    `checks.rs` turns `Err` into a failure. Each check builds its own
    `Scenario` with the *current* tunable values applied (`Scenario::with_tunables`).
-6. **No new Bevy features.** Reflection is already on; JSON is hand-encoded
-   like `host.rs` does today (no `serde_json` in the game).
+6. **No new Bevy features, no crates outside the lockfile.** Reflection is
+   already on; `serde`/`serde_json` are already in `Cargo.lock` through
+   Bevy, so the host layer uses them.
 
 ### Replay format `GXR2`
 
@@ -390,14 +391,14 @@ type AgentEvent =
   carries the tunable catalog and the current values; the agent is told it
   may only tune, never invent. Used for requests a control already covers
   ("make bullets faster" → `set things.bullet.speed`, card shown). The
-  sidecar validates the card before returning it.
+  backend validates the card before returning it.
 - `code.ts` (stub, this session): the same `Agent` interface, backed by
   `POST /api/change`, which the eval/vibe runner will implement: headless
   `claude -p` on the game checkout, gates, `tools/build_editor.sh`, then a
   `rebuild` event and the preview reloads. The runner's `READBACK:` becomes
   the card readback; the agent's `show_card` tool call becomes the card.
 
-The API key lives in the sidecar's environment (`ANTHROPIC_API_KEY`), never in
+The API key lives in the backend (OS keychain, or `ANTHROPIC_API_KEY` in development), never in
 the browser bundle.
 
 ## Frontend stack
