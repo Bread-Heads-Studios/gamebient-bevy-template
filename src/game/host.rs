@@ -164,6 +164,9 @@ fn apply_host_commands(
             }
             HostCommand::Hello { .. } => {}
             HostCommand::Seed(bytes) => pending.0 = Some(*bytes),
+            // Named messages belong to the layers built on top of the
+            // protocol (`game::tunables::protocol`); nothing to do here.
+            HostCommand::Custom { .. } => {}
         }
     }
 }

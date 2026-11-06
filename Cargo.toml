@@ -96,7 +96,11 @@ rand = "0.9"
 rand_xoshiro = "0.7"
 # The Gamebient control canon + web glue (host protocol, touch overlay,
 # Gamepad API, legacy keyEvent bridge). Pin a tag; bump deliberately.
-gamebient-input = { git = "https://github.com/Bread-Heads-Studios/gamebient-input", tag = "v0.4.0" }
+gamebient-input = { git = "https://github.com/Bread-Heads-Studios/gamebient-input", rev = "4d2038bdc96e900372aab15b45378b5c081b62e6" }
+# Both already in Cargo.lock through Bevy (no new download, no new bundle
+# code until used): the tunables host layer encodes its messages with them.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # Native-only Bevy features: linux window backends and gilrs gamepad support.
 # Excluded from the wasm build so they don't add dead code paths.

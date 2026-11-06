@@ -13,6 +13,7 @@ pub mod replay;
 pub mod scoring;
 pub mod sim;
 pub mod states;
+pub mod tunables;
 
 use states::GameState;
 
