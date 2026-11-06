@@ -247,24 +247,38 @@ fn report_tune_applied(
 /// `run.restart`: leave a running game for the menu (its `OnExit` seals the
 /// replay and cleans up), then re-enter `Playing` from `OnEnter(Menu)`.
 /// From any other state, enter `Playing` directly.
+///
+/// Through the `ScreenFade` when the windowed build has one, and only once
+/// it is idle: the studio logo, the menu and the game-over card all leave
+/// through a fade that sets its own target state when it finishes, so a
+/// bare `NextState` written during one is overruled half a second later
+/// (a restart from the logo entered `Playing` and was yanked back to
+/// `Menu` 31 ticks in). The headless build has no fade and switches at
+/// once; `sim::end_run` takes the same `Option<ResMut<ScreenFade>>`.
 fn restart_run(
     mut restart: ResMut<RestartPending>,
     state: Res<State<GameState>>,
     mut next: ResMut<NextState<GameState>>,
+    fade: Option<ResMut<crate::ui::transition::ScreenFade>>,
 ) {
     if !restart.0 {
         return;
     }
-    match state.get() {
-        GameState::Playing => next.set(GameState::Menu),
-        GameState::Menu => {
-            restart.0 = false;
-            next.set(GameState::Playing);
+    let target = if *state.get() == GameState::Playing {
+        GameState::Menu
+    } else {
+        GameState::Playing
+    };
+    match fade {
+        Some(mut fade) => {
+            if !fade.is_idle() || !fade.request(target) {
+                return; // try again next frame
+            }
         }
-        _ => {
-            restart.0 = false;
-            next.set(GameState::Playing);
-        }
+        None => next.set(target),
+    }
+    if target == GameState::Playing {
+        restart.0 = false;
     }
 }
 
