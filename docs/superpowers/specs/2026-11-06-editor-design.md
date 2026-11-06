@@ -414,6 +414,8 @@ the browser bundle.
   `~/Library/Caches/ms-playwright` (revisions up to 1243); the
   `@playwright/test` version is pinned to the one that uses a cached
   revision, with `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` in `.npmrc`/CI.
+  Measured 2026-11-06: `playwright-core@1.63.0` uses chromium-1243 (1.62.1 →
+  1234, 1.59.1 → 1217; 1.64+ needs a download).
 
 Plain TypeScript + Lit would be lighter and is a fine fallback; it is not
 recommended because nothing on the project uses it.
