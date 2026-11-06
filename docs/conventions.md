@@ -104,6 +104,11 @@ the rules for game code:
 The greppable ones are enforced by the forbidden-names test in
 `src/game/sim.rs` (`cargo test`); the rest need review.
 
+- **Tunables** (rule 11 in docs/replay-verification.md): a number the
+  editor may change is a `Reflect` resource field with a `Tune` attribute,
+  registered in a fixed order; changes land only through
+  `tunables::PendingTunes` inside `SimSet` and are replay content.
+
 ## Curated Bevy features
 
 `Cargo.toml` uses `default-features = false` with an explicit feature list, and gates

@@ -5,9 +5,10 @@
 use bevy::prelude::*;
 use gamebient_input::{Buttons, HostEvent, TickInput};
 
-use super::Replay;
+use super::{Replay, TuneRecord};
 use crate::game::scoring::{GameData, LeaderboardScore};
 use crate::game::sim::{Checksum, RunSeed, TICK_HZ};
+use crate::game::tunables::{TuneLog, hash};
 
 #[derive(Resource)]
 pub struct ReplayRecorder {
@@ -30,9 +31,12 @@ fn empty(seed: RunSeed) -> Replay {
         tick_hz: TICK_HZ as u16,
         seed: seed.bytes,
         origin: seed.origin,
+        content: 0,
         ticks: 0,
         score: 0,
         checksum: 0,
+        starts: Vec::new(),
+        tunes: Vec::new(),
         runs: Vec::new(),
     }
 }
@@ -63,6 +67,26 @@ impl ReplayRecorder {
         self.replay.push_tick(held, latched, ax, ay);
     }
 
+    /// Copies the run's tune log in: start values on `begin`, the changes
+    /// (and the content hash over both) on `seal`.
+    pub fn set_tunes(&mut self, log: &TuneLog) {
+        self.replay.starts = log
+            .starts
+            .iter()
+            .map(|(id, v)| (*id, v.to_bytes()))
+            .collect();
+        self.replay.tunes = log
+            .changes
+            .iter()
+            .map(|c| TuneRecord {
+                tick: c.tick,
+                id: c.id,
+                bytes: c.value.to_bytes(),
+            })
+            .collect();
+        self.replay.content = hash::content(log);
+    }
+
     pub fn seal(&mut self, score: u64, checksum: u64) -> Replay {
         self.replay.score = score;
         self.replay.checksum = checksum;
@@ -75,9 +99,10 @@ impl ReplayRecorder {
     }
 }
 
-/// `OnEnter(Playing)`, after `sim::begin_run`.
-pub fn begin_recording(seed: Res<RunSeed>, mut rec: ResMut<ReplayRecorder>) {
+/// `OnEnter(Playing)`, after `sim::begin_run` and `tunables::begin_run_tunables`.
+pub fn begin_recording(seed: Res<RunSeed>, log: Res<TuneLog>, mut rec: ResMut<ReplayRecorder>) {
     rec.begin(*seed);
+    rec.set_tunes(&log);
 }
 
 /// Last in `SimSet`: only sim ticks are recorded, so paused ticks are absent.
@@ -90,12 +115,14 @@ pub fn record_tick(t: Res<TickInput>, mut rec: ResMut<ReplayRecorder>) {
 pub fn seal_run(
     data: Res<GameData>,
     sum: Res<Checksum>,
+    log: Res<TuneLog>,
     mut rec: ResMut<ReplayRecorder>,
     mut host: MessageWriter<HostEvent>,
 ) {
     if rec.sealed {
         return;
     }
+    rec.set_tunes(&log);
     let replay = rec.seal(u64::from(data.leaderboard_score()), sum.0);
     let bytes = replay.encode();
     host.write(HostEvent::Run(bytes.clone()));
@@ -169,6 +196,27 @@ mod tests {
         let r = rec.seal(0, 0);
         assert_eq!(r.runs[0].held, Buttons::A.0 as u16);
         assert!(r.runs[0].held & (Buttons::PAUSE.0 as u16) == 0);
+    }
+
+    #[test]
+    fn tune_log_rides_in_the_replay() {
+        use crate::game::tunables::{TuneChange, Value};
+        let mut rec = ReplayRecorder::default();
+        rec.begin(RunSeed::default());
+        let log = TuneLog {
+            starts: vec![(0, Value::Int(5))],
+            changes: vec![TuneChange {
+                tick: 9,
+                id: 0,
+                value: Value::Int(6),
+            }],
+        };
+        rec.set_tunes(&log);
+        let r = rec.seal(0, 0);
+        assert_eq!(r.starts, vec![(0, Value::Int(5).to_bytes())]);
+        assert_eq!(r.tunes[0].tick, 9);
+        assert_eq!(r.content, hash::content(&log));
+        assert_ne!(r.content, 0);
     }
 
     #[test]

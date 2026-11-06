@@ -1,17 +1,24 @@
-//! Replay format `GXR1` (little-endian):
+//! Replay format `GXR2` (little-endian):
 //!
 //! ```text
-//! magic    b"GXR1"
+//! magic    b"GXR2"
 //! build    u8 len + UTF-8            GX_BUILD_ID of the game that recorded it
 //! tick_hz  u16
 //! seed     [u8; 32]
 //! origin   u8                        0 host, 1 local
+//! content  u64                       hash of the tune log (start values + changes)
 //! ticks    u32                       total sim ticks
 //! score    u64                       claimed
 //! checksum u64                       claimed
-//! runs     u32                       number of RLE runs
-//! run[]    held u16, latched u16, ax i8, ay i8, count u16
+//! starts   u16 count, then [id u16, len u8, bytes]        every tunable's start value, index order
+//! tunes    u32 count, then [tick u32, id u16, len u8, bytes]  mid-run changes, in apply order
+//! runs     u32 count, then [held u16, latched u16, ax i8, ay i8, count u16]
 //! ```
+//!
+//! `starts` and `tunes` are the game's tunables (`game::tunables`): the
+//! verifier applies the start values before the run and feeds each change
+//! on its tick, and `content` says which game was played. A leaderboard
+//! accepts a run only when `content` equals the release's default hash.
 
 pub mod feeder;
 pub mod recorder;
@@ -19,7 +26,11 @@ pub mod selftest;
 
 use super::sim::SeedOrigin;
 
-pub const MAGIC: &[u8; 4] = b"GXR1";
+pub const MAGIC: &[u8; 4] = b"GXR2";
+
+/// Most start values or mid-run changes a replay may carry; `decode`
+/// refuses more before reading any, like [`MAX_TICKS`] for ticks.
+pub const MAX_TUNES: usize = 4096;
 
 /// Hard ceiling on a replay's claimed tick count: one hour at 60 Hz.
 ///
@@ -37,15 +48,30 @@ pub struct TickRun {
     pub count: u16,
 }
 
+/// A tunable change applied on `tick` (the value of `SimTick` during that
+/// tick). `bytes` is `tunables::Value::to_bytes`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TuneRecord {
+    pub tick: u32,
+    pub id: u16,
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Replay {
     pub build: String,
     pub tick_hz: u16,
     pub seed: [u8; 32],
     pub origin: SeedOrigin,
+    /// `tunables::hash::content` over `starts` and `tunes`.
+    pub content: u64,
     pub ticks: u32,
     pub score: u64,
     pub checksum: u64,
+    /// Every tunable's value when the run began, in index order.
+    pub starts: Vec<(u16, Vec<u8>)>,
+    /// Mid-run changes, in the order they applied.
+    pub tunes: Vec<TuneRecord>,
     pub runs: Vec<TickRun>,
 }
 
@@ -60,6 +86,9 @@ pub enum DecodeError {
     BadTickRate(u16),
     /// The header claims more than [`MAX_TICKS`] ticks.
     TooManyTicks(u32),
+    /// More than [`MAX_TUNES`] start values or changes, or a value longer
+    /// than 255 bytes.
+    BadValue,
     RunCountMismatch {
         header: u32,
         sum: u32,
@@ -100,9 +129,23 @@ impl Replay {
         out.extend_from_slice(&self.tick_hz.to_le_bytes());
         out.extend_from_slice(&self.seed);
         out.push(self.origin as u8);
+        out.extend_from_slice(&self.content.to_le_bytes());
         out.extend_from_slice(&self.ticks.to_le_bytes());
         out.extend_from_slice(&self.score.to_le_bytes());
         out.extend_from_slice(&self.checksum.to_le_bytes());
+        out.extend_from_slice(&(self.starts.len() as u16).to_le_bytes());
+        for (id, b) in &self.starts {
+            out.extend_from_slice(&id.to_le_bytes());
+            out.push(b.len().min(255) as u8);
+            out.extend_from_slice(&b[..b.len().min(255)]);
+        }
+        out.extend_from_slice(&(self.tunes.len() as u32).to_le_bytes());
+        for t in &self.tunes {
+            out.extend_from_slice(&t.tick.to_le_bytes());
+            out.extend_from_slice(&t.id.to_le_bytes());
+            out.push(t.bytes.len().min(255) as u8);
+            out.extend_from_slice(&t.bytes[..t.bytes.len().min(255)]);
+        }
         out.extend_from_slice(&(self.runs.len() as u32).to_le_bytes());
         for r in &self.runs {
             out.extend_from_slice(&r.held.to_le_bytes());
@@ -131,12 +174,38 @@ impl Replay {
         seed.copy_from_slice(c.take(32)?);
         let o = c.u8()?;
         let origin = SeedOrigin::from_u8(o).ok_or(DecodeError::BadOrigin(o))?;
+        let content = c.u64()?;
         let ticks = c.u32()?;
         if ticks > MAX_TICKS {
             return Err(DecodeError::TooManyTicks(ticks));
         }
         let score = c.u64()?;
         let checksum = c.u64()?;
+        let n_starts = usize::from(c.u16()?);
+        if n_starts > MAX_TUNES {
+            return Err(DecodeError::BadValue);
+        }
+        let mut starts = Vec::with_capacity(n_starts);
+        for _ in 0..n_starts {
+            let id = c.u16()?;
+            let len = usize::from(c.u8()?);
+            starts.push((id, c.take(len)?.to_vec()));
+        }
+        let n_tunes = c.u32()? as usize;
+        if n_tunes > MAX_TUNES {
+            return Err(DecodeError::BadValue);
+        }
+        let mut tunes = Vec::with_capacity(n_tunes);
+        for _ in 0..n_tunes {
+            let tick = c.u32()?;
+            let id = c.u16()?;
+            let len = usize::from(c.u8()?);
+            tunes.push(TuneRecord {
+                tick,
+                id,
+                bytes: c.take(len)?.to_vec(),
+            });
+        }
         let n_runs = c.u32()? as usize;
         let mut runs = Vec::with_capacity(n_runs.min(1 << 16));
         let mut sum: u32 = 0;
@@ -159,9 +228,12 @@ impl Replay {
             tick_hz,
             seed,
             origin,
+            content,
             ticks,
             score,
             checksum,
+            starts,
+            tunes,
             runs,
         })
     }
@@ -179,6 +251,7 @@ use super::GamePlugin;
 use super::scoring::{GameData, LeaderboardScore};
 use super::sim::{Checksum, PendingSeed, RunSeed, SimTick, tick_duration};
 use super::states::GameState;
+use super::tunables::{PendingTunes, TunableIndex, TuneLog, Value, hash};
 use feeder::{ReplayFeeder, feed_tick};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,6 +265,8 @@ pub enum Ended {
 pub struct Verdict {
     pub score: u64,
     pub checksum: u64,
+    /// The content hash the re-simulation produced (see `tunables::hash`).
+    pub content: u64,
     pub ticks: u32,
     pub ended: Ended,
     pub matches: bool,
@@ -210,8 +285,8 @@ impl Verdict {
         // caller compares it verbatim or parses it as a BigInt. `score` and
         // `ticks` stay numeric — both are well inside the safe range.
         format!(
-            "{{\"score\":{},\"checksum\":\"{}\",\"ticks\":{},\"ended\":\"{ended}\",\"matches\":{}}}",
-            self.score, self.checksum, self.ticks, self.matches
+            "{{\"score\":{},\"checksum\":\"{}\",\"content\":\"{}\",\"ticks\":{},\"ended\":\"{ended}\",\"matches\":{}}}",
+            self.score, self.checksum, self.content, self.ticks, self.matches
         )
     }
 }
@@ -240,6 +315,21 @@ pub fn build_verify_app(replay: &Replay) -> App {
         .add_systems(FixedPreUpdate, feed_tick.in_set(TickInputSet::Feed));
     // Seed the run exactly as the recording game did.
     app.world_mut().resource_mut::<PendingSeed>().0 = Some(replay.seed);
+    // Stage the start values; they apply in the first `Update`, before
+    // `Playing` is entered, exactly like an editor change made at the menu.
+    // An id this build does not have, or bytes of the wrong length, are
+    // skipped: the content hash then differs and the verdict says so.
+    {
+        let idx = app.world().resource::<TunableIndex>().clone();
+        let mut pending = app.world_mut().resource_mut::<PendingTunes>();
+        for (id, bytes) in &replay.starts {
+            if let Some(entry) = idx.by_id(*id)
+                && let Some(v) = Value::from_bytes(entry.tune.kind, bytes)
+            {
+                pending.0.push((*id, v));
+            }
+        }
+    }
     app
 }
 
@@ -308,13 +398,15 @@ pub fn run_verify_app(app: &mut App, replay: &Replay) -> Verdict {
     };
     let score = u64::from(app.world().resource::<GameData>().leaderboard_score());
     let checksum = app.world().resource::<Checksum>().0;
+    let content = hash::content(app.world().resource::<TuneLog>());
     let ticks = app.world().resource::<SimTick>().0;
     Verdict {
         score,
         checksum,
+        content,
         ticks,
         ended,
-        matches: score == replay.score && checksum == replay.checksum,
+        matches: score == replay.score && checksum == replay.checksum && content == replay.content,
     }
 }
 
@@ -354,9 +446,16 @@ mod tests {
             tick_hz: 60,
             seed: [9u8; 32],
             origin: SeedOrigin::Host,
+            content: 7,
             ticks: 0,
             score: 1500,
             checksum: 0xdead_beef,
+            starts: vec![(0, vec![1, 0, 0, 0, 0, 0, 0, 0])],
+            tunes: vec![TuneRecord {
+                tick: 3,
+                id: 0,
+                bytes: vec![2, 0, 0, 0, 0, 0, 0, 0],
+            }],
             runs: Vec::new(),
         };
         for _ in 0..3 {
@@ -391,6 +490,39 @@ mod tests {
         let bytes = r.encode();
         assert_eq!(&bytes[..4], MAGIC);
         assert_eq!(Replay::decode(&bytes).unwrap(), r);
+    }
+
+    #[test]
+    fn gxr2_round_trips_starts_and_tunes() {
+        let r = sample();
+        let bytes = r.encode();
+        assert_eq!(&bytes[..4], b"GXR2");
+        let back = Replay::decode(&bytes).unwrap();
+        assert_eq!(back.content, 7);
+        assert_eq!(back.starts, r.starts);
+        assert_eq!(back.tunes, r.tunes);
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn gxr1_is_rejected() {
+        assert_eq!(
+            Replay::decode(b"GXR1\x00").err(),
+            Some(DecodeError::BadMagic)
+        );
+    }
+
+    #[test]
+    fn verdict_json_carries_content_as_a_string() {
+        let v = Verdict {
+            score: 1,
+            checksum: 2,
+            content: u64::MAX,
+            ticks: 3,
+            ended: Ended::Cap,
+            matches: false,
+        };
+        assert!(v.to_json().contains("\"content\":\"18446744073709551615\""));
     }
 
     #[test]
@@ -443,6 +575,7 @@ mod tests {
         assert_eq!(first.ticks, 120);
         assert_eq!(first.ended, Ended::InputExhausted);
         r.checksum = first.checksum;
+        r.content = first.content;
         let second = verify(&r);
         assert!(second.matches, "{second:?}");
         assert_eq!(second.checksum, first.checksum);
@@ -475,6 +608,7 @@ mod tests {
         assert_eq!(first.ticks, 1, "{first:?}");
         assert_eq!(first.ended, Ended::InputExhausted);
         r.checksum = first.checksum;
+        r.content = first.content;
         let second = verify(&r);
         assert!(second.matches, "{second:?}");
     }
@@ -884,13 +1018,14 @@ mod tests {
         let v = Verdict {
             score: 1,
             checksum: 2,
+            content: 4,
             ticks: 3,
             ended: Ended::Cap,
             matches: false,
         };
         assert_eq!(
             v.to_json(),
-            r#"{"score":1,"checksum":"2","ticks":3,"ended":"cap","matches":false}"#
+            r#"{"score":1,"checksum":"2","content":"4","ticks":3,"ended":"cap","matches":false}"#
         );
     }
 
@@ -901,6 +1036,7 @@ mod tests {
         let v = Verdict {
             score: 0,
             checksum: 15_390_901_594_743_611_022,
+            content: 0,
             ticks: 0,
             ended: Ended::GameOver,
             matches: true,
