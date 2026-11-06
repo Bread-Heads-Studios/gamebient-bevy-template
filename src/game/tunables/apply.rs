@@ -29,13 +29,16 @@ pub struct TuneLog {
     pub changes: Vec<TuneChange>,
 }
 
-/// Reported after a change is applied (host layer, tests).
+/// Reported after a change is applied, or refused (host layer, tests).
 #[derive(Message, Debug, Clone, PartialEq)]
 pub struct TuneApplied {
     pub id: u16,
     pub value: Value,
     /// The sim tick it applied on; `None` outside a run.
     pub tick: Option<u32>,
+    /// False when the write was refused (wrong kind, out of range, unknown
+    /// option): nothing changed.
+    pub ok: bool,
 }
 
 /// Drains [`PendingTunes`] in order. In `SimSet` (right after
@@ -51,10 +54,16 @@ pub fn apply_pending_tunes(world: &mut World) {
         let Some(entry) = idx.by_id(id) else {
             continue;
         };
+        let tick = playing.then(|| world.resource::<SimTick>().0);
         if !write(world, entry, &value) {
+            world.write_message(TuneApplied {
+                id,
+                value,
+                tick,
+                ok: false,
+            });
             continue;
         }
-        let tick = playing.then(|| world.resource::<SimTick>().0);
         if let Some(tick) = tick {
             fold_value(&mut world.resource_mut::<Checksum>(), id, &value);
             world.resource_mut::<TuneLog>().changes.push(TuneChange {
@@ -63,7 +72,12 @@ pub fn apply_pending_tunes(world: &mut World) {
                 value: value.clone(),
             });
         }
-        world.write_message(TuneApplied { id, value, tick });
+        world.write_message(TuneApplied {
+            id,
+            value,
+            tick,
+            ok: true,
+        });
     }
 }
 

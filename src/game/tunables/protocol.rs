@@ -182,6 +182,10 @@ pub fn catalog_json(world: &World) -> Json {
     json!({
         "game": name,
         "build": env!("GX_BUILD_ID"),
+        "state": format!("{:?}", world.resource::<State<GameState>>().get()),
+        "tick": world.resource::<crate::game::sim::SimTick>().0,
+        "pending": world.resource::<PendingTunes>().0.len(),
+        "changes": world.resource::<TuneLog>().changes.len(),
         "content": hash::content(world.resource::<TuneLog>()).to_string(),
         "groups": idx.groups.iter().map(|g| json!({ "path": g.path, "label": g.label, "kind": g.kind.name() })).collect::<Vec<_>>(),
         "tunables": tunables,
@@ -232,6 +236,13 @@ fn report_tune_applied(
         let Some(entry) = idx.by_id(a.id) else {
             continue;
         };
+        if !a.ok {
+            out.write(custom(
+                "tunable",
+                json!({ "path": entry.path, "value": a.value.to_json(), "error": "refused: wrong kind, out of range or unknown option" }),
+            ));
+            continue;
+        }
         out.write(custom(
             "tunable",
             json!({
@@ -346,6 +357,8 @@ mod tests {
         assert_eq!(j["groups"][entry.group]["label"], group.label);
         assert!(j["content"].is_string());
         assert!(j["build"].as_str().unwrap().contains('+'));
+        assert_eq!(j["tick"], 0);
+        assert!(j["state"].is_string());
         assert!(j["checks"].is_array() && j["sounds"].is_array());
 
         let path = entry.path.clone();
