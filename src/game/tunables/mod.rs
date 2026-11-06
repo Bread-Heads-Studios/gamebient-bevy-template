@@ -8,11 +8,17 @@
 //! - `apply.rs`: `PendingTunes` and the one system that drains it in
 //!   `SimSet`; the `TuneLog` a replay carries.
 //! - `hash.rs`: the content hash over the log.
+//! - `checks.rs`: non-panicking scenario checks a card can name.
+//! - `protocol.rs` (feature `editor`): the host-protocol layer the editor
+//!   speaks: `tunables.list` / `tunables.set` / `checks.run` / `run.restart`.
 
 pub mod apply;
 pub mod attr;
+pub mod checks;
 pub mod hash;
 pub mod index;
+#[cfg(feature = "editor")]
+pub mod protocol;
 pub mod value;
 
 use bevy::prelude::*;
@@ -21,6 +27,7 @@ pub use apply::{
     PendingTunes, TuneApplied, TuneChange, TuneLog, apply_pending_tunes, begin_run_tunables,
 };
 pub use attr::{Applies, Button, Group, GroupKind, Kind, Tune};
+pub use checks::{Check, CheckList, Tunes, run_all, tune_value};
 pub use index::{Entry, GroupEntry, TunableIndex, read, register, snapshot, write};
 pub use value::Value;
 
@@ -35,6 +42,7 @@ impl Plugin for TunablesPlugin {
         app.init_resource::<TunableIndex>()
             .init_resource::<PendingTunes>()
             .init_resource::<TuneLog>()
+            .init_resource::<CheckList>()
             .add_message::<TuneApplied>()
             // Outside a run there is no tick to wait for: a change applies
             // at once and becomes a start value of the next run.
@@ -42,5 +50,7 @@ impl Plugin for TunablesPlugin {
                 Update,
                 apply_pending_tunes.run_if(not(in_state(GameState::Playing))),
             );
+        #[cfg(feature = "editor")]
+        app.add_plugins(protocol::EditorProtocolPlugin);
     }
 }

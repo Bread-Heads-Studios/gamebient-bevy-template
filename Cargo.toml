@@ -40,6 +40,10 @@ verify = ["dep:wasm-bindgen"]
 # card and a `demo_end` host event. build_web.sh builds it into dist/ and the
 # full game into dist/full/. Never for native, Pi, verify, autopilot or record.
 demo = []
+# Editor build: answers the editor's tunables layer over the host protocol
+# and runs scenario checks in the browser (src/game/tunables/protocol.rs,
+# checks.rs). tools/build_editor.sh builds it. Never for shipping bundles.
+editor = []
 
 [dependencies]
 # Curated Bevy feature set — drops bevy_gltf, bevy_animation, bevy_gizmos,
