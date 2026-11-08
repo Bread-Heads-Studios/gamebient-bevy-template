@@ -13,6 +13,8 @@ pub mod replay;
 pub mod scoring;
 pub mod sim;
 pub mod states;
+pub mod tunables;
+pub mod tuning;
 
 use states::GameState;
 
@@ -36,6 +38,7 @@ impl Plugin for GamePlugin {
             p.config.tick_input = true;
             p
         };
+        tunables_registration(app);
         app.init_state::<GameState>()
             // Canon input + web glue. StateEvents posts every GameState
             // transition to the embedding host (website analytics, cabinet).
@@ -83,6 +86,9 @@ impl Plugin for GamePlugin {
                     reset_paused,
                     reset_game_data,
                     sim::begin_run,
+                    // The run's start values and their content hash, folded
+                    // into the fresh checksum before anything else.
+                    tunables::begin_run_tunables,
                     replay::recorder::begin_recording,
                     player::spawn_player,
                 )
@@ -105,6 +111,8 @@ impl Plugin for GamePlugin {
                     // menu — see `sim::RunClock` and determinism rule 7.
                     // Keep this second, whatever else a port chains here.
                     sim::sync_run_clock,
+                    // Pending tunable changes land here, between ticks.
+                    tunables::apply_pending_tunes,
                     player::move_player,
                     scoring::handle_score_events,
                     sim::checksum_tick,
@@ -194,6 +202,13 @@ impl Plugin for GamePlugin {
             }
         }
     }
+}
+
+/// The game's tunable resources, in the order their index ids are assigned.
+/// TEMPLATE NOTE: list the game's own `tuning.rs` resources here.
+fn tunables_registration(app: &mut App) {
+    app.add_plugins(tunables::TunablesPlugin);
+    tunables::register::<tuning::RunTuning>(app);
 }
 
 /// One-time scene setup: a camera and a directional light.

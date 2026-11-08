@@ -1,0 +1,164 @@
+diff --git a/src/game/mod.rs b/src/game/mod.rs
+index 124d070..70afe1e 100644
+--- a/src/game/mod.rs
++++ b/src/game/mod.rs
+@@ -15,6 +15,7 @@ pub mod replay;
+ pub mod scenario;
+ pub mod scoring;
+ pub mod sim;
++pub mod spikes;
+ pub mod states;
+ pub mod things;
+ 
+@@ -110,6 +111,7 @@ impl Plugin for GamePlugin {
+                     physics::step_bodies,
+                     // Coin Run's rules go here, after physics and before
+                     // scoring, each one a system of its own.
++                    spikes::spikes_kill_player,
+                     scoring::handle_score_events,
+                     sim::checksum_tick,
+                     things::checksum_things,
+diff --git a/src/game/spikes.rs b/src/game/spikes.rs
+new file mode 100644
+index 0000000..be3359f
+--- /dev/null
++++ b/src/game/spikes.rs
+@@ -0,0 +1,127 @@
++//! Rule: spikes kill the player.
++//!
++//! Touching a Spike costs the Player one life and puts them back where the
++//! level starts them, standing still. Losing the last life ends the run.
++
++use bevy::prelude::*;
++
++use super::audio::SfxEvent;
++use super::level::Level;
++use super::scoring::GameData;
++use super::sim::{self, RunOver};
++use super::states::GameState;
++use super::things::{Body, Player, Size, Spike, overlaps};
++use crate::ui::transition::ScreenFade;
++
++/// What a spike touch does to the run.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum Death {
++    /// A life was lost and some are left: back to the start.
++    Respawn,
++    /// That was the last life: the run is over.
++    GameOver,
++}
++
++impl GameData {
++    /// Takes one life (never below zero) and says what happens next.
++    pub fn lose_life(&mut self) -> Death {
++        self.lives = self.lives.saturating_sub(1);
++        if self.lives == 0 {
++            Death::GameOver
++        } else {
++            Death::Respawn
++        }
++    }
++}
++
++/// Where the level starts the Player, if it places one.
++fn start_position(level: &Level) -> Option<Vec2> {
++    level.0.iter().find(|p| p.kind == "Player").map(|p| p.at)
++}
++
++/// Kills the Player when it touches a Spike.
++#[allow(clippy::too_many_arguments)]
++pub fn spikes_kill_player(
++    mut players: Query<(&mut Transform, &Size, &mut Body), (With<Player>, Without<Spike>)>,
++    spikes: Query<(&Transform, &Size), With<Spike>>,
++    level: Res<Level>,
++    mut data: ResMut<GameData>,
++    mut sfx: MessageWriter<SfxEvent>,
++    mut over: ResMut<RunOver>,
++    mut fade: Option<ResMut<ScreenFade>>,
++    mut next: ResMut<NextState<GameState>>,
++) {
++    for (mut tf, size, mut body) in &mut players {
++        let at = tf.translation.truncate();
++        let touched = spikes
++            .iter()
++            .any(|(s_tf, s_size)| overlaps(at, size.0, s_tf.translation.truncate(), s_size.0));
++        if !touched {
++            continue;
++        }
++        match data.lose_life() {
++            Death::Respawn => {
++                sfx.write(SfxEvent::Hit);
++                if let Some(start) = start_position(&level) {
++                    tf.translation.x = start.x;
++                    tf.translation.y = start.y;
++                }
++                body.vel = Vec2::ZERO;
++            }
++            Death::GameOver => {
++                sfx.write(SfxEvent::Lose);
++                sim::end_run(&mut over, fade.take(), &mut next);
++                return;
++            }
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::game::scenario::{Buttons, START, Scenario};
++
++    #[test]
++    fn lose_life_counts_down_to_game_over() {
++        let mut d = GameData::default();
++        assert_eq!(d.lose_life(), Death::Respawn);
++        assert_eq!(d.lose_life(), Death::Respawn);
++        assert_eq!(d.lose_life(), Death::GameOver);
++        assert_eq!(d.lives, 0);
++        assert_eq!(d.lose_life(), Death::GameOver);
++        assert_eq!(d.lives, 0);
++    }
++
++    #[test]
++    fn touching_a_spike_costs_a_life_and_respawns() {
++        let mut s = Scenario::new();
++        s.place("Spike", -200.0, -292.0).start();
++        let hit = s.hold_until(Buttons::RIGHT, 120, |s| s.lives() < 3);
++        assert!(hit, "walking into the spike should cost a life");
++        assert_eq!(s.lives(), 2);
++        assert!(!s.run_over());
++        let p = s.pos("Player").unwrap();
++        assert!((p.x - START.x).abs() < 1.0, "back at the start, got {p}");
++        assert!(s.sounds().iter().any(|(_, e)| *e == SfxEvent::Hit));
++    }
++
++    #[test]
++    fn last_life_on_a_spike_ends_the_run() {
++        let mut s = Scenario::new();
++        s.place("Spike", -200.0, -292.0).start();
++        s.set_lives(1);
++        let over = s.hold_until(Buttons::RIGHT, 120, |s| s.run_over());
++        assert!(over, "losing the last life should end the run");
++        assert_eq!(s.lives(), 0);
++        assert!(s.sounds().iter().any(|(_, e)| *e == SfxEvent::Lose));
++    }
++
++    #[test]
++    fn not_touching_a_spike_is_harmless() {
++        let mut s = Scenario::new();
++        s.place("Spike", 200.0, -292.0).start();
++        s.tick(60);
++        assert_eq!(s.lives(), 3);
++    }
++}
+diff --git a/tests/fixtures/selftest.gxr b/tests/fixtures/selftest.gxr
+index c69fafb87ea542529a7bd9abfc133fff269a90ff..fa380c099a48c1567d240924060b921f295ac6c3 100644
+GIT binary patch
+literal 237
+zcmZ>d2r}d~&@<FC(6%s7OfyX~vtfuM02m^e7~nwj9`_M${@)8kfFc|W0zi@xNP~bi
+Q2A>5g&jOW4=hIq00QG_wxBvhE
+
+literal 237
+zcmZ>d2r}d~&@<FC&^Ao8Fflhzv0;cK02m^e7~tTk>#J1H1n%o1KoJfG0U*f;q(Q(M
+QgU<q$XMxJ2^J%Rg02|sD{r~^~
+

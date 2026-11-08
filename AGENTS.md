@@ -67,6 +67,26 @@ in before the first gameplay code; the cover and metadata skills read it.
   game's `docs/audio-identity.md`.
 - **A test:** pull the rule into a pure method/function, add a `#[cfg(test)] mod tests`.
   `cargo test` runs in CI.
+- **A tunable** (a number the editor may change live): a field of a
+  `Reflect` resource in `src/game/tuning.rs` with
+  `#[reflect(@Tune::float("Label", min, max).unit("px/s"))]`, on a resource
+  marked `#[reflect(Resource, @Group::thing("bullet", "Bullet"))]`,
+  registered in `GamePlugin`'s `tunables_registration` with
+  `tunables::register::<T>(app)` **in a fixed order** (the index is replay
+  data: never reorder registrations between releases). Gameplay reads the
+  resource; changes arrive through `tunables::PendingTunes`, land in
+  `SimSet` (`tunables::apply_pending_tunes`), fold into the checksum and
+  ride in the replay (`GXR2`; determinism rule 11). A field's Rust type
+  must match its `Tune` kind (`f32`; `u32`/`i32`; `bool`; `Srgba`; `Vec2`;
+  `[f32; 4]`; a unit enum for choice/button/sound) or `register` panics at
+  startup, which `cargo test` catches.
+- **A check** (a scenario a card can re-run): a `fn(&Tunes) -> Result<(),
+  String>` that builds its own headless stage, uses `ensure!` and never
+  panics (a wasm panic kills the game), listed in the game's
+  `tunables::CheckList`. `cargo test` runs every check at the defaults.
+  `tools/build_editor.sh` builds the `--features editor` bundle the editor
+  frames (`dist-editor/`); see
+  `docs/superpowers/specs/2026-11-06-editor-design.md`.
 - **A visual check:** `cargo run --features autopilot` plays a scripted ~60 s
   session (logo → title → how-to-play → bot-played run → pause → game over) and
   saves renderer screenshots `01-studio-logo` … `09-game-over` to

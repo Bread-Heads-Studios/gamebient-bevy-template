@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="auto" data-text="normal" data-motion="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gamebient editor — mockup (Coin Run)</title>
+<style>
+  :root {
+    --bg: #f6f6f8; --panel: #ffffff; --ink: #16161d; --muted: #5d5d6b; --line: #d9d9e2;
+    --accent: #0b6bcb; --accent-ink: #ffffff; --ok: #1f7a3a; --warn: #a15c00; --warn-bg: #fff4e0;
+    --card: #ffffff; --chip: #eef1f6; --focus: #ff8a00; --stage: #0a0a0f;
+    --radius: 10px; --gap: 12px;
+    font-size: 16px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root[data-theme="auto"] { --bg: #101016; --panel: #181824; --ink: #ececf2; --muted: #a7a7b8; --line: #2d2d3c;
+      --accent: #5aa8ff; --accent-ink: #0b0b12; --ok: #5fd38a; --warn: #ffbf5e; --warn-bg: #3a2a0c; --card: #1e1e2c; --chip: #262636; }
+  }
+  :root[data-theme="dark"] { --bg: #101016; --panel: #181824; --ink: #ececf2; --muted: #a7a7b8; --line: #2d2d3c;
+    --accent: #5aa8ff; --accent-ink: #0b0b12; --ok: #5fd38a; --warn: #ffbf5e; --warn-bg: #3a2a0c; --card: #1e1e2c; --chip: #262636; }
+  :root[data-text="large"] { font-size: 20px; }
+  @media (prefers-reduced-motion: reduce) { :root[data-motion="auto"] * { transition: none !important; animation: none !important; } }
+  :root[data-motion="reduce"] * { transition: none !important; animation: none !important; }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 1rem/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  button, input, select { font: inherit; color: inherit; }
+  select, input[type=color] { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: .3em .5em; }
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  header { display: flex; align-items: center; gap: var(--gap); padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 1.05rem; margin: 0; }
+  header .game { color: var(--muted); }
+  header .spacer { flex: 1; }
+  .btn { border: 1px solid var(--line); background: var(--chip); border-radius: 8px; padding: .4em .8em; cursor: pointer; }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+  .btn[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent); }
+
+  main { display: grid; grid-template-columns: minmax(360px, 1.2fr) minmax(360px, 1fr) minmax(280px, .8fr); gap: var(--gap); padding: var(--gap); height: calc(100vh - 56px); }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr 1fr; height: auto; } #inspector { grid-column: 1 / -1; } }
+  section.pane { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; }
+  .pane > h2 { font-size: .85rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+
+  /* Preview */
+  #stage-wrap { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  #stage { width: 100%; aspect-ratio: 4 / 3; background: var(--stage); border-radius: 6px; display: block; }
+  .hud { font-family: ui-monospace, Menlo, monospace; font-size: .9rem; color: #ddd; }
+  .preview-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .preview-bar .status { color: var(--muted); margin-left: auto; }
+
+  /* Chat */
+  #log { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+  .turn.user { align-self: flex-end; background: var(--chip); border-radius: 14px 14px 2px 14px; padding: 8px 12px; max-width: 85%; }
+  .turn.agent { align-self: stretch; }
+  .note { color: var(--muted); font-size: .9rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+  .card h3 { margin: 0; font-size: 1rem; display: flex; align-items: center; gap: 8px; }
+  .card h3 .checks { margin-left: auto; font-size: .85rem; font-weight: 500; color: var(--ok); }
+  .card h3 .checks.warn { color: var(--warn); background: var(--warn-bg); padding: 2px 8px; border-radius: 999px; }
+  .card p.readback { margin: 6px 0 10px; }
+  .row { display: grid; grid-template-columns: 9rem 1fr auto; align-items: center; gap: 10px; margin: 6px 0; }
+  .row label { font-weight: 500; }
+  .row output { font-variant-numeric: tabular-nums; min-width: 5.5rem; text-align: right; }
+  .row input[type=range] { width: 100%; }
+  .row .chip { font-size: .75rem; color: var(--muted); background: var(--chip); border-radius: 999px; padding: 2px 8px; }
+  fieldset.seg { border: 0; margin: 0; padding: 0; display: inline-flex; gap: 0; }
+  fieldset.seg legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  fieldset.seg label { border: 1px solid var(--line); padding: .3em .9em; cursor: pointer; }
+  fieldset.seg label:first-of-type { border-radius: 8px 0 0 8px; }
+  fieldset.seg label:last-of-type { border-radius: 0 8px 8px 0; }
+  fieldset.seg input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  fieldset.seg input:checked + span { color: var(--accent); font-weight: 700; }
+  fieldset.seg input:focus-visible + span { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+  .card .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  details.changed { margin-top: 8px; }
+  details.changed ul { margin: 6px 0 0; padding-left: 1.2em; color: var(--muted); }
+  form.composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); }
+  form.composer input { flex: 1; padding: .5em .7em; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+  .suggest { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 12px 10px; }
+  .suggest button { font-size: .85rem; }
+
+  /* Inspector */
+  .tabs { display: flex; border-bottom: 1px solid var(--line); }
+  .tabs button { flex: 1; border: 0; background: transparent; padding: 10px; cursor: pointer; border-bottom: 3px solid transparent; }
+  .tabs button[aria-selected="true"] { border-bottom-color: var(--accent); font-weight: 600; }
+  .tabpanel { padding: 12px; overflow: auto; }
+  .tabpanel .card { margin-bottom: 10px; }
+  .tabpanel .pin { font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .thing { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; cursor: pointer; background: transparent; width: 100%; text-align: left; }
+  .thing .sw { width: 18px; height: 18px; border-radius: 4px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Gamebient editor</h1>
+  <span class="game">Coin Run · <span id="build">build 0.1.0+4a92fe5</span></span>
+  <span class="spacer"></span>
+  <button class="btn" id="theme" aria-pressed="false">Dark mode</button>
+  <button class="btn" id="text" aria-pressed="false">Large text</button>
+  <button class="btn" id="motion" aria-pressed="false">Reduce motion</button>
+</header>
+
+<main>
+  <section class="pane" id="preview" aria-labelledby="h-preview">
+    <h2 id="h-preview">Game preview</h2>
+    <div id="stage-wrap">
+      <svg id="stage" viewBox="0 0 960 720" role="img" aria-label="Coin Run stage: a player on a floor, coins, a spike, an enemy and the goal">
+        <rect width="960" height="720" fill="#0a0a0f"/>
+        <rect x="0" y="660" width="600" height="60" fill="#73594d"/>
+        <rect x="680" y="660" width="280" height="60" fill="#73594d"/>
+        <rect x="280" y="500" width="200" height="20" fill="#73594d"/>
+        <g id="coins" fill="#ffd933">
+          <circle cx="160" cy="640" r="10"/><circle cx="260" cy="640" r="10"/><circle cx="360" cy="640" r="10"/>
+          <circle cx="380" cy="480" r="10"/><circle cx="730" cy="640" r="10"/>
+        </g>
+        <polygon points="464,660 480,644 496,660" fill="#b3b3bf"/>
+        <rect id="enemy" x="762" y="624" width="36" height="36" fill="#e6404d"/>
+        <rect x="900" y="596" width="40" height="64" fill="#4de666"/>
+        <rect id="player" x="64" y="612" width="32" height="48" fill="#33ccff"/>
+        <rect id="bullet" x="0" y="0" width="12" height="6" fill="#fffde6" visibility="hidden"/>
+        <text x="16" y="34" class="hud" fill="#ddd" font-size="22" font-family="ui-monospace, Menlo, monospace">Score: 0  Lives: 3  Coins: <tspan id="hud-coins">0</tspan>  Ammo: <tspan id="hud-ammo">5</tspan></text>
+      </svg>
+      <div class="preview-bar">
+        <button class="btn primary" id="try">▶ Try it</button>
+        <button class="btn" id="restart">Restart run</button>
+        <span class="status" id="status" aria-live="polite">Paused at the title</span>
+      </div>
+      <p class="note">In the real editor this is the game's own wasm build in an iframe. Values change at the next sim tick.</p>
+    </div>
+  </section>
+
+  <section class="pane" id="chat" aria-labelledby="h-chat">
+    <h2 id="h-chat">Chat</h2>
+    <div id="log" aria-live="polite" aria-relevant="additions"></div>
+    <div class="suggest" aria-label="Try asking">
+      <button class="btn" data-say="make bullets faster">make bullets faster</button>
+      <button class="btn" data-say="enemies take three hits">enemies take three hits</button>
+    </div>
+    <form class="composer" id="composer">
+      <label class="sr-only" for="say">Ask for a change</label>
+      <input id="say" placeholder="Describe a change, like “press B to shoot”" autocomplete="off">
+      <button class="btn primary" type="submit">Send</button>
+    </form>
+  </section>
+
+  <section class="pane" id="inspector" aria-labelledby="h-inspector">
+    <h2 id="h-inspector">Inspector</h2>
+    <div class="tabs" role="tablist" aria-label="Inspector">
+      <button role="tab" id="tab-rules" aria-selected="true" aria-controls="panel-rules">Rules</button>
+      <button role="tab" id="tab-things" aria-selected="false" aria-controls="panel-things" tabindex="-1">Things</button>
+      <button role="tab" id="tab-counters" aria-selected="false" aria-controls="panel-counters" tabindex="-1">Counters</button>
+    </div>
+    <div class="tabpanel" id="panel-rules" role="tabpanel" aria-labelledby="tab-rules"></div>
+    <div class="tabpanel" id="panel-things" role="tabpanel" aria-labelledby="tab-things" hidden>
+      <button class="thing" data-kind="Player"><span class="sw" style="background:#33ccff"></span>Player <span class="chip" style="margin-left:auto;color:var(--muted)">speed 240 px/s</span></button>
+      <button class="thing" data-kind="Coin"><span class="sw" style="background:#ffd933"></span>Coin</button>
+      <button class="thing" data-kind="Enemy"><span class="sw" style="background:#e6404d"></span>Enemy <span class="chip" style="margin-left:auto;color:var(--muted)">speed 120 px/s</span></button>
+      <button class="thing" data-kind="Bullet"><span class="sw" style="background:#fffde6"></span>Bullet <span class="chip" style="margin-left:auto;color:var(--muted)" id="thing-bullet-speed">speed 600 px/s</span></button>
+      <button class="thing" data-kind="Spike"><span class="sw" style="background:#b3b3bf"></span>Spike</button>
+      <button class="thing" data-kind="Goal"><span class="sw" style="background:#4de666"></span>Goal</button>
+      <p class="note">Choosing a thing shows its card: colour, size, speed, and whether it falls.</p>
+    </div>
+    <div class="tabpanel" id="panel-counters" role="tabpanel" aria-labelledby="tab-counters" hidden>
+      <div class="card"><h3>Lives</h3><div class="row"><label for="lives">Starting lives</label><input id="lives" type="range" min="0" max="9" step="1" value="3"><output for="lives">3</output></div></div>
+      <div class="card"><h3>Score</h3><p class="note">Counted on the leaderboard. Nothing adds to it yet.</p></div>
+    </div>
+  </section>
+</main>
+
+<template id="tpl-card">
+  <article class="card" tabindex="-1">
+    <h3><span class="title"></span><span class="checks">✓ checks pass</span></h3>
+    <p class="readback"></p>
+    <div class="controls"></div>
+    <div class="actions">
+      <button class="btn primary act-try">▶ Try it</button>
+      <button class="btn act-undo">Undo</button>
+      <details class="changed"><summary class="btn">Show what changed</summary><ul></ul></details>
+    </div>
+  </article>
+</template>
+
+<script>
+/* ---------- game model (the mock's stand-in for live tunables) ---------- */
+const tunables = {
+  "ammo.start":          { label: "Starting ammo", type: "u32", min: 0, max: 50, step: 1, unit: "", value: 5, applies: "next_run" },
+  "things.bullet.speed": { label: "Bullet speed",  type: "f32", min: 100, max: 1200, step: 10, unit: "px/s", value: 600, applies: "tick" },
+  "ammo.fire_button":    { label: "Fire button",   type: "button", options: ["A", "B"], value: "B", applies: "tick" },
+  "coins.pickup_sound":  { label: "Pickup sound",  type: "sound", options: ["pickup", "hit", "jump", "shoot", "win", "lose"], value: "pickup", applies: "tick" },
+  "things.coin.colour":  { label: "Coin colour",   type: "colour", value: "#ffd933", applies: "tick" },
+};
+const checks = {
+  coin_is_collected: () => true,
+  coin_out_of_reach_stays: () => true,
+  b_fires_and_uses_ammo: () => tunables["ammo.start"].value > 0 ? true : "B never fires with 0 ammo",
+  no_ammo_no_shot: () => true,
+  ammo_runs_out: () => true,
+  bullets_leave_the_screen: () => tunables["things.bullet.speed"].value >= 100 ? true : "a bullet never leaves the screen",
+};
+const cards = [
+  { id: "a01", title: "Coins are collected", pin: "Rule · Coins",
+    readback: "When the player runs into a coin, the coin disappears, the coin counter in the corner goes up by one, and a pickup sound plays. I assumed collecting is just a count, so the score stays the same.",
+    controls: [
+      { kind: "sound", bind: "coins.pickup_sound" },
+      { kind: "colour", bind: "things.coin.colour" } ],
+    checks: ["coin_is_collected", "coin_out_of_reach_stays"],
+    changes: ["Touching a coin now removes it and counts it", "A pickup sound plays", "The score is unchanged"] },
+  { id: "d03", title: "Shooting uses ammo", pin: "Rule · Shooting",
+    readback: "Pressing B fires a bullet the way you face, if you have ammo. Each shot uses one. You start every run with 5.",
+    controls: [
+      { kind: "slider", bind: "ammo.start" },
+      { kind: "slider", bind: "things.bullet.speed" },
+      { kind: "button", bind: "ammo.fire_button" } ],
+    checks: ["b_fires_and_uses_ammo", "no_ammo_no_shot", "ammo_runs_out", "bullets_leave_the_screen"],
+    changes: ["Pressing B spawns a bullet going the way the player faces", "Ammo starts at 5 and each shot uses one", "The top line shows Ammo"] },
+];
+
+/* ---------- rendering ---------- */
+const log = document.getElementById("log");
+const rulesPanel = document.getElementById("panel-rules");
+const live = {}; // bind -> [output elements]
+
+function fmt(t, v) { return t.unit ? `${v} ${t.unit}` : String(v); }
+function valuetext(t, v) { return t.unit === "px/s" ? `${v} pixels per second` : fmt(t, v); }
+
+function renderControl(c, cardId) {
+  const t = tunables[c.bind];
+  const row = document.createElement("div"); row.className = "row";
+  const id = `${cardId}-${c.bind.replace(/\./g, "-")}`;
+  const lab = document.createElement("label"); lab.htmlFor = id; lab.textContent = t.label; row.append(lab);
+  if (c.kind === "slider") {
+    const inp = Object.assign(document.createElement("input"), { type: "range", id, min: t.min, max: t.max, step: t.step, value: t.value });
+    inp.setAttribute("aria-valuetext", valuetext(t, t.value));
+    const out = document.createElement("output"); out.htmlFor = id; out.textContent = fmt(t, t.value);
+    inp.addEventListener("input", () => { setValue(c.bind, Number(inp.value)); inp.setAttribute("aria-valuetext", valuetext(t, t.value)); });
+    inp.addEventListener("change", () => runChecks());
+    row.append(inp, out);
+    if (t.applies === "next_run") { const chip = document.createElement("span"); chip.className = "chip"; chip.textContent = "next run"; out.after(chip); row.style.gridTemplateColumns = "9rem 1fr auto auto"; }
+    (live[c.bind] ||= []).push({ inp, out });
+  } else if (c.kind === "button" || c.kind === "sound") {
+    const wrap = document.createElement("div");
+    if (c.kind === "button") {
+      const fs = document.createElement("fieldset"); fs.className = "seg";
+      const lg = document.createElement("legend"); lg.textContent = t.label; fs.append(lg);
+      for (const o of t.options) {
+        const l = document.createElement("label");
+        const r = Object.assign(document.createElement("input"), { type: "radio", name: id, value: o, checked: t.value === o });
+        r.addEventListener("change", () => { setValue(c.bind, o); runChecks(); });
+        const s = document.createElement("span"); s.textContent = o === "A" ? "A (Z key)" : "B (X key)";
+        l.append(r, s); fs.append(l);
+      }
+      lab.htmlFor = ""; lab.id = id + "-l"; fs.setAttribute("aria-labelledby", lab.id);
+      wrap.append(fs);
+    } else {
+      const sel = document.createElement("select"); sel.id = id;
+      for (const o of t.options) sel.append(new Option(o, o, false, o === t.value));
+      sel.addEventListener("change", () => { setValue(c.bind, sel.value); runChecks(); });
+      const play = document.createElement("button"); play.className = "btn"; play.type = "button"; play.textContent = "Play"; play.setAttribute("aria-label", `Play ${t.value}`);
+      play.addEventListener("click", () => status(`Playing “${t.value}”`));
+      wrap.append(sel, " ", play);
+    }
+    row.append(wrap, document.createElement("span"));
+  } else if (c.kind === "colour") {
+    const inp = Object.assign(document.createElement("input"), { type: "color", id, value: t.value });
+    inp.addEventListener("input", () => setValue(c.bind, inp.value));
+    const out = document.createElement("output"); out.htmlFor = id; out.textContent = t.value;
+    row.append(inp, out);
+    (live[c.bind] ||= []).push({ inp, out });
+  }
+  return row;
+}
+
+function renderCard(card, into, pinned) {
+  const node = document.getElementById("tpl-card").content.firstElementChild.cloneNode(true);
+  node.dataset.card = card.id;
+  node.querySelector(".title").textContent = card.title;
+  node.querySelector(".readback").textContent = card.readback;
+  if (pinned) { const p = document.createElement("div"); p.className = "pin"; p.textContent = card.pin; node.prepend(p); }
+  const ctl = node.querySelector(".controls");
+  for (const c of card.controls) ctl.append(renderControl(c, (pinned ? "pin-" : "chat-") + card.id));
+  const ul = node.querySelector("details ul");
+  for (const ch of card.changes) { const li = document.createElement("li"); li.textContent = ch; ul.append(li); }
+  node.querySelector(".act-try").addEventListener("click", tryIt);
+  const before = Object.fromEntries(card.controls.map(c => [c.bind, tunables[c.bind].value]));
+  node.querySelector(".act-undo").addEventListener("click", () => { for (const [b, v] of Object.entries(before)) setValue(b, v); runChecks(); status("Undid the card's changes"); });
+  into.append(node);
+  return node;
+}
+
+function setValue(bind, v) {
+  tunables[bind].value = v;
+  for (const { inp, out } of live[bind] || []) { if (inp.value != v) inp.value = v; out.textContent = fmt(tunables[bind], v); }
+  if (bind === "ammo.start") document.getElementById("hud-ammo").textContent = v;
+  if (bind === "things.bullet.speed") document.getElementById("thing-bullet-speed").textContent = `speed ${v} px/s`;
+  if (bind === "things.coin.colour") document.getElementById("coins").setAttribute("fill", v);
+  status(tunables[bind].applies === "next_run" ? `${tunables[bind].label} = ${fmt(tunables[bind], v)} (next run)` : `${tunables[bind].label} = ${fmt(tunables[bind], v)} at the next tick`);
+}
+
+function runChecks() {
+  for (const node of document.querySelectorAll(".card[data-card]")) {
+    const card = cards.find(c => c.id === node.dataset.card); if (!card) continue;
+    const results = card.checks.map(n => [n, checks[n]()]);
+    const bad = results.find(([, r]) => r !== true);
+    const el = node.querySelector(".checks");
+    if (bad) { el.textContent = `⚠ ${bad[1]}`; el.classList.add("warn"); }
+    else { el.textContent = `✓ ${results.length} checks pass`; el.classList.remove("warn"); }
+  }
+}
+
+function status(s) { document.getElementById("status").textContent = s; }
+
+/* ---------- chat ---------- */
+function say(text, who) { const d = document.createElement("div"); d.className = "turn " + who; d.textContent = text; log.append(d); log.scrollTop = log.scrollHeight; return d; }
+function agentCard(card) { const d = document.createElement("div"); d.className = "turn agent"; log.append(d); const n = renderCard(card, d, false); renderCard(card, rulesPanel, true); runChecks(); log.scrollTop = log.scrollHeight; return n; }
+
+say("If the player touches a coin, they collect it.", "user");
+agentCard(cards[0]);
+say("Press B to shoot, but only if you have ammo, and shooting uses one ammo.", "user");
+agentCard(cards[1]);
+
+document.getElementById("composer").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const inp = document.getElementById("say"); const text = inp.value.trim(); if (!text) return; inp.value = "";
+  say(text, "user");
+  if (/bullet/i.test(text) && /fast/i.test(text)) {
+    setTimeout(() => {
+      setValue("things.bullet.speed", 900);
+      const c = { id: "tune-" + Date.now(), title: "Bullets are faster", pin: "Rule · Shooting",
+        readback: "Bullets now fly at 900 px/s instead of 600. Nothing else changed.",
+        controls: [{ kind: "slider", bind: "things.bullet.speed" }], checks: ["bullets_leave_the_screen"],
+        changes: ["Bullet speed: 600 → 900 px/s (a setting, no code changed)"] };
+      cards.push(c); agentCard(c).focus();
+    }, 400);
+  } else if (/three hits|3 hits/i.test(text)) {
+    setTimeout(() => { const d = say("Your game has no way to hit an enemy yet. How should the player hit one?", "agent"); d.classList.add("note");
+      const w = document.createElement("div"); w.className = "suggest";
+      for (const o of ["Shoot it with bullets", "Jump on its head", "Bump into it"]) { const b = document.createElement("button"); b.className = "btn"; b.textContent = o; b.addEventListener("click", () => { say(o, "user"); say("In the real editor the coding agent now changes the game (a few minutes), then shows a card.", "agent").classList.add("note"); }); w.append(b); }
+      log.append(w); }, 400);
+  } else {
+    setTimeout(() => say("In the real editor the coding agent now changes the game (a few minutes), then shows a card.", "agent").classList.add("note"), 400);
+  }
+});
+for (const b of document.querySelectorAll("[data-say]")) b.addEventListener("click", () => { document.getElementById("say").value = b.dataset.say; document.getElementById("composer").requestSubmit(); });
+
+/* ---------- inspector tabs ---------- */
+const tabs = [...document.querySelectorAll('[role=tab]')];
+function selectTab(tab) {
+  for (const t of tabs) { const on = t === tab; t.setAttribute("aria-selected", on); t.tabIndex = on ? 0 : -1; document.getElementById(t.getAttribute("aria-controls")).hidden = !on; }
+  tab.focus();
+}
+for (const t of tabs) { t.addEventListener("click", () => selectTab(t)); t.addEventListener("keydown", (e) => { const i = tabs.indexOf(t); if (e.key === "ArrowRight") selectTab(tabs[(i + 1) % tabs.length]); if (e.key === "ArrowLeft") selectTab(tabs[(i + tabs.length - 1) % tabs.length]); }); }
+for (const b of document.querySelectorAll(".thing")) b.addEventListener("click", () => status(`Selected ${b.dataset.kind} on the stage`));
+const lives = document.getElementById("lives"); lives.addEventListener("input", () => { lives.nextElementSibling.textContent = lives.value; status(`Starting lives = ${lives.value} (next run)`); });
+
+/* ---------- preview animation ---------- */
+let anim = null;
+function tryIt() {
+  if (anim) cancelAnimationFrame(anim);
+  const player = document.getElementById("player"), bullet = document.getElementById("bullet");
+  const coins = [...document.querySelectorAll("#coins circle")]; coins.forEach(c => c.style.visibility = "visible");
+  let x = 64, got = 0, t0 = performance.now(), ammo = tunables["ammo.start"].value, bx = null, lastShot = 0;
+  document.getElementById("hud-ammo").textContent = ammo; document.getElementById("hud-coins").textContent = 0;
+  status("Running");
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches && document.documentElement.dataset.motion === "auto" || document.documentElement.dataset.motion === "reduce";
+  const step = (now) => {
+    const dt = reduce ? 1 / 10 : (now - t0) / 1000; t0 = now;
+    x += 240 * dt; player.setAttribute("x", x);
+    for (const c of coins) if (c.style.visibility !== "hidden" && Math.abs(+c.getAttribute("cx") - (x + 16)) < 26 && +c.getAttribute("cy") > 600) { c.style.visibility = "hidden"; got++; document.getElementById("hud-coins").textContent = got; }
+    if (bx === null && ammo > 0 && now - lastShot > 700 && x > 150) { ammo--; document.getElementById("hud-ammo").textContent = ammo; bx = x + 40; lastShot = now; bullet.setAttribute("visibility", "visible"); }
+    if (bx !== null) { bx += tunables["things.bullet.speed"].value * dt; bullet.setAttribute("x", bx); bullet.setAttribute("y", 630); if (bx > 960) { bx = null; bullet.setAttribute("visibility", "hidden"); } }
+    if (x < 560) anim = requestAnimationFrame(step); else { status(`Run over: ${got} coins, ${ammo} ammo left`); anim = null; }
+  };
+  anim = requestAnimationFrame(step);
+}
+document.getElementById("try").addEventListener("click", tryIt);
+document.getElementById("restart").addEventListener("click", () => { if (anim) cancelAnimationFrame(anim); anim = null; document.getElementById("player").setAttribute("x", 64); document.getElementById("bullet").setAttribute("visibility", "hidden"); document.querySelectorAll("#coins circle").forEach(c => c.style.visibility = "visible"); document.getElementById("hud-coins").textContent = 0; document.getElementById("hud-ammo").textContent = tunables["ammo.start"].value; status("Paused at the title"); });
+
+/* ---------- modes ---------- */
+const root = document.documentElement;
+function toggle(id, attr, on, off) { const b = document.getElementById(id); b.addEventListener("click", () => { const now = b.getAttribute("aria-pressed") !== "true"; b.setAttribute("aria-pressed", now); root.dataset[attr] = now ? on : off; }); }
+toggle("theme", "theme", "dark", "auto"); toggle("text", "text", "large", "normal"); toggle("motion", "motion", "reduce", "auto");
+runChecks();
+</script>
+</body>
+</html>

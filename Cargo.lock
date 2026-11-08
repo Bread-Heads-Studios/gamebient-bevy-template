@@ -2456,6 +2456,8 @@ dependencies = [
  "getrandom",
  "rand",
  "rand_xoshiro",
+ "serde",
+ "serde_json",
  "ttf-parser",
  "wasm-bindgen",
  "web-sys",
@@ -2463,8 +2465,8 @@ dependencies = [
 
 [[package]]
 name = "gamebient-input"
-version = "0.4.0"
-source = "git+https://github.com/Bread-Heads-Studios/gamebient-input?tag=v0.4.0#04beee5b1395e591f7617ac00f54a8a644593e25"
+version = "0.5.0"
+source = "git+https://github.com/Bread-Heads-Studios/gamebient-input?rev=4d2038bdc96e900372aab15b45378b5c081b62e6#4d2038bdc96e900372aab15b45378b5c081b62e6"
 dependencies = [
  "bevy",
  "js-sys",

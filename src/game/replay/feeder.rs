@@ -4,7 +4,9 @@
 use bevy::prelude::*;
 use gamebient_input::{Buttons, InputAccumulator, input::dequantize_axis};
 
-use super::{Replay, TickRun};
+use super::{Replay, TickRun, TuneRecord};
+use crate::game::sim::SimTick;
+use crate::game::tunables::{PendingTunes, TunableIndex, Value};
 
 #[derive(Resource, Debug)]
 pub struct ReplayFeeder {
@@ -16,6 +18,9 @@ pub struct ReplayFeeder {
     /// after exactly `replay.ticks` ticks.
     pub remaining: u32,
     pub done: bool,
+    /// Mid-run tunable changes, in apply order; `tune_at` is the next one.
+    pub tunes: Vec<TuneRecord>,
+    pub tune_at: usize,
 }
 
 impl ReplayFeeder {
@@ -27,6 +32,8 @@ impl ReplayFeeder {
             left,
             remaining: replay.ticks,
             done: replay.ticks == 0,
+            tunes: replay.tunes.clone(),
+            tune_at: 0,
         }
     }
 
@@ -61,7 +68,27 @@ impl ReplayFeeder {
 /// defensively: current replays never carry it (`ReplayRecorder::push`
 /// strips it before it's ever written), but an older file that does must
 /// not be able to re-press pause and freeze `SimSet` mid-verify.
-pub fn feed_tick(mut feeder: ResMut<ReplayFeeder>, mut acc: ResMut<InputAccumulator>) {
+pub fn feed_tick(
+    mut feeder: ResMut<ReplayFeeder>,
+    mut acc: ResMut<InputAccumulator>,
+    tick: Res<SimTick>,
+    idx: Res<TunableIndex>,
+    mut pending: ResMut<PendingTunes>,
+) {
+    // The tick about to be simulated is `SimTick + 1` (`advance_tick` runs
+    // first in SimSet); a change recorded on it is queued now and lands in
+    // `apply_pending_tunes`, right where the recording game applied it.
+    let next = tick.0 + 1;
+    while let Some(t) = feeder.tunes.get(feeder.tune_at)
+        && t.tick <= next
+    {
+        if let Some(entry) = idx.by_id(t.id)
+            && let Some(v) = Value::from_bytes(entry.tune.kind, &t.bytes)
+        {
+            pending.0.push((t.id, v));
+        }
+        feeder.tune_at += 1;
+    }
     match feeder.next() {
         Some(r) => {
             acc.held = Buttons(u32::from(r.held)).difference(Buttons::PAUSE);
@@ -84,9 +111,12 @@ mod tests {
             tick_hz: 60,
             seed: [0; 32],
             origin: SeedOrigin::Local,
+            content: 0,
             ticks: 0,
             score: 0,
             checksum: 0,
+            starts: Vec::new(),
+            tunes: Vec::new(),
             runs: Vec::new(),
         };
         r.push_tick(1, 0, 0, 0);
@@ -102,5 +132,50 @@ mod tests {
             "done flips on the tick that consumes the last record"
         );
         assert!(f.next().is_none());
+    }
+
+    /// Generic over the game's first tunable (this file is copied into
+    /// every game, which has its own `tuning.rs`).
+    #[test]
+    fn a_recorded_change_is_queued_on_its_tick() {
+        use crate::game::replay::build_headless_app;
+        use crate::game::sim::SimTick;
+        use gamebient_input::TickInputSet;
+        let mut app = build_headless_app();
+        let entry = app.world().resource::<TunableIndex>().entries[0].clone();
+        let mut r = Replay {
+            build: String::new(),
+            tick_hz: 60,
+            seed: [0; 32],
+            origin: SeedOrigin::Local,
+            content: 0,
+            ticks: 0,
+            score: 0,
+            checksum: 0,
+            starts: Vec::new(),
+            tunes: vec![TuneRecord {
+                tick: 2,
+                id: entry.id,
+                bytes: entry.default.to_bytes(),
+            }],
+            runs: Vec::new(),
+        };
+        for _ in 0..3 {
+            r.push_tick(0, 0, 0, 0);
+        }
+        app.insert_resource(ReplayFeeder::new(&r))
+            .add_systems(FixedPreUpdate, feed_tick.in_set(TickInputSet::Feed));
+        app.update();
+        // Not yet: the next tick is 1.
+        app.world_mut().resource_mut::<SimTick>().0 = 0;
+        app.world_mut().run_system_cached(feed_tick).unwrap();
+        assert!(app.world().resource::<PendingTunes>().0.is_empty());
+        app.world_mut().resource_mut::<SimTick>().0 = 1;
+        app.world_mut().run_system_cached(feed_tick).unwrap();
+        assert_eq!(
+            app.world().resource::<PendingTunes>().0,
+            vec![(entry.id, entry.default.clone())]
+        );
+        assert_eq!(app.world().resource::<ReplayFeeder>().tune_at, 1);
     }
 }

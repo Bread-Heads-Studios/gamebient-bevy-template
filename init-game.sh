@@ -6,8 +6,6 @@
 #
 # - "My Game"   display name / window title
 # - OWNER/REPO  GitHub repo for release hosting (leave blank to fill in later)
-#
-# Note: uses BSD/macOS `sed -i ''`. On Linux, change to `sed -i` (no '').
 set -euo pipefail
 
 NAME="${1:-}"
@@ -48,13 +46,13 @@ while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in *.png | *.tar.gz) continue ;; esac
     [ -f "$f" ] || continue
-    sed -i '' \
+    sed -i.gxbak \
         -e "s/gamebient_game/${snake}/g" \
         -e "s/gamebient-game/${slug}/g" \
         -e "s/GAMEBIENT GAME/${upper}/g" \
         -e "s/Gamebient Game/${NAME}/g" \
         -e "s#OWNER/REPO#${REPO}#g" \
-        "$f" 2>/dev/null || true
+        "$f" 2>/dev/null && rm -f "$f.gxbak" || true
 done <<< "$files"
 
 echo "Done. Next steps:"

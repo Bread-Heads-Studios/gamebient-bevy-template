@@ -20,20 +20,28 @@ reproduce, so the server marks a mismatch `unverified`, not `cheat` — see
 
 ## Format
 
-`GXR1`, little-endian (`src/game/replay/mod.rs`):
+`GXR2`, little-endian (`src/game/replay/mod.rs`):
 
 ```text
-magic    b"GXR1"
+magic    b"GXR2"
 build    u8 len + UTF-8            GX_BUILD_ID of the game that recorded it
 tick_hz  u16
 seed     [u8; 32]
 origin   u8                        0 host, 1 local
+content  u64                       hash of the tune log (start values + mid-run changes)
 ticks    u32                       total sim ticks
 score    u64                       claimed
 checksum u64                       claimed
-runs     u32                       number of RLE runs
-run[]    held u16, latched u16, ax i8, ay i8, count u16
+starts   u16 count, then [id u16, len u8, bytes]           every tunable's start value, index order
+tunes    u32 count, then [tick u32, id u16, len u8, bytes]  mid-run tunable changes, in apply order
+runs     u32 count, then [held u16, latched u16, ax i8, ay i8, count u16]
 ```
+
+`starts` and `tunes` are the game's **tunables** (`src/game/tunables/`,
+determinism rule 11): the verifier applies the start values before the run
+and feeds each change on its tick, and `content` names which game was
+played. A `GXR1` file no longer decodes; every build verifies only replays
+recorded by the same build id, so no mixed-format case exists.
 
 `build` is `GX_BUILD_ID` (crate version + short git SHA, baked in by
 `build.rs`): the server uses it to pick which release's verifier module to
@@ -340,6 +348,24 @@ nothing resets. The rest — `SimSet` placement, `TickInput` usage,
 checksum folding, run-end latching — aren't mechanically checkable and need
 review.
 
+11. **Tunable values are run content.** A gameplay number the editor can
+    change lives in a `Reflect` resource registered with
+    `tunables::register` (`src/game/tunables/`). A change arrives through
+    `tunables::PendingTunes` and lands only in `tunables::apply_pending_tunes`,
+    chained right after `sim::sync_run_clock` in `SimSet`, so it applies
+    between two ticks and never during one; it folds `(id, bytes)` into
+    `Checksum` on that tick and is recorded in the replay's `tunes`. At
+    `OnEnter(Playing)`, `tunables::begin_run_tunables` snapshots every
+    tunable into the log's `starts` and folds their content hash into the
+    fresh checksum. The verifier stages `starts` before the run and feeds
+    `tunes` on their ticks, and `matches` requires the re-simulated
+    `content` to equal the header's, so a replay recorded under one set of
+    values cannot verify against another, and a header stripped of its
+    changes fails too. The registration order is the index: never reorder
+    `tunables::register` calls between releases. A leaderboard accepts a
+    run only when `content` equals the release's default hash, which also
+    rejects runs that changed a value mid-way. `tests/tunables.rs` is the
+    probe.
 ## Keeping a ported game current
 
 Games are copies of this template, not dependents, so a game ported in an
@@ -446,9 +472,9 @@ const json = verify(new Uint8Array(bytes));
 ```
 
 `json` parses to
-`{score, checksum, ticks, ended: "gameover"|"input_exhausted"|"cap", matches}`
-or `{"error": "..."}` if the bytes don't decode as `GXR1`. `score` and
-`ticks` are numbers; **`checksum` is a decimal string**
+`{score, checksum, content, ticks, ended: "gameover"|"input_exhausted"|"cap", matches}`
+or `{"error": "..."}` if the bytes don't decode as `GXR2`. `score` and
+`ticks` are numbers; **`checksum` and `content` are decimal strings**
 (`"checksum":"15390901594743611022"`) because it is a u64 and JSON numbers
 are doubles in JavaScript — parsing it as a number would round it. Compare
 it verbatim, or as a `BigInt`. Cache the required module at module scope —
