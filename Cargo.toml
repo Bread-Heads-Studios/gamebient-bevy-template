@@ -144,3 +144,19 @@ strip = true
 [profile.wasm-release]
 inherits = "release"
 opt-level = "s"
+
+# The editor's bundle (tools/build_editor.sh) is rebuilt after every change
+# the agent makes, so it is tuned for relink time, not size: no LTO, parallel
+# codegen, the game crate at opt-level 1 and incremental, dependencies
+# compiled once for size. Symbols are stripped (the wasm name section alone
+# was 41 MB). Measured on the template: 0.9 s to rebuild after an edit and a
+# 44 MB wasm, against 127 s and 27 MB with wasm-release. Publishing still
+# uses wasm-release.
+[profile.wasm-editor]
+inherits = "dev"
+debug = false
+strip = "symbols"
+panic = "abort"
+
+[profile.wasm-editor.package."*"]
+opt-level = "s"

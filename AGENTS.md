@@ -85,7 +85,8 @@ in before the first gameplay code; the cover and metadata skills read it.
   panics (a wasm panic kills the game), listed in the game's
   `tunables::CheckList`. `cargo test` runs every check at the defaults.
   `tools/build_editor.sh` builds the `--features editor` bundle the editor
-  frames (`dist-editor/`); see
+  frames (`dist-editor/`) with the `wasm-editor` profile (no LTO, stripped,
+  about a second to rebuild after an edit; publishing keeps `wasm-release`); see
   `docs/superpowers/specs/2026-11-06-editor-design.md`.
 - **A visual check:** `cargo run --features autopilot` plays a scripted ~60 s
   session (logo → title → how-to-play → bot-played run → pause → game over) and
