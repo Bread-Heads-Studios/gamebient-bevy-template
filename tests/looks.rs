@@ -124,3 +124,60 @@ fn a_tagged_sprite_takes_the_pack_colour() {
         parse_colour("#f4f1e8").unwrap()
     );
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_pack_folder_reloads_when_it_changes_and_survives_a_bad_edit() {
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
+
+    let dir = std::env::temp_dir().join(format!("gx-look-reload-{}", std::process::id()));
+    let pack = dir.join("hot");
+    std::fs::create_dir_all(&pack).unwrap();
+    let write = |pause: &str| {
+        std::fs::write(
+            pack.join("look.json"),
+            format!(r#"{{"v":1,"id":"hot","name":"Hot","kind":"palette","strings":{{"pause":"{pause}"}}}}"#),
+        )
+        .unwrap();
+    };
+    write("ONE");
+
+    let mut app = app_with(Selection::Dir(pack.display().to_string()));
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+        300,
+    )));
+    let text = app
+        .world_mut()
+        .spawn((Text::new("?"), LookText("pause")))
+        .id();
+    for _ in 0..4 {
+        app.update();
+    }
+    assert_eq!(app.world().get::<Text>(text).unwrap().0, "ONE");
+
+    write("TWO PLUS"); // a different length, so the fingerprint changes on any filesystem
+    for _ in 0..4 {
+        app.update();
+    }
+    assert_eq!(
+        app.world().resource::<ActiveLook>().string("pause"),
+        "TWO PLUS"
+    );
+    assert_eq!(
+        app.world().get::<Text>(text).unwrap().0,
+        "TWO PLUS",
+        "LookChanged retexts"
+    );
+
+    std::fs::write(pack.join("look.json"), "{ not json").unwrap();
+    for _ in 0..4 {
+        app.update();
+    }
+    assert_eq!(
+        app.world().resource::<ActiveLook>().string("pause"),
+        "TWO PLUS",
+        "a broken edit keeps the last good look"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
