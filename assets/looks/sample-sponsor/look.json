@@ -1,0 +1,27 @@
+{
+  "v": 1,
+  "id": "sample-sponsor",
+  "name": "Acme Snacks Arcade",
+  "kind": "sponsor",
+  "creator": "Bread Heads Studios",
+  "palette": {
+    "ink": "#1a0f2e",
+    "signal": "#ffc828",
+    "coral": "#ff4f3a",
+    "paper": "#fff8e7",
+    "player": "#ff4f3a"
+  },
+  "strings": {
+    "title": "ACME ARCADE",
+    "pause": "SNACK BREAK",
+    "pause.resume": "ESC: BACK TO IT",
+    "pause.quit": "ENTER: CASH OUT"
+  },
+  "slots": { "player": { "recipe": "cuboid", "params": { "size": 1.4 } } },
+  "end_card": {
+    "headline": "THANKS FOR PLAYING",
+    "body": "Brought to you by Acme Snacks, a made-up brand.",
+    "url": "https://example.com",
+    "image": "logo.png"
+  }
+}

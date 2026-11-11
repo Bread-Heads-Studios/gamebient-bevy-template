@@ -13,8 +13,12 @@
 
 pub mod contract;
 pub mod manifest;
+pub mod pack;
+pub mod select;
 pub mod sniff;
 pub mod validate;
 
 pub use contract::{Contract, ParamKind, ParamSpec, RecipeSpec, SlotSpec, StringSpec};
 pub use manifest::{EndCard, ImageSlot, LookKind, Manifest, Param, RecipeSlot, Slot};
+pub use select::Selection;
+pub use validate::{Files, Problem, Report, Severity};
