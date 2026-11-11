@@ -19,6 +19,11 @@ name = "verify"
 path = "src/bin/verify.rs"
 required-features = ["verify"]
 
+[[bin]]
+# Validates Look Packs against this game's contract (docs/look-packs.md).
+name = "look-check"
+path = "src/bin/look_check.rs"
+
 [features]
 # Marks a build that captures the window (footage, cover shots): the Linux
 # window stays the game's own size and the cabinet frame is off unless asked

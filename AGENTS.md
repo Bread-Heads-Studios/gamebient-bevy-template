@@ -247,6 +247,15 @@ Full rules: "Typography and cards" in `docs/conventions.md`.
 - `fit.rs`, `card.rs` and `studio_logo.rs` are copied into games verbatim;
   `fonts.rs`, `theme.rs`, `backdrop.rs` and the screens are the game's own.
 
+## Look Packs
+
+- `src/look/` (copied verbatim into games) loads a **Look Pack**: a flat folder of `look.json` plus `.png` / `.ogg`, which restyles palette, strings, slot recipes or images, and audio cues. Built-in packs live in `assets/looks/<id>/` and are embedded by `build.rs`. Guide: `docs/look-packs.md`.
+- The game's look contract is `theme::LOOK` in `src/ui/theme.rs`: palette roles, string keys with max lengths, slots, recipes, audio cues and fonts. Add a role or key there before a pack can use it.
+- Tag spawned entities with `LookColour::new("role")` / `LookText("key")` instead of reading the pack in spawn code where you can.
+- **Never read `ActiveLook` or `LookAssets` from a sim system.** `LookPlugin` goes in `main.rs`, never `GamePlugin`. `tests/looks.rs` replays the selftest under every pack and must stay green.
+- Look-only editor tunables are `.cosmetic()`.
+- Try a pack: `GX_LOOK=<id> cargo run`, `cargo run -- --look ./folder` (live reload), `?look=<id>` on web. Check one: `cargo run --bin look-check -- <folder>`.
+
 ## Build / CI / release model
 
 - **Scripts:** `build.sh <pi|x86|web>` compiles one target (`web` delegates to
