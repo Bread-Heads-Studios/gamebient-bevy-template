@@ -535,10 +535,10 @@ fn play_one_run(app: &mut App, bot: Bot) -> Replay {
     app.world_mut().run_schedule(StateTransition);
     app.update();
     // The asset stores are live, proved rather than assumed: this
-    // template's `player::spawn_player` inserts `Mesh3d`/`MeshMaterial3d`
-    // only when `Assets<Mesh>` and `Assets<StandardMaterial>` are both
-    // present, which is the same `Option<Res<...>>` fork every game's
-    // decorators hang off. If this count is zero the asset lines above did
+    // template's `player::dress_player` (an `AssetsPlugin` `Update`
+    // decorator) inserts `Mesh3d`/`MeshMaterial3d` only when `Assets<Mesh>`
+    // and `Assets<StandardMaterial>` are both present, which is the same
+    // `Option<Res<...>>` fork every game's decorators hang off. If this count is zero the asset lines above did
     // nothing and the probe is back to covering resources only.
     //
     // The template's own `AssetsPlugin` is a stub, so this is the strongest

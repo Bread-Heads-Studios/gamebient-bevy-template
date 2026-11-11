@@ -232,3 +232,80 @@ fn no_built_in_pack_changes_a_replay() {
         assert!(v.matches);
     }
 }
+
+use bevy::camera::primitives::MeshAabb;
+use gamebient_game::game::player::Player;
+use gamebient_game::game::states::GameState;
+
+/// The cuboid edge of `entity`'s mesh, read back from the mesh asset.
+fn cuboid_edge(app: &App, entity: Entity) -> f32 {
+    let handle = app
+        .world()
+        .get::<Mesh3d>(entity)
+        .expect("player has a Mesh3d")
+        .0
+        .clone();
+    let aabb = app
+        .world()
+        .resource::<Assets<Mesh>>()
+        .get(&handle)
+        .expect("mesh asset exists")
+        .compute_aabb()
+        .expect("mesh has positions");
+    let e = Vec3::from(aabb.half_extents) * 2.0;
+    assert!(
+        (e.x - e.y).abs() < 1e-5 && (e.y - e.z).abs() < 1e-5,
+        "not a cube: {e:?}"
+    );
+    e.x
+}
+
+/// The render half of the player (`player::dress_player`, registered by
+/// `AssetsPlugin`) sizes the mesh from the pack, on the spawn frame, and
+/// rebuilds it on `LookChanged`.
+#[test]
+fn the_player_is_dressed_from_the_pack_on_the_frame_it_spawns() {
+    let mut app = app_with(Selection::Embedded("sample-sponsor".into()));
+    app.init_resource::<Assets<Mesh>>();
+    app.init_resource::<Assets<StandardMaterial>>();
+    app.add_plugins(gamebient_game::assets::AssetsPlugin);
+    let player = app.world_mut().spawn((Player, Transform::default())).id();
+    app.update();
+    assert!((cuboid_edge(&app, player) - 1.4).abs() < 1e-5);
+    assert!(
+        app.world()
+            .get::<MeshMaterial3d<StandardMaterial>>(player)
+            .is_some()
+    );
+    assert_eq!(
+        app.world().get::<LookColour>(player).map(|c| c.role),
+        Some("player")
+    );
+
+    // Hot reload: a new look with no recipe and a LookChanged rebuild the mesh.
+    let plain = ActiveLook::resolve(&theme::LOOK, Selection::Default);
+    app.insert_resource(plain);
+    app.world_mut().write_message(look::LookChanged);
+    app.update();
+    assert!((cuboid_edge(&app, player) - 1.0).abs() < 1e-5);
+}
+
+/// D1: the sim's spawn is sim-only. With the asset stores present (so the
+/// old in-spawn dressing would have fired) the headless app still gives the
+/// player no mesh.
+#[test]
+fn spawn_player_alone_inserts_no_mesh() {
+    let mut app = gamebient_game::game::replay::build_headless_app();
+    app.init_resource::<Assets<Mesh>>();
+    app.init_resource::<Assets<StandardMaterial>>();
+    app.world_mut()
+        .resource_mut::<NextState<GameState>>()
+        .set(GameState::Playing);
+    app.update();
+    app.update();
+    let w = app.world_mut();
+    let players = w.query_filtered::<Entity, With<Player>>().iter(w).count();
+    assert_eq!(players, 1, "the headless app entered Playing and spawned");
+    let meshed = w.query_filtered::<Entity, With<Mesh3d>>().iter(w).count();
+    assert_eq!(meshed, 0, "spawn_player must not dress the player");
+}
