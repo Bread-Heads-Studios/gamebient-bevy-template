@@ -109,6 +109,29 @@ fn tagged_entities_take_the_pack_on_the_frame_they_spawn() {
 }
 
 #[test]
+fn a_tagged_text_colours_the_glyphs_and_leaves_its_background_clear() {
+    // Bevy 0.18 gives every UI `Text` a required `BackgroundColor`. The tag
+    // is for the text colour; it must not paint the text node's box too.
+    let mut app = app_with(Selection::Embedded("night-shift".into()));
+    let text = app
+        .world_mut()
+        .spawn((
+            Text::new("X"),
+            TextColor(theme::PAPER),
+            BackgroundColor(Color::NONE),
+            LookColour::new("paper"),
+        ))
+        .id();
+    app.update();
+    let w = app.world();
+    assert_eq!(
+        w.get::<TextColor>(text).unwrap().0,
+        parse_colour("#f4f1e8").unwrap()
+    );
+    assert_eq!(w.get::<BackgroundColor>(text).unwrap().0.alpha(), 0.0);
+}
+
+#[test]
 fn a_tagged_sprite_takes_the_pack_colour() {
     let mut app = app_with(Selection::Embedded("night-shift".into()));
     let sprite = app

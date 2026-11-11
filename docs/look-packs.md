@@ -99,6 +99,9 @@ Game code uses a look in two ways:
 - **Tag it** (no system parameters needed): put `LookColour::new("role")` next
   to a `TextColor`, `BackgroundColor`, `Sprite` or `MeshMaterial3d<StandardMaterial>`
   (`.alpha(a)`, `.emissive(strength)`), or `LookText("key")` next to a `Text`.
+  On a text entity the tag colours the text only (its required, transparent
+  `BackgroundColor` is left alone); elsewhere it colours whichever of
+  `BackgroundColor`, `Sprite` or material is present.
   The look module fills them in on the frame they spawn and on every reload.
 - **Ask it**: `Option<Res<ActiveLook>>` and `colour(role)`, `string(key)`,
   `slot(name)`, `recipe_number(slot, recipe, param)`; `Res<LookAssets>` for a

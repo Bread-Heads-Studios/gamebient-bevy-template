@@ -14,8 +14,10 @@ use super::runtime::ActiveLook;
 #[derive(Message, Debug, Clone, Copy)]
 pub struct LookChanged;
 
-/// Colours a `TextColor`, `BackgroundColor`, `Sprite` or `StandardMaterial`
-/// on the same entity from palette role `role`.
+/// Colours the entity from palette role `role`. On an entity with a
+/// `TextColor` (every UI `Text`, which Bevy also gives a transparent
+/// `BackgroundColor`) it colours the text only. Otherwise it colours the
+/// `BackgroundColor`, `Sprite` or `StandardMaterial` it finds there.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct LookColour {
     pub role: &'static str,
@@ -140,7 +142,7 @@ pub fn retint_text(
 pub fn retint_background(
     look: Res<ActiveLook>,
     mut changed: MessageReader<LookChanged>,
-    mut q: Query<(Ref<LookColour>, &mut BackgroundColor)>,
+    mut q: Query<(Ref<LookColour>, &mut BackgroundColor), Without<TextColor>>,
 ) {
     let all = changed.read().count() > 0;
     for (tag, mut c) in &mut q {
@@ -153,7 +155,7 @@ pub fn retint_background(
 pub fn retint_sprite(
     look: Res<ActiveLook>,
     mut changed: MessageReader<LookChanged>,
-    mut q: Query<(Ref<LookColour>, &mut Sprite)>,
+    mut q: Query<(Ref<LookColour>, &mut Sprite), Without<TextColor>>,
 ) {
     let all = changed.read().count() > 0;
     for (tag, mut s) in &mut q {

@@ -541,8 +541,8 @@ fn play_one_run(app: &mut App, bot: Bot) -> Replay {
     // `Option<Res<...>>` fork every game's decorators hang off. If this count is zero the asset lines above did
     // nothing and the probe is back to covering resources only.
     //
-    // The template's own `AssetsPlugin` is a stub, so this is the strongest
-    // statement it can make about itself. **In a game it is not enough**:
+    // The template's own `AssetsPlugin` only registers `player::dress_player`,
+    // so this is the strongest statement it can make about itself. **In a game it is not enough**:
     // assert there too that a decorator has actually written the component
     // *field* a sim system might read (a mirrored `scale.x`, a rotation),
     // under every bot in the table — see the module comment.
@@ -884,8 +884,9 @@ fn a_run_recorded_with_the_windowed_presentation_still_verifies_without_it() {
 /// 3600-tick script.
 ///
 /// On the template's own game it is, like the reckless row, weaker than
-/// the fixture script — the template's `AssetsPlugin` is a stub, so no
-/// decorator writes a component value for a sim system to read back.
+/// the fixture script — the template's `AssetsPlugin` only registers
+/// `player::dress_player`, which writes no component value for a sim system
+/// to read back.
 /// Measured on this template while adopting the row: a planted
 /// `tf.scale.x.signum()` fallback in `move_player` passes all three rows on
 /// its own, and fails **this** row (and only this row) as soon as the
