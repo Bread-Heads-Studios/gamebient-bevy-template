@@ -116,12 +116,17 @@ pub fn play_sfx(
     mut events: MessageReader<SfxEvent>,
     sfx: Res<SfxAssets>,
     mut duck: ResMut<Duck>,
+    look: Option<Res<crate::look::LookAssets>>,
 ) {
     for event in events.read() {
         let Some((handle, secs)) = sfx.get(*event) else {
             continue;
         };
-        commands.spawn((AudioPlayer(handle.clone()), PlaybackSettings::DESPAWN));
+        let handle = look
+            .as_ref()
+            .and_then(|l| l.audio(&format!("sfx.{}", event.name())))
+            .unwrap_or_else(|| handle.clone());
+        commands.spawn((AudioPlayer(handle), PlaybackSettings::DESPAWN));
         if event.is_sting() {
             duck.remaining = duck.remaining.max(secs);
         }
@@ -431,6 +436,11 @@ fn rate_for(secs: f32) -> f32 {
     }
 }
 
+/// The Look Pack cue name for a state's music: `music.<state, lower case>`.
+pub fn music_key(state: &GameState) -> String {
+    format!("music.{}", format!("{state:?}").to_lowercase())
+}
+
 /// Crossfades to the wanted cue on every state change or `CueEvent`.
 pub fn music_director(
     mut commands: Commands,
@@ -441,6 +451,7 @@ pub fn music_director(
     mut sources: ResMut<Assets<AudioSource>>,
     asset_server: Res<AssetServer>,
     mut playing: Query<(Entity, &mut MusicVoice), With<MusicTrack>>,
+    look: Option<Res<crate::look::LookAssets>>,
 ) {
     let mut changed = false;
     if state.is_changed() {
@@ -485,7 +496,14 @@ pub fn music_director(
     } else {
         PlaybackMode::Once
     };
-    let handle = cache.handle(&mut sources, &asset_server, &cue.source);
+    // A pack may replace a state's own music (not a mid-state switch).
+    let pack_track = current
+        .switched
+        .is_none()
+        .then(|| look.as_ref().and_then(|l| l.audio(&music_key(state.get()))))
+        .flatten();
+    let handle =
+        pack_track.unwrap_or_else(|| cache.handle(&mut sources, &asset_server, &cue.source));
     commands.spawn((
         MusicTrack,
         AudioPlayer::new(handle),
@@ -600,6 +618,12 @@ pub fn export_inventory() -> Vec<(String, AudioSource)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn music_keys_name_the_state_in_lower_case() {
+        assert_eq!(music_key(&GameState::GameOver), "music.gameover");
+        assert_eq!(music_key(&GameState::Menu), "music.menu");
+    }
 
     #[test]
     fn music_table_covers_every_state() {

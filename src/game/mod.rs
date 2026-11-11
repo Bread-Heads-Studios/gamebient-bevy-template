@@ -1,3 +1,4 @@
+use crate::look::{LookColour, LookText};
 use bevy::prelude::*;
 
 pub mod audio;
@@ -340,6 +341,7 @@ fn sync_pause_overlay(
                     ..default()
                 },
                 BackgroundColor(theme::INK.with_alpha(0.62)),
+                LookColour::new("ink").alpha(0.62),
                 GlobalZIndex(100),
             ))
             .with_children(|parent| {
@@ -361,6 +363,8 @@ fn sync_pause_overlay(
                         card.spawn((
                             Text::new(theme::PAUSE_WORD),
                             fonts::display_or_default(fonts, 60.0),
+                            LookText("pause"),
+                            LookColour::new("paper"),
                             TextColor(theme::PAPER),
                             TextShadow {
                                 offset: Vec2::new(0.0, 5.0),
@@ -375,15 +379,20 @@ fn sync_pause_overlay(
                                 ..default()
                             },
                             BackgroundColor(theme::CORAL),
+                            LookColour::new("coral"),
                         ));
                         card.spawn((
                             Text::new(theme::PAUSE_RESUME),
                             fonts::body_or_default(fonts, 22.0),
+                            LookText("pause.resume"),
+                            LookColour::new("paper"),
                             TextColor(theme::PAPER),
                         ));
                         card.spawn((
                             Text::new(theme::PAUSE_QUIT),
                             fonts::body_or_default(fonts, 18.0),
+                            LookText("pause.quit"),
+                            LookColour::new("muted"),
                             TextColor(theme::MUTED),
                         ));
                     });

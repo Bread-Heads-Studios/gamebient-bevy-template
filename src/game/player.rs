@@ -26,6 +26,7 @@ pub fn spawn_player(
     mut spawn: ResMut<SpawnCounter>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<StandardMaterial>>>,
+    look: Option<Res<crate::look::ActiveLook>>,
 ) {
     let entity = commands
         .spawn((
@@ -36,12 +37,19 @@ pub fn spawn_player(
         ))
         .id();
     if let (Some(mut meshes), Some(mut materials)) = (meshes, materials) {
+        // Look only: size and colour of the mesh, never the Transform or
+        // anything the sim reads (tests/looks.rs checks every pack).
+        let size = look
+            .as_deref()
+            .and_then(|l| l.recipe_number("player", "cuboid", "size"))
+            .unwrap_or(1.0) as f32;
         commands.entity(entity).insert((
-            Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
+            Mesh3d(meshes.add(Cuboid::new(size, size, size))),
             MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::srgb(0.2, 0.8, 1.0),
+                base_color: crate::ui::theme::PLAYER,
                 ..default()
             })),
+            crate::look::LookColour::new("player"),
         ));
     }
 }

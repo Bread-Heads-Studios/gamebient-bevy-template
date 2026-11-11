@@ -197,3 +197,38 @@ fn a_pack_folder_reloads_when_it_changes_and_survives_a_bad_edit() {
     );
     assert_eq!(app.world().get::<Text>(text).unwrap().0, "THREE");
 }
+
+use gamebient_game::game::replay::selftest::record_scripted_run;
+use gamebient_game::game::replay::{build_verify_app, run_verify_app, verify};
+
+/// D1: every pack replays to the same score, checksum and content hash.
+/// In the template nothing in the sim reads a look, so this guards the
+/// plugin; in a game it fails the moment a sim system starts reading one.
+#[test]
+fn no_built_in_pack_changes_a_replay() {
+    let replay = record_scripted_run();
+    let base = verify(&replay);
+    assert!(
+        base.matches,
+        "the selftest replay must verify plainly first: {base:?}"
+    );
+    for id in look::pack::embedded_ids() {
+        let mut app = build_verify_app(&replay);
+        app.insert_resource(Selection::Embedded(id.to_string()));
+        app.add_plugins(LookPlugin {
+            contract: &theme::LOOK,
+        });
+        assert_eq!(
+            app.world().resource::<ActiveLook>().id(),
+            id,
+            "pack {id} did not load"
+        );
+        let v = run_verify_app(&mut app, &replay);
+        assert_eq!(
+            (v.score, v.checksum, v.content, v.ticks),
+            (base.score, base.checksum, base.content, base.ticks),
+            "pack {id} changed the sim"
+        );
+        assert!(v.matches);
+    }
+}
