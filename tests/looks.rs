@@ -107,3 +107,20 @@ fn tagged_entities_take_the_pack_on_the_frame_they_spawn() {
         parse_colour("#05070f").unwrap().with_alpha(0.62)
     );
 }
+
+#[test]
+fn a_tagged_sprite_takes_the_pack_colour() {
+    let mut app = app_with(Selection::Embedded("night-shift".into()));
+    let sprite = app
+        .world_mut()
+        .spawn((
+            Sprite::from_color(theme::PAPER, Vec2::ONE),
+            LookColour::new("paper"),
+        ))
+        .id();
+    app.update();
+    assert_eq!(
+        app.world().get::<Sprite>(sprite).unwrap().color,
+        parse_colour("#f4f1e8").unwrap()
+    );
+}

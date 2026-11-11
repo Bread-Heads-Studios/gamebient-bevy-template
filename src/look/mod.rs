@@ -58,6 +58,15 @@ impl Plugin for LookPlugin {
             .init_resource::<LookAssets>()
             .add_message::<LookChanged>()
             .add_systems(Startup, apply::load_assets)
+            // Retexting must land before text layout (UI content measure and
+            // Text2d layout, both in PostUpdate), or the frame a string
+            // changes on still renders the game's own text.
+            .configure_sets(
+                PostUpdate,
+                LookSet
+                    .before(bevy::ui::UiSystems::Content)
+                    .before(bevy::text::Text2dUpdateSystems),
+            )
             .add_systems(
                 PostUpdate,
                 (
