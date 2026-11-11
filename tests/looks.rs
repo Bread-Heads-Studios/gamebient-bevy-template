@@ -134,6 +134,13 @@ fn a_pack_folder_reloads_when_it_changes_and_survives_a_bad_edit() {
     let dir = std::env::temp_dir().join(format!("gx-look-reload-{}", std::process::id()));
     let pack = dir.join("hot");
     std::fs::create_dir_all(&pack).unwrap();
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+    let _cleanup = Cleanup(dir.clone());
     let write = |pause: &str| {
         std::fs::write(
             pack.join("look.json"),
@@ -179,5 +186,14 @@ fn a_pack_folder_reloads_when_it_changes_and_survives_a_bad_edit() {
         "TWO PLUS",
         "a broken edit keeps the last good look"
     );
-    std::fs::remove_dir_all(&dir).ok();
+
+    write("THREE"); // a new length again: proves polling survived the bad edit
+    for _ in 0..4 {
+        app.update();
+    }
+    assert_eq!(
+        app.world().resource::<ActiveLook>().string("pause"),
+        "THREE"
+    );
+    assert_eq!(app.world().get::<Text>(text).unwrap().0, "THREE");
 }
