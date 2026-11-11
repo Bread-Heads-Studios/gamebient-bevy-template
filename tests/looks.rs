@@ -309,3 +309,77 @@ fn spawn_player_alone_inserts_no_mesh() {
     let meshed = w.query_filtered::<Entity, With<Mesh3d>>().iter(w).count();
     assert_eq!(meshed, 0, "spawn_player must not dress the player");
 }
+
+/// `pack::read_dir` is the gate for every folder pack (`--look`, the CLI).
+#[cfg(not(target_arch = "wasm32"))]
+mod read_dir {
+    use gamebient_game::look::pack::read_dir;
+    use gamebient_game::look::validate::limits;
+    use std::path::PathBuf;
+
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let p = std::env::temp_dir().join(format!("gx-look-rd-{tag}-{}", std::process::id()));
+            std::fs::remove_dir_all(&p).ok();
+            std::fs::create_dir_all(&p).unwrap();
+            Self(p)
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
+    #[test]
+    fn a_subfolder_is_rejected() {
+        let d = TempDir::new("sub");
+        std::fs::write(d.0.join("look.json"), "{}").unwrap();
+        std::fs::create_dir(d.0.join("nested")).unwrap();
+        let e = read_dir(&d.0).unwrap_err();
+        assert!(e.starts_with("nested:") && e.contains("no folders"), "{e}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_is_rejected() {
+        let d = TempDir::new("link");
+        let target = d.0.join(".real");
+        std::fs::write(&target, "x").unwrap();
+        std::os::unix::fs::symlink(&target, d.0.join("logo.png")).unwrap();
+        let e = read_dir(&d.0).unwrap_err();
+        assert!(e.starts_with("logo.png:") && e.contains("no links"), "{e}");
+    }
+
+    #[test]
+    fn more_than_files_max_is_rejected() {
+        let d = TempDir::new("many");
+        for i in 0..=limits::FILES_MAX {
+            std::fs::write(d.0.join(format!("f{i}.png")), "x").unwrap();
+        }
+        let e = read_dir(&d.0).unwrap_err();
+        assert_eq!(e, format!("more than {} files", limits::FILES_MAX));
+    }
+
+    #[test]
+    fn exactly_files_max_is_read() {
+        let d = TempDir::new("max");
+        for i in 0..limits::FILES_MAX {
+            std::fs::write(d.0.join(format!("f{i}.png")), "x").unwrap();
+        }
+        assert_eq!(read_dir(&d.0).unwrap().len(), limits::FILES_MAX);
+    }
+
+    #[test]
+    fn readme_and_dotfiles_are_skipped() {
+        let d = TempDir::new("skip");
+        std::fs::write(d.0.join("look.json"), "{}").unwrap();
+        std::fs::write(d.0.join("README.md"), "notes").unwrap();
+        std::fs::write(d.0.join(".DS_Store"), "junk").unwrap();
+        std::fs::create_dir(d.0.join(".git")).unwrap();
+        let files = read_dir(&d.0).unwrap();
+        let names: Vec<_> = files.keys().cloned().collect();
+        assert_eq!(names, vec!["look.json".to_string()]);
+    }
+}

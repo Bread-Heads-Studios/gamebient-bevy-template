@@ -2,8 +2,15 @@
 
 A Look Pack restyles a game without touching how it plays: colours, words,
 slot recipes and images, sounds. Scores, replays and the leaderboard are the
-same under every pack (decision D1). A pack is data only, so it is safe to
-take from other people (decision D7, "modding-lite").
+same under every pack (decision D1). A pack is data only: no code, no fonts,
+nothing the game runs (decision D7, "modding-lite").
+
+**Packs are not yet safe from anyone.** The validator checks sizes, counts,
+names and file headers (PNG dimensions, the Vorbis identification header);
+it does not decode a whole file. A PNG body is decoded with error handling,
+but Bevy's audio decoder can panic on a malformed Vorbis body. Until a full
+decode probe lands (step 5 of the Look Packs roadmap), take packs only from
+allowlisted creators.
 
 ## A pack is a folder
 
@@ -17,15 +24,17 @@ assets/looks/<id>/
 - File names: lowercase letters, digits, `-` and `_`, then `.png` or `.ogg`.
 - `<id>` is the folder name: `[a-z0-9-]{1,32}`.
 
-Folders in `assets/looks/` are built into the game. Anything else is a folder
-you point the game at while working on it.
+Folders in `assets/looks/` are built into the game, every bundle of it, so
+each built-in pack adds its files to the download. Anything else is a folder
+you point the game at while working on it (native only). Symlinks are
+skipped there too: `build.rs` warns and leaves them out.
 
 ## Try one
 
 | Where | How |
 |---|---|
 | Native, built-in | `GX_LOOK=night-shift cargo run` (or `cargo run -- --look night-shift`) |
-| Native, your folder (live reload) | `cargo run -- --look ./my-packs/acme` — save `look.json` or a PNG and the game updates within half a second; a broken save is logged and the last good look stays |
+| Native, your folder (live reload) | `cargo run -- --look ./my-packs/acme` — save `look.json` or a PNG and the game updates within half a second (except the menu title, which is fitted when the menu spawns and refreshes the next time it opens); a broken save is logged and the last good look stays |
 | Web | `…/?look=night-shift` (built-in packs only) |
 | Check | `cargo run --features look-check --bin look-check -- ./my-packs/acme` |
 
@@ -95,10 +104,24 @@ Game code uses a look in two ways:
   `slot(name)`, `recipe_number(slot, recipe, param)`; `Res<LookAssets>` for a
   pack's decoded images and audio overrides.
 
-**The one rule:** nothing in the sim (`SimSet`, anything the replay verifier
-runs) reads `ActiveLook` or `LookAssets`. `tests/looks.rs`
-(`no_built_in_pack_changes_a_replay`) fails if one does. Art is sized to the
-sim's hitboxes, never the other way round.
+**The one rule:** nothing in the sim (`SimSet`, `OnEnter(Playing)` spawns,
+anything the replay verifier runs) reads `ActiveLook` or `LookAssets`. Split
+an entity into a sim spawn and a render-side dresser instead: the template's
+`player::spawn_player` spawns the sim half and `player::dress_player`
+(registered by `AssetsPlugin`, which the verifier never adds) gives it its
+mesh from the pack. Art is sized to the sim's hitboxes, never the other way
+round.
+
+What the test catches, exactly: `tests/looks.rs`
+(`no_built_in_pack_changes_a_replay`) replays the selftest headless under
+each built-in pack and fails if the score, checksum or tick count moves. So
+it catches a sim read **whose result differs under some built-in pack's
+values**. It never catches a read behind a render-only branch (the verifier
+has no asset stores, so an `Option<Res<Assets<…>>>` branch never runs
+there), and it cannot catch a read of a role, key or slot no built-in pack
+sets, because then every pack gives the game's own default. When you port
+this, add a built-in pack that sets **every** palette role, string key and
+slot your game reads, to a value unlike the default.
 
 Editor tunables that only change the look are marked `.cosmetic()` (for
 example `#[reflect(@Tune::colour("Coin colour").cosmetic())]`), which keeps
