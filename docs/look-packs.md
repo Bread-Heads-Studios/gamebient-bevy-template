@@ -27,7 +27,7 @@ you point the game at while working on it.
 | Native, built-in | `GX_LOOK=night-shift cargo run` (or `cargo run -- --look night-shift`) |
 | Native, your folder (live reload) | `cargo run -- --look ./my-packs/acme` — save `look.json` or a PNG and the game updates within half a second; a broken save is logged and the last good look stays |
 | Web | `…/?look=night-shift` (built-in packs only) |
-| Check | `cargo run --bin look-check -- ./my-packs/acme` |
+| Check | `cargo run --features look-check --bin look-check -- ./my-packs/acme` |
 
 ## look.json (schema v1)
 

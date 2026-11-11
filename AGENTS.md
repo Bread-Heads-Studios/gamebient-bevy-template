@@ -254,7 +254,7 @@ Full rules: "Typography and cards" in `docs/conventions.md`.
 - Tag spawned entities with `LookColour::new("role")` / `LookText("key")` instead of reading the pack in spawn code where you can.
 - **Never read `ActiveLook` or `LookAssets` from a sim system.** `LookPlugin` goes in `main.rs`, never `GamePlugin`. `tests/looks.rs` replays the selftest under every pack and must stay green.
 - Look-only editor tunables are `.cosmetic()`.
-- Try a pack: `GX_LOOK=<id> cargo run`, `cargo run -- --look ./folder` (live reload), `?look=<id>` on web. Check one: `cargo run --bin look-check -- <folder>`.
+- Try a pack: `GX_LOOK=<id> cargo run`, `cargo run -- --look ./folder` (live reload), `?look=<id>` on web. Check one: `cargo run --features look-check --bin look-check -- <folder>`.
 
 ## Build / CI / release model
 

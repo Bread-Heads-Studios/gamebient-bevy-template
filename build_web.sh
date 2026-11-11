@@ -41,10 +41,12 @@ bundle() {
     # Find the compiled .wasm by glob (cargo names it after the bin target) and
     # force deterministic output names with --out-name. verify.wasm is excluded
     # by name: tools/build_verify.sh builds the replay verifier into the same
-    # directory. Anything else unexpected in there is a hard error.
+    # directory. look-check.wasm too, in case someone built it with
+    # `--features look-check` (the Look Pack CLI; native-only in practice).
+    # Anything else unexpected in there is a hard error.
     mkdir -p "$out"
     local wasm
-    wasm=$(find target/wasm32-unknown-unknown/wasm-release -maxdepth 1 -name '*.wasm' ! -name 'verify.wasm')
+    wasm=$(find target/wasm32-unknown-unknown/wasm-release -maxdepth 1 -name '*.wasm' ! -name 'verify.wasm' ! -name 'look-check.wasm')
     if [ -z "$wasm" ]; then
         echo "ERROR: no game .wasm found in target/wasm32-unknown-unknown/wasm-release/" >&2
         exit 1

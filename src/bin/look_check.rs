@@ -1,10 +1,12 @@
-//! `cargo run --bin look-check -- <pack folder>...`
+//! `cargo run --features look-check --bin look-check -- <pack folder>...`
 //! Checks Look Packs against this game's contract (`ui::theme::LOOK`) and
 //! the pack limits, prints every problem and each pack's content hash.
 //!
-//! `build_web.sh` and the editor and verify builds compile every bin for
-//! wasm32, where there is no filesystem, so the CLI is native-only and the
-//! wasm build gets an empty `main`.
+//! Gated behind the dev feature `look-check` (`required-features` in
+//! `Cargo.toml`), so `build_web.sh`, `tools/build_editor.sh` and `build.sh`
+//! never build it. The CLI is native-only (`pack::read_dir` needs a
+//! filesystem); the empty wasm `main` stays so that a wasm32 build with
+//! every feature on (`--features look-check`) still compiles.
 
 #[cfg(target_arch = "wasm32")]
 fn main() {}

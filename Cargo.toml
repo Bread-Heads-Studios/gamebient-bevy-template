@@ -21,8 +21,12 @@ required-features = ["verify"]
 
 [[bin]]
 # Validates Look Packs against this game's contract (docs/look-packs.md).
+# Gated like `verify`: build_web.sh, tools/build_editor.sh and build.sh run
+# `cargo build` without `--bin`, so an ungated bin is one more wasm in the
+# bundle dir (which those scripts refuse) and one more release link.
 name = "look-check"
 path = "src/bin/look_check.rs"
+required-features = ["look-check"]
 
 [features]
 # Marks a build that captures the window (footage, cover shots): the Linux
@@ -49,6 +53,10 @@ demo = []
 # and runs scenario checks in the browser (src/game/tunables/protocol.rs,
 # checks.rs). tools/build_editor.sh builds it. Never for shipping bundles.
 editor = []
+# The Look Pack validator CLI (src/bin/look_check.rs):
+# `cargo run --features look-check --bin look-check -- <folder>`. Dev-only;
+# never enabled in shipping builds.
+look-check = []
 
 [dependencies]
 # Curated Bevy feature set — drops bevy_gltf, bevy_animation, bevy_gizmos,
