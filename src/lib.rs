@@ -6,4 +6,5 @@ pub mod assets;
 pub mod display;
 pub mod frame;
 pub mod game;
+pub mod look;
 pub mod ui;
