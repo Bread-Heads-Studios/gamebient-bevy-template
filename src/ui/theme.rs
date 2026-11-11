@@ -151,6 +151,8 @@ pub const AUDIO_CUES: &[&str] = &[
     "sfx.screensweep",
     "music.studiologo",
     "music.menu",
+    // Only applies when HowToPlay is entered from a state with a different
+    // cue: Menu and HowToPlay share MENU_CUE, so Menu -> HowToPlay is no change.
     "music.howtoplay",
     "music.playing",
     "music.gameover",
@@ -187,7 +189,7 @@ mod look_contract_tests {
             );
         }
         for (state, _) in MUSIC {
-            let cue = format!("music.{}", format!("{state:?}").to_lowercase());
+            let cue = crate::game::audio::music_key(state);
             assert!(
                 AUDIO_CUES.contains(&cue.as_str()),
                 "{cue} missing from AUDIO_CUES"

@@ -441,6 +441,11 @@ pub fn music_key(state: &GameState) -> String {
     format!("music.{}", format!("{state:?}").to_lowercase())
 }
 
+/// The baked layers to spawn for a cue: none when a pack replaced its track.
+pub fn layers_for(cue: &Cue, pack_override: bool) -> &'static [Source] {
+    if pack_override { &[] } else { cue.layers }
+}
+
 /// Crossfades to the wanted cue on every state change or `CueEvent`.
 pub fn music_director(
     mut commands: Commands,
@@ -502,6 +507,7 @@ pub fn music_director(
         .is_none()
         .then(|| look.as_ref().and_then(|l| l.audio(&music_key(state.get()))))
         .flatten();
+    let pack_track_used = pack_track.is_some();
     let handle =
         pack_track.unwrap_or_else(|| cache.handle(&mut sources, &asset_server, &cue.source));
     commands.spawn((
@@ -523,7 +529,9 @@ pub fn music_director(
             layer: None,
         },
     ));
-    for (i, layer) in cue.layers.iter().enumerate() {
+    // A pack's track replaces the whole cue: the baked layers are in another
+    // key and tempo. A `LayerEvent` then finds no voice, which is harmless.
+    for (i, layer) in layers_for(cue, pack_track_used).iter().enumerate() {
         let handle = cache.handle(&mut sources, &asset_server, layer);
         commands.spawn((
             MusicTrack,
@@ -618,6 +626,13 @@ pub fn export_inventory() -> Vec<(String, AudioSource)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pack_track_drops_the_baked_layers() {
+        assert!(layers_for(&PLAY_CUE, true).is_empty());
+        assert_eq!(layers_for(&PLAY_CUE, false).len(), PLAY_CUE.layers.len());
+        assert!(!PLAY_CUE.layers.is_empty());
+    }
 
     #[test]
     fn music_keys_name_the_state_in_lower_case() {
