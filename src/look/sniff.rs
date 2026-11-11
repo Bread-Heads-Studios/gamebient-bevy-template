@@ -38,8 +38,38 @@ pub fn ogg_vorbis_info(b: &[u8]) -> Option<OggInfo> {
     if rate == 0 || channels == 0 {
         return None;
     }
-    let last = b.windows(4).rposition(|w| w == b"OggS")?;
-    let granule = u64::from_le_bytes(b.get(last + 6..last + 14)?.try_into().ok()?);
+    let serial = b.get(14..18)?;
+    if b[5] & 0x02 == 0 {
+        return None;
+    }
+    // Walk the page chain: contiguous to EOF, one stream, version 0.
+    let mut off = 0usize;
+    let granule = loop {
+        let head = b.get(off..off.checked_add(27)?)?;
+        if &head[..4] != b"OggS" || head[4] != 0 || &head[14..18] != serial {
+            return None;
+        }
+        let segs = usize::from(head[26]);
+        let table = b.get(off + 27..off.checked_add(27 + segs)?)?;
+        let body: usize = table.iter().map(|&n| usize::from(n)).sum();
+        let end = (off + 27 + segs).checked_add(body)?;
+        if end > b.len() {
+            return None;
+        }
+        // End-of-stream belongs on the final page only: a page appended
+        // after a real EOS page is a forgery, however well-formed.
+        let eos = head[5] & 0x04 != 0;
+        if end < b.len() && eos {
+            return None;
+        }
+        if end == b.len() {
+            if !eos {
+                return None;
+            }
+            break u64::from_le_bytes(head[6..14].try_into().ok()?);
+        }
+        off = end;
+    };
     Some(OggInfo {
         channels,
         rate,
@@ -94,6 +124,41 @@ mod tests {
         assert_eq!(png_size(&png(128, 64)), Some((128, 64)));
         assert_eq!(png_size(b"GIF89a.................."), None);
         assert_eq!(png_size(&png(1, 1)[..20]), None, "truncated");
+    }
+
+    #[test]
+    fn ogg_walk_rejects_forged_truncated_and_mismatched_files() {
+        // (a) forged trailing marker after a genuinely long file
+        let mut forged = ogg(1, 44_100, 44_100 * 600);
+        forged.extend_from_slice(b"OggS\x00\x04");
+        forged.extend_from_slice(&100u64.to_le_bytes());
+        forged.extend_from_slice(&[0; 13]);
+        assert!(ogg_vorbis_info(&forged).is_none(), "forged tail");
+        let mut junk = ogg(1, 44_100, 100);
+        junk.push(0);
+        assert!(ogg_vorbis_info(&junk).is_none(), "trailing byte");
+        // (b) truncated mid-page
+        let good = ogg(1, 44_100, 100);
+        for cut in [10, 30, good.len() - 1] {
+            assert!(ogg_vorbis_info(&good[..cut]).is_none(), "cut {cut}");
+        }
+        // (c) serial mismatch on the last page
+        let mut b = ogg(1, 44_100, 100);
+        let last = b.len() - 27;
+        b[last + 14] = 9;
+        assert!(ogg_vorbis_info(&b).is_none(), "serial");
+        // (d) missing EOS on the final page
+        let mut b = ogg(1, 44_100, 100);
+        let last = b.len() - 27;
+        b[last + 5] = 0;
+        assert!(ogg_vorbis_info(&b).is_none(), "no eos");
+        // no BOS on the first page, nonzero version
+        let mut b = ogg(1, 44_100, 100);
+        b[5] = 0;
+        assert!(ogg_vorbis_info(&b).is_none(), "no bos");
+        let mut b = ogg(1, 44_100, 100);
+        b[4] = 1;
+        assert!(ogg_vorbis_info(&b).is_none(), "version");
     }
 
     #[test]

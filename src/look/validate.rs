@@ -95,7 +95,10 @@ pub fn content_hash(files: &Files) -> String {
 
 /// `#rrggbb` or `#rrggbbaa`, nothing looser.
 pub fn parse_colour(s: &str) -> Option<Color> {
-    if !s.starts_with('#') || !(s.len() == 7 || s.len() == 9) {
+    if !s.starts_with('#')
+        || !(s.len() == 7 || s.len() == 9)
+        || !s[1..].bytes().all(|c| c.is_ascii_hexdigit())
+    {
         return None;
     }
     Srgba::hex(&s[1..]).ok().map(Color::from)
@@ -649,6 +652,33 @@ mod tests {
             )
             .ok()
         );
+    }
+
+    #[test]
+    fn a_forged_ogg_tail_fails_the_pack() {
+        let json =
+            r#"{"v":1,"id":"demo","name":"D","kind":"skin","audio":{"sfx.confirm":"ding.ogg"}}"#;
+        let mut forged = ogg(1, 44_100, 44_100 * 600);
+        forged.extend_from_slice(b"OggS\x00\x04");
+        forged.extend_from_slice(&100u64.to_le_bytes());
+        forged.extend_from_slice(&[0; 13]);
+        assert!(!validate(&with(pack(json), "ding.ogg", forged), &TEST, None).ok());
+    }
+
+    #[test]
+    fn parse_colour_is_strictly_hex() {
+        for bad in [
+            "##1234",
+            "##123456",
+            "#+12345",
+            "#+1234567",
+            "#12345",
+            "red",
+        ] {
+            assert!(parse_colour(bad).is_none(), "{bad}");
+        }
+        assert!(parse_colour("#a1b2c3").is_some());
+        assert!(parse_colour("#a1b2c3d4").is_some());
     }
 
     #[test]
