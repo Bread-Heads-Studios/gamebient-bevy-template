@@ -13,6 +13,8 @@
 
 pub mod contract;
 pub mod manifest;
+pub mod sniff;
+pub mod validate;
 
 pub use contract::{Contract, ParamKind, ParamSpec, RecipeSpec, SlotSpec, StringSpec};
 pub use manifest::{EndCard, ImageSlot, LookKind, Manifest, Param, RecipeSlot, Slot};

@@ -2452,6 +2452,7 @@ name = "gamebient-game"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "blake3",
  "gamebient-input",
  "getrandom",
  "rand",

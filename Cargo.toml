@@ -105,6 +105,9 @@ gamebient-input = { git = "https://github.com/Bread-Heads-Studios/gamebient-inpu
 # code until used): the tunables host layer encodes its messages with them.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Look Pack content hash (src/look/validate.rs). Already in Cargo.lock
+# through Bevy's asset processor, so no new download.
+blake3 = "1"
 
 # Native-only Bevy features: linux window backends and gilrs gamepad support.
 # Excluded from the wasm build so they don't add dead code paths.
