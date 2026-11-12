@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use gamebient_game::{assets, display, game, ui};
+use gamebient_game::{assets, display, game, look, ui};
 
 fn main() {
     App::new()
@@ -16,7 +16,7 @@ fn main() {
         .add_plugins((
             display::DisplayPlugin,
             // Look Packs (src/look/): render-side only; never in GamePlugin.
-            gamebient_game::look::LookPlugin {
+            look::LookPlugin {
                 contract: &ui::theme::LOOK,
             },
             game::GamePlugin::default(),
