@@ -247,6 +247,19 @@ Full rules: "Typography and cards" in `docs/conventions.md`.
 - `fit.rs`, `card.rs` and `studio_logo.rs` are copied into games verbatim;
   `fonts.rs`, `theme.rs`, `backdrop.rs` and the screens are the game's own.
 
+## Look Packs
+
+- `src/look/` (copied verbatim into games) loads a **Look Pack**: a flat folder of `look.json` plus `.png` / `.ogg`, which restyles palette, strings, slot recipes or images, and audio cues. Built-in packs live in `assets/looks/<id>/` and are embedded by `build.rs`. Guide: `docs/look-packs.md`.
+- The game's look contract is `theme::LOOK` in `src/ui/theme.rs`: palette roles, string keys with max lengths, slots, recipes, audio cues and fonts. Add a role or key there before a pack can use it.
+- Tag spawned entities with `LookColour::new("role")` / `LookText("key")` instead of reading the pack in spawn code where you can.
+- **Never read `ActiveLook` or `LookAssets` from a sim system or a sim spawn** (`OnEnter(Playing)` included). `LookPlugin` goes in `main.rs`, never `GamePlugin`. Spawn the sim half bare and dress it from a render-side plugin, as `player::spawn_player` / `player::dress_player` (registered by `AssetsPlugin`) do.
+- `tests/looks.rs` (`no_built_in_pack_changes_a_replay`) replays the selftest under every built-in pack and must stay green, but it only catches a sim read whose result differs under some built-in pack's values, never a render-only branch (the verifier has no asset stores). A port adds a built-in pack that sets every palette role, string key and slot the game reads.
+- Packs are checked for limits and headers, not fully decoded (Bevy's Vorbis decoder can panic on a bad body), so take packs only from allowlisted creators until the decode probe lands (step 5).
+- Hot reload updates within half a second, except the menu title (fitted at spawn), which refreshes the next time the menu opens.
+- **Porting:** a game has its own `build.rs`, so copy `embed_looks()` (and its `plain_kind` helper) into it and create `assets/looks/` with at least the `README.md`; without them `look/pack.rs`'s `include!` fails to compile. Every built-in pack is embedded in every bundle (web, Pi, x86), so each one adds its files to the download.
+- Look-only editor tunables are `.cosmetic()`.
+- Try a pack: `GX_LOOK=<id> cargo run`, `cargo run -- --look ./folder` (live reload), `?look=<id>` on web. Check one: `cargo run --features look-check --bin look-check -- <folder>`.
+
 ## Build / CI / release model
 
 - **Scripts:** `build.sh <pi|x86|web>` compiles one target (`web` delegates to

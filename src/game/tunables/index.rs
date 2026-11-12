@@ -222,6 +222,18 @@ pub fn snapshot(world: &World) -> Vec<(u16, Value)> {
         .collect()
 }
 
+/// The start values a run records: every tunable except cosmetic ones
+/// (`Tune::cosmetic`), which must never reach a replay or its hash.
+/// `snapshot` stays the full set (the editor lists cosmetic values too).
+pub fn run_starts(world: &World) -> Vec<(u16, Value)> {
+    let idx = world.resource::<TunableIndex>().clone();
+    idx.entries
+        .iter()
+        .filter(|e| !e.tune.cosmetic)
+        .filter_map(|e| read(world, e).map(|v| (e.id, v)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

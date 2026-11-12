@@ -167,9 +167,11 @@ fn trace_order(players: Query<Entity, With<Player>>, mut trace: ResMut<OrderTrac
     }
 }
 
-/// Mimics a game's `attach_*_visuals`: decorates every sim entity that has
-/// not been decorated yet, from `Update`, with a branch (so more than one
-/// archetype results) and a child (so `Children` lands on the parent).
+/// Mimics a game's `attach_*_visuals` (on the template, `player::dress_player`,
+/// which inserts a mesh, a material and a `LookColour` from `Update`):
+/// decorates every sim entity that has not been decorated yet, with a branch
+/// (so more than one archetype results) and a child (so `Children` lands on
+/// the parent).
 fn decorate_players(mut commands: Commands, new: Query<Entity, (With<Player>, Without<FakeMesh>)>) {
     for (i, e) in new.iter().enumerate() {
         commands.entity(e).insert(FakeMesh);

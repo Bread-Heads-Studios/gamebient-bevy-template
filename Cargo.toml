@@ -19,6 +19,15 @@ name = "verify"
 path = "src/bin/verify.rs"
 required-features = ["verify"]
 
+[[bin]]
+# Validates Look Packs against this game's contract (docs/look-packs.md).
+# Gated like `verify`: build_web.sh, tools/build_editor.sh and build.sh run
+# `cargo build` without `--bin`, so an ungated bin is one more wasm in the
+# bundle dir (which those scripts refuse) and one more release link.
+name = "look-check"
+path = "src/bin/look_check.rs"
+required-features = ["look-check"]
+
 [features]
 # Marks a build that captures the window (footage, cover shots): the Linux
 # window stays the game's own size and the cabinet frame is off unless asked
@@ -44,6 +53,10 @@ demo = []
 # and runs scenario checks in the browser (src/game/tunables/protocol.rs,
 # checks.rs). tools/build_editor.sh builds it. Never for shipping bundles.
 editor = []
+# The Look Pack validator CLI (src/bin/look_check.rs):
+# `cargo run --features look-check --bin look-check -- <folder>`. Dev-only;
+# never enabled in shipping builds.
+look-check = []
 
 [dependencies]
 # Curated Bevy feature set — drops bevy_gltf, bevy_animation, bevy_gizmos,
@@ -105,6 +118,9 @@ gamebient-input = { git = "https://github.com/Bread-Heads-Studios/gamebient-inpu
 # code until used): the tunables host layer encodes its messages with them.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Look Pack content hash (src/look/validate.rs). Already in Cargo.lock
+# through Bevy's asset processor, so no new download.
+blake3 = "1"
 
 # Native-only Bevy features: linux window backends and gilrs gamepad support.
 # Excluded from the wasm build so they don't add dead code paths.

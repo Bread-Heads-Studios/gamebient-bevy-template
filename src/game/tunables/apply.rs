@@ -8,7 +8,7 @@ use crate::game::sim::{Checksum, SimTick};
 use crate::game::states::GameState;
 
 use super::hash::{content, fold_value};
-use super::index::{TunableIndex, snapshot, write};
+use super::index::{TunableIndex, run_starts, write};
 use super::value::Value;
 
 /// Changes waiting for the next tick boundary (host layer, feeder, tests).
@@ -65,12 +65,15 @@ pub fn apply_pending_tunes(world: &mut World) {
             continue;
         }
         if let Some(tick) = tick {
-            fold_value(&mut world.resource_mut::<Checksum>(), id, &value);
-            world.resource_mut::<TuneLog>().changes.push(TuneChange {
-                tick,
-                id,
-                value: value.clone(),
-            });
+            // Cosmetic values change the look only: no checksum, no log.
+            if !entry.tune.cosmetic {
+                fold_value(&mut world.resource_mut::<Checksum>(), id, &value);
+                world.resource_mut::<TuneLog>().changes.push(TuneChange {
+                    tick,
+                    id,
+                    value: value.clone(),
+                });
+            }
         }
         world.write_message(TuneApplied {
             id,
@@ -85,7 +88,7 @@ pub fn apply_pending_tunes(world: &mut World) {
 /// values become the log's `starts`, and their hash is the first thing the
 /// fresh checksum folds.
 pub fn begin_run_tunables(world: &mut World) {
-    let starts = snapshot(world);
+    let starts = run_starts(world);
     let log = TuneLog {
         starts,
         changes: Vec::new(),

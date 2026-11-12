@@ -5,6 +5,7 @@ use crate::game::demo;
 use crate::game::input::GameInput;
 use crate::game::scoring::GameData;
 use crate::game::states::GameState;
+use crate::look::{ActiveLook, LookColour};
 use crate::ui::backdrop::spawn_backdrop;
 use crate::ui::card::{S1, S2, S4, S6, card, card_with, chip_node, intro};
 use crate::ui::demo_end::spawn_demo_tag;
@@ -49,6 +50,9 @@ pub fn best_label(best: u32) -> String {
 /// Spawns the title screen, in the house anatomy: an animated backdrop, the
 /// lockup in the upper ~45%, and the prompt rail on a plate at the bottom.
 ///
+/// The title comes from the active Look Pack and is fitted at spawn, so a
+/// hot-reloaded title shows the next time the menu opens.
+///
 /// TEMPLATE NOTE: artwork variant: if your game has full-bleed title art
 /// (logotype baked in), replace the lockup's text with an `ImageNode` and
 /// preload the handle at Startup so it never pops in:
@@ -60,7 +64,8 @@ pub fn best_label(best: u32) -> String {
 ///     commands.insert_resource(TitleArtwork(assets.load("title.png")));
 /// }
 /// ```
-pub fn spawn_menu(mut commands: Commands, data: Res<GameData>) {
+pub fn spawn_menu(mut commands: Commands, data: Res<GameData>, look: Option<Res<ActiveLook>>) {
+    let title = look.as_deref().map_or(TITLE, |l| l.string("title"));
     let best = best_label(data.high_score);
     commands
         .spawn((
@@ -88,9 +93,10 @@ pub fn spawn_menu(mut commands: Commands, data: Res<GameData>) {
             })
             .with_children(|lockup| {
                 lockup.spawn((
-                    Text::new(TITLE),
-                    DISPLAY.fitted(TITLE, 88.0),
+                    Text::new(title),
+                    DISPLAY.fitted(title, 88.0),
                     TextColor(PAPER),
+                    LookColour::new("paper"),
                     TextShadow {
                         offset: Vec2::new(0.0, 6.0),
                         color: TITLE_SHADOW,

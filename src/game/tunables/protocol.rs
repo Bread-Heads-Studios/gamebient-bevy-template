@@ -170,6 +170,7 @@ pub fn catalog_json(world: &World) -> Json {
                 "step": e.tune.step,
                 "unit": e.tune.unit,
                 "applies": match e.tune.applies { Applies::Tick => "tick", Applies::NextRun => "next_run" },
+                "cosmetic": e.tune.cosmetic,
                 "value": value,
                 "default": e.default.to_json(),
             });
@@ -351,6 +352,7 @@ mod tests {
         let j: Json = serde_json::from_str(&events[0].1).unwrap();
         assert_eq!(j["tunables"][0]["path"], entry.path);
         assert_eq!(j["tunables"][0]["type"], entry.tune.kind.name());
+        assert_eq!(j["tunables"][0]["cosmetic"], entry.tune.cosmetic);
         assert_eq!(j["tunables"][0]["value"], entry.default.to_json());
         assert_eq!(j["tunables"][0]["default"], entry.default.to_json());
         assert_eq!(j["groups"][entry.group]["kind"], group.kind.name());
