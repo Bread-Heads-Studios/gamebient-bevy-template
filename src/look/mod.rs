@@ -25,8 +25,10 @@ pub mod validate;
 use bevy::prelude::*;
 
 pub use apply::{LookAssets, LookChanged, LookColour, LookText};
-pub use contract::{Contract, ParamKind, ParamSpec, RecipeSpec, SlotSpec, StringSpec};
-pub use manifest::{EndCard, ImageSlot, LookKind, Manifest, Param, RecipeSlot, Slot};
+pub use contract::{Contract, ParamKind, ParamSpec, RecipeSpec, ShapeSpec, SlotSpec, StringSpec};
+pub use manifest::{
+    EndCard, ImageSlot, LookKind, Manifest, Param, Prim, Primitive, RecipeSlot, ShapeSlot, Slot,
+};
 pub use runtime::ActiveLook;
 pub use select::Selection;
 pub use validate::{Files, Problem, Report, Severity};

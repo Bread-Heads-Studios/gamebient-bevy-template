@@ -9,7 +9,7 @@
 
 use bevy::prelude::*;
 
-use crate::look::{Contract, ParamKind, ParamSpec, RecipeSpec, SlotSpec, StringSpec};
+use crate::look::{Contract, ParamKind, ParamSpec, RecipeSpec, ShapeSpec, SlotSpec, StringSpec};
 use crate::ui::card::CardStyle;
 use crate::ui::fonts;
 
@@ -142,6 +142,11 @@ pub const SLOTS: &[SlotSpec] = &[SlotSpec {
             },
         }],
     }],
+    shape: Some(ShapeSpec {
+        max_prims: 12,
+        max_vertices: 3000,
+        extent: 1.5,
+    }),
 }];
 
 /// `sfx.<SfxEvent::name>` and `music.<GameState, lower case>`.

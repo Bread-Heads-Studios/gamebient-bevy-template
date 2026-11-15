@@ -1,11 +1,11 @@
-//! `look.json`, schema v1. Pure data: parsing never touches Bevy, and
+//! `look.json`, schema v2 (v1 packs still load). Pure data: parsing never touches Bevy, and
 //! unknown fields are rejected so a typo fails instead of being ignored.
 
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 pub const MANIFEST_FILE: &str = "look.json";
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -53,13 +53,15 @@ pub enum LookKind {
     Genre,
 }
 
-/// What fills a slot: an image (sprite games, logos) or a recipe the game
-/// draws procedurally (most of the fleet: meshes plus materials).
+/// What fills a slot: an image (sprite games, logos), a recipe the game
+/// draws procedurally (most of the fleet: meshes plus materials), or, from
+/// schema v2, a shape: a list of primitives merged into one mesh.
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum Slot {
     Image(ImageSlot),
     Recipe(RecipeSlot),
+    Shape(ShapeSlot),
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -84,6 +86,41 @@ pub struct RecipeSlot {
     pub recipe: String,
     #[serde(default)]
     pub params: BTreeMap<String, Param>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ShapeSlot {
+    pub shape: Vec<Primitive>,
+}
+
+/// One primitive of a shape. `size` arity depends on `prim`; the validator
+/// checks it. `rot` is Euler degrees, XYZ.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Primitive {
+    pub prim: Prim,
+    pub size: Vec<f32>,
+    #[serde(default)]
+    pub at: Option<[f32; 3]>,
+    #[serde(default)]
+    pub rot: Option<[f32; 3]>,
+    #[serde(default)]
+    pub scale: Option<[f32; 3]>,
+    #[serde(default)]
+    pub detail: Option<u32>,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Prim {
+    Sphere,
+    Cuboid,
+    Cylinder,
+    Cone,
+    Torus,
+    Capsule,
+    Quad,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -175,6 +212,43 @@ mod tests {
             parse(br#"{"v":1,"id":"x","name":"X","kind":"skin","protagonist":{"avatar":"later"}}"#)
                 .unwrap();
         assert!(m.protagonist.is_some());
+    }
+
+    #[test]
+    fn slots_resolve_unambiguously_to_image_recipe_or_shape() {
+        let m = parse(
+            br#"{"v":2,"id":"x","name":"X","kind":"skin","slots":{
+                "a":{"image":"a.png"},
+                "b":{"recipe":"cuboid"},
+                "c":{"shape":[{"prim":"capsule","size":[0.1,0.4],"at":[0,1,0],"rot":[0,90,0],"scale":[1,2,1],"detail":6},{"prim":"quad","size":[1,1]}]},
+                "d":{"shape":[]}
+            }}"#,
+        )
+        .unwrap();
+        assert!(matches!(m.slots["a"], Slot::Image(_)));
+        assert!(matches!(m.slots["b"], Slot::Recipe(_)));
+        let Slot::Shape(c) = &m.slots["c"] else {
+            panic!("c is a shape")
+        };
+        assert_eq!(c.shape[0].prim, Prim::Capsule);
+        assert_eq!(c.shape[0].size, vec![0.1, 0.4]);
+        assert_eq!(c.shape[0].at, Some([0.0, 1.0, 0.0]));
+        assert_eq!(c.shape[0].detail, Some(6));
+        assert_eq!(c.shape[1].prim, Prim::Quad);
+        assert_eq!(c.shape[1].at, None);
+        assert!(matches!(&m.slots["d"], Slot::Shape(s) if s.shape.is_empty()));
+    }
+
+    #[test]
+    fn shape_structs_reject_unknown_fields_and_kinds() {
+        let slot = |body: &str| {
+            format!(r#"{{"v":2,"id":"x","name":"X","kind":"skin","slots":{{"a":{body}}}}}"#)
+        };
+        assert!(
+            parse(slot(r#"{"shape":[{"prim":"sphere","size":[1],"hue":1}]}"#).as_bytes()).is_err()
+        );
+        assert!(parse(slot(r#"{"shape":[{"prim":"cube","size":[1]}]}"#).as_bytes()).is_err());
+        assert!(parse(slot(r#"{"shape":[],"image":"a.png"}"#).as_bytes()).is_err());
     }
 
     #[test]

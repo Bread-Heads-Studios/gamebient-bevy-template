@@ -286,13 +286,12 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
             };
         }
     };
-    if m.v != SCHEMA_VERSION {
+    if m.v == 0 {
+        c.error("v", "unknown schema version (0)");
+    } else if m.v > SCHEMA_VERSION {
         c.error(
             "v",
-            format!(
-                "this game reads schema {SCHEMA_VERSION}, the pack is {}",
-                m.v
-            ),
+            format!("made for a newer version of this game (v{})", m.v),
         );
     }
     if !is_id(&m.id) {
@@ -355,6 +354,15 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
                 if !(i.fps.is_finite() && (0.0..=limits::FPS_MAX).contains(&i.fps)) {
                     c.error(at.as_str(), format!("fps is 0..={}", limits::FPS_MAX));
                 }
+            }
+            Slot::Shape(_) => {
+                if m.v < 2 {
+                    c.error(at.as_str(), r#"shape slots need "v": 2"#);
+                }
+                if spec.shape.is_none() {
+                    c.error(at.as_str(), "this slot does not take a shape");
+                }
+                // Contents are only parse-checked here; numeric rules come with shape.rs.
             }
             Slot::Recipe(r) => {
                 let Some(recipe) = spec.recipe(&r.recipe) else {
@@ -466,7 +474,7 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
 
 #[cfg(test)]
 mod tests {
-    use super::super::contract::{ParamSpec, RecipeSpec, SlotSpec, StringSpec};
+    use super::super::contract::{ParamSpec, RecipeSpec, ShapeSpec, SlotSpec, StringSpec};
     use super::super::sniff::fixtures::{ogg, png};
     use super::*;
 
@@ -480,26 +488,39 @@ mod tests {
             default: "TAKE FIVE",
             max_chars: 12,
         }],
-        slots: &[SlotSpec {
-            name: "player",
-            image: true,
-            recipes: &[RecipeSpec {
-                name: "cuboid",
-                params: &[
-                    ParamSpec {
-                        name: "size",
-                        kind: ParamKind::Number {
-                            min: 0.25,
-                            max: 3.0,
+        slots: &[
+            SlotSpec {
+                name: "prop",
+                image: false,
+                recipes: &[],
+                shape: None,
+            },
+            SlotSpec {
+                name: "player",
+                image: true,
+                shape: Some(ShapeSpec {
+                    max_prims: 12,
+                    max_vertices: 3000,
+                    extent: 1.5,
+                }),
+                recipes: &[RecipeSpec {
+                    name: "cuboid",
+                    params: &[
+                        ParamSpec {
+                            name: "size",
+                            kind: ParamKind::Number {
+                                min: 0.25,
+                                max: 3.0,
+                            },
                         },
-                    },
-                    ParamSpec {
-                        name: "tint",
-                        kind: ParamKind::Colour,
-                    },
-                ],
-            }],
-        }],
+                        ParamSpec {
+                            name: "tint",
+                            kind: ParamKind::Colour,
+                        },
+                    ],
+                }],
+            },
+        ],
         audio: &["sfx.confirm", "music.menu"],
         fonts: &["Inter SemiBold"],
     };
@@ -534,12 +555,102 @@ mod tests {
         assert!(!validate(&pack("{"), &TEST, None).ok());
         assert!(
             !validate(
-                &pack(r#"{"v":2,"id":"demo","name":"D","kind":"palette"}"#),
+                &pack(r#"{"v":3,"id":"demo","name":"D","kind":"palette"}"#),
                 &TEST,
                 None
             )
             .ok()
         );
+    }
+
+    const SHAPE: &str = r#""shape":[{"prim":"sphere","size":[0.3]},{"prim":"cone","size":[0.1,0.3],"at":[0,0.4,0],"rot":[0,0,15],"scale":[1,1,1],"detail":8}]"#;
+
+    fn shape_pack(v: u32, slot: &str, body: &str) -> Files {
+        pack(&format!(
+            r#"{{"v":{v},"id":"demo","name":"D","kind":"skin","slots":{{"{slot}":{{{body}}}}}}}"#
+        ))
+    }
+
+    #[test]
+    fn a_v1_pack_still_validates_and_v2_is_accepted() {
+        assert!(validate(&pack(MIN), &TEST, Some("demo")).ok());
+        let v2 = MIN.replace("\"v\":1", "\"v\":2");
+        assert!(validate(&pack(&v2), &TEST, Some("demo")).ok());
+    }
+
+    #[test]
+    fn a_newer_schema_is_refused_cleanly() {
+        let r = validate(&pack(&MIN.replace("\"v\":1", "\"v\":3")), &TEST, None);
+        assert!(!r.ok());
+        assert!(
+            errors(&r)
+                .iter()
+                .any(|e| e.contains("made for a newer version of this game (v3)")),
+            "{:?}",
+            errors(&r)
+        );
+        let r = validate(&pack(&MIN.replace("\"v\":1", "\"v\":99")), &TEST, None);
+        assert!(errors(&r).iter().any(|e| e.contains("(v99)")));
+    }
+
+    #[test]
+    fn schema_zero_is_unknown() {
+        let r = validate(&pack(&MIN.replace("\"v\":1", "\"v\":0")), &TEST, None);
+        assert!(!r.ok());
+        assert!(
+            errors(&r)
+                .iter()
+                .any(|e| e.contains("unknown schema version"))
+        );
+    }
+
+    #[test]
+    fn a_v2_pack_with_a_shape_validates() {
+        let r = validate(&shape_pack(2, "player", SHAPE), &TEST, Some("demo"));
+        assert!(r.ok(), "{:?}", errors(&r));
+        let m = r.manifest.unwrap();
+        let Slot::Shape(s) = &m.slots["player"] else {
+            panic!("a shape slot")
+        };
+        assert_eq!(s.shape.len(), 2);
+    }
+
+    #[test]
+    fn a_shape_needs_schema_2() {
+        let r = validate(&shape_pack(1, "player", SHAPE), &TEST, None);
+        assert!(
+            errors(&r)
+                .iter()
+                .any(|e| e.contains(r#"shape slots need "v": 2"#)),
+            "{:?}",
+            errors(&r)
+        );
+    }
+
+    #[test]
+    fn a_shape_in_a_slot_that_takes_none_is_an_error() {
+        let r = validate(&shape_pack(2, "prop", SHAPE), &TEST, None);
+        assert!(
+            errors(&r)
+                .iter()
+                .any(|e| e.contains("this slot does not take a shape")),
+            "{:?}",
+            errors(&r)
+        );
+    }
+
+    #[test]
+    fn unknown_primitive_fields_and_kinds_are_refused() {
+        let bad = r#""shape":[{"prim":"sphere","size":[1],"colour":"red"}]"#;
+        assert!(!validate(&shape_pack(2, "player", bad), &TEST, None).ok());
+        let bad = r#""shape":[{"prim":"pyramid","size":[1]}]"#;
+        assert!(!validate(&shape_pack(2, "player", bad), &TEST, None).ok());
+    }
+
+    #[test]
+    fn an_empty_shape_is_valid() {
+        let r = validate(&shape_pack(2, "player", r#""shape":[]"#), &TEST, None);
+        assert!(r.ok(), "{:?}", errors(&r));
     }
 
     #[test]

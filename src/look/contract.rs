@@ -31,6 +31,17 @@ pub struct SlotSpec {
     pub image: bool,
     /// Recipes the game knows how to draw for this slot.
     pub recipes: &'static [RecipeSpec],
+    /// Budget for a shape (schema v2); `None` = the slot takes no shape.
+    pub shape: Option<ShapeSpec>,
+}
+
+/// Limits a shape in one slot must stay inside.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShapeSpec {
+    pub max_prims: usize,
+    pub max_vertices: usize,
+    /// Half-width of the cube the shape lives in; sizes and `at` are bounded by it.
+    pub extent: f32,
 }
 
 #[derive(Debug)]
@@ -101,6 +112,7 @@ mod tests {
                 name: "cuboid",
                 params: &[],
             }],
+            shape: None,
         }],
         audio: &["sfx.confirm"],
         fonts: &["Inter SemiBold"],
