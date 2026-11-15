@@ -1,6 +1,6 @@
 //! Look Packs: a game's look as data. A pack is a flat folder holding
-//! `look.json` (schema v1, `manifest.rs`) plus `.png` / `.ogg` files. It
-//! restyles palette roles, strings, slot recipes, images and audio cues
+//! `look.json` (schema v2, `manifest.rs`) plus `.png` / `.ogg` files. It
+//! restyles palette roles, strings, slot recipes, shapes, images and audio cues
 //! inside the limits the game's contract (`ui::theme::LOOK`) allows.
 //!
 //! **A pack never touches the sim.** `LookPlugin` is added in `main.rs`,
@@ -20,6 +20,7 @@ pub mod reload;
 pub mod runtime;
 pub mod select;
 pub mod shape;
+pub mod shapes_apply;
 pub mod sniff;
 pub mod validate;
 
@@ -33,6 +34,7 @@ pub use manifest::{
 pub use runtime::ActiveLook;
 pub use select::Selection;
 pub use shape::{DEFAULT_DETAIL, DETAIL_RANGE, build_mesh, primitive_transform, vertex_count};
+pub use shapes_apply::ShapeTargets;
 pub use validate::{Files, Problem, Report, Severity};
 
 /// Retint and retext, in `PostUpdate` so a tag spawned this frame is
@@ -60,6 +62,7 @@ impl Plugin for LookPlugin {
         app.insert_resource(selection)
             .insert_resource(look)
             .init_resource::<LookAssets>()
+            .init_resource::<ShapeTargets>()
             .add_message::<LookChanged>()
             .add_systems(Startup, apply::load_assets)
             // Retexting must land before text layout (UI content measure and
@@ -81,6 +84,14 @@ impl Plugin for LookPlugin {
                     apply::retext,
                 )
                     .in_set(LookSet),
+            )
+            // Before asset events, so a reshaped mesh's `Aabb` is recomputed
+            // on the frame it changes.
+            .add_systems(
+                PostUpdate,
+                shapes_apply::apply_shapes
+                    .in_set(LookSet)
+                    .before(bevy::asset::AssetEventSystems),
             );
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, reload::hot_reload);

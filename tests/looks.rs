@@ -9,7 +9,9 @@ use gamebient_game::ui::theme;
 fn every_built_in_pack_validates_against_the_contract() {
     let ids: Vec<_> = look::pack::embedded_ids().collect();
     assert!(
-        ids.contains(&"night-shift") && ids.contains(&"sample-sponsor"),
+        ids.contains(&"night-shift")
+            && ids.contains(&"sample-sponsor")
+            && ids.contains(&"sample-shapes"),
         "build.rs did not embed assets/looks: {ids:?}"
     );
     for id in ids {
@@ -404,5 +406,166 @@ mod read_dir {
         let files = read_dir(&d.0).unwrap();
         let names: Vec<_> = files.keys().cloned().collect();
         assert_eq!(names, vec!["look.json".to_string()]);
+    }
+}
+
+mod shapes {
+    use super::*;
+    use bevy::mesh::{Indices, VertexAttributeValues};
+    use gamebient_game::look::{Files, ShapeTargets, Slot, build_mesh, vertex_count};
+
+    type MeshData = (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<u32>);
+
+    /// Positions, normals, UVs and indices: what "bit-identical" compares.
+    fn data(m: &Mesh) -> MeshData {
+        let f3 = |id| match m.attribute(id) {
+            Some(VertexAttributeValues::Float32x3(v)) => v.clone(),
+            other => panic!("{other:?}"),
+        };
+        let uv = match m.attribute(Mesh::ATTRIBUTE_UV_0) {
+            Some(VertexAttributeValues::Float32x2(v)) => v.clone(),
+            other => panic!("{other:?}"),
+        };
+        let idx = match m.indices() {
+            Some(Indices::U32(v)) => v.clone(),
+            Some(Indices::U16(v)) => v.iter().map(|&i| u32::from(i)).collect(),
+            None => Vec::new(),
+        };
+        (
+            f3(Mesh::ATTRIBUTE_POSITION),
+            f3(Mesh::ATTRIBUTE_NORMAL),
+            uv,
+            idx,
+        )
+    }
+
+    fn mesh_of(app: &App, h: &Handle<Mesh>) -> MeshData {
+        data(app.world().resource::<Assets<Mesh>>().get(h).unwrap())
+    }
+
+    fn pack_shape(look: &ActiveLook) -> Vec<gamebient_game::look::Primitive> {
+        match look.slot("player") {
+            Some(Slot::Shape(s)) => s.shape.clone(),
+            other => panic!("no player shape: {other:?}"),
+        }
+    }
+
+    /// An app with a mesh store, a registered cuboid and an unregistered one.
+    fn setup(selection: Selection) -> (App, Handle<Mesh>, Handle<Mesh>) {
+        let mut app = app_with(selection);
+        app.init_resource::<Assets<Mesh>>();
+        let mut meshes = app.world_mut().resource_mut::<Assets<Mesh>>();
+        let target = meshes.add(Cuboid::new(1.0, 2.0, 3.0));
+        let other = meshes.add(Cuboid::new(1.0, 2.0, 3.0));
+        app.world_mut()
+            .resource_mut::<ShapeTargets>()
+            .register("player", target.clone());
+        (app, target, other)
+    }
+
+    fn cuboid() -> MeshData {
+        data(&Mesh::from(Cuboid::new(1.0, 2.0, 3.0)))
+    }
+
+    fn shape_look(json: &str) -> ActiveLook {
+        let mut files = Files::new();
+        files.insert("look.json".into(), json.as_bytes().to_vec());
+        ActiveLook::from_files(&theme::LOOK, files, Selection::Default, None)
+            .unwrap_or_else(|r| panic!("{:#?}", r.problems))
+    }
+
+    #[test]
+    fn registering_the_same_handle_twice_is_a_no_op() {
+        let mut t = ShapeTargets::default();
+        let h = Handle::<Mesh>::default();
+        t.register("player", h.clone());
+        t.register("player", h);
+        assert_eq!(t.len(), 1);
+    }
+
+    #[test]
+    fn a_registered_mesh_is_bit_identical_under_the_default_look() {
+        let (mut app, target, other) = setup(Selection::Default);
+        app.update();
+        app.update();
+        assert_eq!(mesh_of(&app, &target), cuboid());
+        assert_eq!(mesh_of(&app, &other), cuboid());
+    }
+
+    #[test]
+    fn a_pack_shape_replaces_only_registered_meshes() {
+        let (mut app, target, other) = setup(Selection::Embedded("sample-shapes".into()));
+        app.update();
+        let shape = pack_shape(app.world().resource::<ActiveLook>());
+        assert_eq!(mesh_of(&app, &target), data(&build_mesh(&shape)));
+        assert_eq!(mesh_of(&app, &other), cuboid(), "unregistered is untouched");
+
+        // Switching back to the default restores the baseline exactly.
+        app.insert_resource(ActiveLook::resolve(&theme::LOOK, Selection::Default));
+        app.world_mut().write_message(look::LookChanged);
+        app.update();
+        assert_eq!(mesh_of(&app, &target), cuboid());
+        assert_eq!(mesh_of(&app, &other), cuboid());
+    }
+
+    #[test]
+    fn a_hot_reload_to_a_different_shape_applies_it() {
+        let (mut app, target, _) = setup(Selection::Embedded("sample-shapes".into()));
+        app.update();
+        let sphere = shape_look(
+            r#"{"v":2,"id":"ball","name":"Ball","kind":"skin","slots":{"player":{"shape":[{"prim":"sphere","size":[0.5]}]}}}"#,
+        );
+        let shape = pack_shape(&sphere);
+        app.insert_resource(sphere);
+        app.world_mut().write_message(look::LookChanged);
+        app.update();
+        assert_eq!(mesh_of(&app, &target), data(&build_mesh(&shape)));
+    }
+
+    #[test]
+    fn a_target_registered_later_is_baselined_then_shaped() {
+        let (mut app, _, _) = setup(Selection::Embedded("sample-shapes".into()));
+        app.update();
+        let late = app
+            .world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .add(Cuboid::new(1.0, 2.0, 3.0));
+        app.world_mut()
+            .resource_mut::<ShapeTargets>()
+            .register("player", late.clone());
+        app.update();
+        let shape = pack_shape(app.world().resource::<ActiveLook>());
+        assert_eq!(mesh_of(&app, &late), data(&build_mesh(&shape)));
+        app.insert_resource(ActiveLook::resolve(&theme::LOOK, Selection::Default));
+        app.world_mut().write_message(look::LookChanged);
+        app.update();
+        assert_eq!(mesh_of(&app, &late), cuboid());
+    }
+
+    #[test]
+    fn a_removed_mesh_drops_its_target() {
+        let (mut app, target, _) = setup(Selection::Embedded("sample-shapes".into()));
+        app.update();
+        app.world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .remove(&target);
+        app.world_mut().write_message(look::LookChanged);
+        app.update();
+        assert!(app.world().resource::<ShapeTargets>().is_empty());
+    }
+
+    #[test]
+    fn sample_shapes_dresses_the_player_with_its_shape() {
+        let mut app = app_with(Selection::Embedded("sample-shapes".into()));
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        app.add_plugins(gamebient_game::assets::AssetsPlugin);
+        let player = app.world_mut().spawn((Player, Transform::default())).id();
+        app.update();
+        let shape = pack_shape(app.world().resource::<ActiveLook>());
+        let h = app.world().get::<Mesh3d>(player).unwrap().0.clone();
+        let mesh = app.world().resource::<Assets<Mesh>>().get(&h).unwrap();
+        assert_eq!(mesh.count_vertices(), vertex_count(&shape));
+        assert_eq!(data(mesh), data(&build_mesh(&shape)));
     }
 }
