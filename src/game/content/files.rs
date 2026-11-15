@@ -32,6 +32,14 @@ mod tests {
         assert_eq!(fnv1a64(b"a"), 0xaf63dc4c8601ec8c);
     }
 
+    /// Shared with the editor (`src/content/hash.test.ts`): the same UTF-8
+    /// text must hash the same on both sides.
+    #[test]
+    fn shared_vector_matches_the_editor() {
+        const SHARED_TEXT: &str = "{\n  \"v\": 1,\n  \"values\": {\n    \"player.speed\": 650,\n    \"title\": \"Café ☕\"\n  }\n}\n";
+        assert_eq!(hex(fnv1a64(SHARED_TEXT.as_bytes())), "f023d7fb6405f538");
+    }
+
     #[test]
     fn hex_is_sixteen_lowercase_digits() {
         assert_eq!(hex(0xAB), "00000000000000ab");
