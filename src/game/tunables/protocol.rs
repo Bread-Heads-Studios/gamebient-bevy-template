@@ -191,6 +191,10 @@ pub fn catalog_json(world: &World) -> Json {
         "tunables": tunables,
         "checks": checks.iter().map(|c| json!({ "name": c.name, "title": c.title })).collect::<Vec<_>>(),
         "sounds": info.sounds,
+        "content_warnings": world
+            .get_resource::<crate::game::content::saved::ContentWarnings>()
+            .map(|w| w.0.clone())
+            .unwrap_or_default(),
     })
 }
 
@@ -360,6 +364,7 @@ mod tests {
         assert_eq!(j["tick"], 0);
         assert!(j["state"].is_string());
         assert!(j["checks"].is_array() && j["sounds"].is_array());
+        assert_eq!(j["content_warnings"], serde_json::json!([]));
 
         let path = entry.path.clone();
         send(
@@ -399,6 +404,18 @@ mod tests {
         assert_eq!(j["value"], next.to_json());
         assert_eq!(j["applied"], "now");
         assert_eq!(read(app.world(), &entry), Some(next));
+    }
+
+    #[test]
+    fn catalog_lists_content_warnings() {
+        let mut app = build_headless_app();
+        app.update();
+        app.world_mut()
+            .resource_mut::<crate::game::content::saved::ContentWarnings>()
+            .0
+            .push("careful".to_string());
+        let j = catalog_json(app.world());
+        assert_eq!(j["content_warnings"], serde_json::json!(["careful"]));
     }
 
     #[test]

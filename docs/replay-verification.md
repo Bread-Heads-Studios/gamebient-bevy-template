@@ -43,6 +43,12 @@ and feeds each change on its tick, and `content` names which game was
 played. A `GXR1` file no longer decodes; every build verifies only replays
 recorded by the same build id, so no mixed-format case exists.
 
+Saved values (`content/tunables.json`, `src/game/content/saved.rs`) are
+start values: `ContentPlugin` writes them over the Rust defaults when it is
+built (before the first update) in both the windowed and the headless app, so they are in every run's `starts` and in
+a release's default content hash. The verifier stages the replay's own
+`starts` on top, as before.
+
 `build` is `GX_BUILD_ID` (crate version + short git SHA, baked in by
 `build.rs`): the server uses it to pick which release's verifier module to
 load. Consecutive ticks with identical `(held, latched, ax, ay)` collapse

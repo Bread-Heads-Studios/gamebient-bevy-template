@@ -9,6 +9,7 @@ pub mod files;
 pub mod kit;
 pub mod level;
 pub mod model;
+pub mod saved;
 
 use bevy::prelude::*;
 
@@ -24,6 +25,7 @@ pub struct ContentPlugin;
 impl Plugin for ContentPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Kinds>()
+            .init_resource::<saved::ContentWarnings>()
             .insert_resource(LevelSource::Content)
             .insert_resource(Level(LevelFile {
                 v: 1,
@@ -31,6 +33,12 @@ impl Plugin for ContentPlugin {
             }))
             .insert_resource(LevelHash(0))
             .add_systems(Startup, kit::setup_thing_art);
+        // Saved tunables are start values: applied here, at plugin build,
+        // so they are in place before the first `Update` and before any
+        // state transition can enter `Playing` (a `Startup` system is not
+        // early enough: the first `StateTransition` runs before it). The
+        // tunables are registered by now. Windowed and headless alike.
+        saved::apply_embedded_saved(app.world_mut());
         if let Some(bytes) = files::embedded("level.json")
             && let Err(e) = level::set_level(app.world_mut(), bytes)
         {
