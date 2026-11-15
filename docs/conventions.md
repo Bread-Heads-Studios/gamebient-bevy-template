@@ -192,6 +192,7 @@ The short side is always 720, and `cargo test` fails on any other size.
   A system that takes `Res<GameViewport>` carries the marker on that
   parameter's line as well. The marker records a reviewed exception for
   presentation code; it is never the fix for a `SimSet` system.
+- **Sprites live on children.** A kind's picture or box is a child entity of its Thing, so the Thing's archetype is the same with or without art; `on_spawn` never branches on `ThingArt`. See `docs/content-kit.md`.
 - **Capture builds stay windowed.** On Linux the window is fullscreen
   unless the build has the `capture` cargo feature (`autopilot` implies it,
   and `record` implies `autopilot`), so screenshots are the game's own size.

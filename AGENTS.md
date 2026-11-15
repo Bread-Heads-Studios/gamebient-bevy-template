@@ -218,6 +218,17 @@ Production checks after a release:
   lands on the verified leaderboard.
 - `/` plays and stops at the cut with the card.
 
+## Content kit
+
+Level layout, saved tunable values, sprites and audio live as files in
+`content/` (embedded at build, replaceable live by the editor). Full guide:
+`docs/content-kit.md`. An agent asked to move, add or remove Things edits
+`content/level.json`; asked to change how a kind behaves, edits Rust. A new
+kind goes through `thing_kind` in `kinds_registration`, above `ContentPlugin`;
+its `on_spawn` must not depend on art existing. The level and saved tunables
+are run content (in the replay hash); sprites and audio are not. The selftest
+and checks use `test_level()` and Rust-default tunables.
+
 ## Typography and cards
 
 Full rules: "Typography and cards" in `docs/conventions.md`.

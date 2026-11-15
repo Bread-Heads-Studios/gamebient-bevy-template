@@ -6,7 +6,7 @@
 //! tick_hz  u16
 //! seed     [u8; 32]
 //! origin   u8                        0 host, 1 local
-//! content  u64                       hash of the tune log (start values + changes)
+//! content  u64                       hash of the level, then the tune log (start values + changes)
 //! ticks    u32                       total sim ticks
 //! score    u64                       claimed
 //! checksum u64                       claimed
@@ -17,7 +17,10 @@
 //!
 //! `starts` and `tunes` are the game's tunables (`game::tunables`): the
 //! verifier applies the start values before the run and feeds each change
-//! on its tick, and `content` says which game was played. A leaderboard
+//! on its tick, and `content` says which game was played: it folds in the
+//! level hash too (`replay::level_source_for` picks the content level or the
+//! selftest's `LevelSource::Test`; the selftest and checks start from Rust
+//! default tunables). A leaderboard
 //! accepts a run only when `content` equals the release's default hash.
 
 pub mod feeder;

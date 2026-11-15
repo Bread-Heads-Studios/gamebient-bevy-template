@@ -28,7 +28,7 @@ build    u8 len + UTF-8            GX_BUILD_ID of the game that recorded it
 tick_hz  u16
 seed     [u8; 32]
 origin   u8                        0 host, 1 local
-content  u64                       hash of the tune log (start values + mid-run changes)
+content  u64                       hash of the level, then the tune log (start values + mid-run changes)
 ticks    u32                       total sim ticks
 score    u64                       claimed
 checksum u64                       claimed
@@ -40,7 +40,13 @@ runs     u32 count, then [held u16, latched u16, ax i8, ay i8, count u16]
 `starts` and `tunes` are the game's **tunables** (`src/game/tunables/`,
 determinism rule 11): the verifier applies the start values before the run
 and feeds each change on its tick, and `content` names which game was
-played. A `GXR1` file no longer decodes; every build verifies only replays
+played: it folds in the level hash (`content/level.json`'s bytes, first) as
+well as the tunable starts and changes. The verifier picks the level with
+`replay::level_source_for`: the game's content level, or the built-in
+`test_level()` (`LevelSource::Test`) when the replay's `content` matches the
+test level and not the content level. The selftest and the named checks
+reset tunables to the Rust defaults and use `LevelSource::Test`, so editing
+`content/` never invalidates the fixtures. See `docs/content-kit.md`. A `GXR1` file no longer decodes; every build verifies only replays
 recorded by the same build id, so no mixed-format case exists.
 
 Saved values (`content/tunables.json`, `src/game/content/saved.rs`) are
@@ -365,7 +371,7 @@ review.
     tunable into the log's `starts` and folds their content hash into the
     fresh checksum. The verifier stages `starts` before the run and feeds
     `tunes` on their ticks, and `matches` requires the re-simulated
-    `content` to equal the header's, so a replay recorded under one set of
+    `content` (level hash, then starts and changes) to equal the header's, so a replay recorded under one set of
     values cannot verify against another, and a header stripped of its
     changes fails too. The registration order is the index: never reorder
     `tunables::register` calls between releases. A leaderboard accepts a
