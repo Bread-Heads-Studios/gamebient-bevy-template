@@ -16,7 +16,7 @@ allowlisted creators.
 
 ```
 assets/looks/<id>/
-  look.json         required, schema v1
+  look.json         required, schema v1 or v2
   *.png  *.ogg      optional, referenced from look.json
 ```
 
@@ -38,7 +38,7 @@ skipped there too: `build.rs` warns and leaves them out.
 | Web | `…/?look=night-shift` (built-in packs only) |
 | Check | `cargo run --features look-check --bin look-check -- ./my-packs/acme` |
 
-## look.json (schema v1)
+## look.json (schema v1 and v2)
 
 ```json
 {
@@ -59,16 +59,158 @@ skipped there too: `build.rs` warns and leaves them out.
 
 | Field | Meaning |
 |---|---|
-| `v` | Always `1` for now. |
+| `v` | `1` or `2`. Use `2` only if the pack has a shape slot; see "Versions". |
 | `id`, `name`, `creator` | Identity. `name` ≤ 32 chars, `creator` ≤ 48. |
 | `kind` | `palette`, `skin`, `sponsor` or `genre`. A label only; any kind may use any field. |
 | `palette` | Role → `#rrggbb` / `#rrggbbaa`. Roles are the game's (see its contract). Unset roles keep the game's colour. |
 | `strings` | Key → printable ASCII, no longer than the game allows for that key. |
-| `slots` | Slot → `{ "image": "x.png", "frames": 1, "fps": 0 }` or `{ "recipe": "<name>", "params": { … } }`. The game lists which slots take images and which recipes (with which params) it can draw. |
+| `slots` | Slot → `{ "image": "x.png", "frames": 1, "fps": 0 }`, `{ "recipe": "<name>", "params": { … } }` or (v2) `{ "shape": [ … ] }`. The game lists which slots take images, which recipes (with which params) it can draw, and which take a shape. A slot has exactly one of the three forms. |
 | `audio` | Cue → `.ogg`. Cues are `sfx.<sound>` and `music.<screen>`; the game lists them. A `music.<state>` track replaces that screen's music, including the template's baked layers. `music.howtoplay` only applies when HowToPlay has its own cue, because the template's Menu and HowToPlay share one. |
 | `fonts` | `display` / `body` → one of the faces the game already ships. |
 | `frame`, `end_card` | Cabinet marquee/bezel art and a sponsor end card. Checked now; shown by games from a later release. |
 | `protagonist` | Reserved for bring-your-own characters. Ignored, with a warning. |
+
+## Versions
+
+`SCHEMA_VERSION` is 2. The rules, enforced by the validator:
+
+- **v1 packs still load**, unchanged.
+- **A newer `v` is refused**: `v: 3` on this game fails with `made for a newer
+  version of this game (v3)`, and `v: 0` with `unknown schema version (0)`.
+  A refused pack resolves to the game's own look, like any invalid pack.
+- **Fields only arrive with a version bump.** A `shape` slot in a `v: 1` pack
+  is an error (`shape slots need "v": 2`). Every manifest struct denies
+  unknown fields, so a field this game does not know fails instead of being
+  ignored.
+
+## Shapes (schema v2)
+
+A shape slot describes a mesh as data: a list of primitives, merged into one
+mesh by the game. A slot takes a shape only if the game's contract gives it a
+budget (`shape: Some(ShapeSpec { … })`); otherwise it fails with `this slot
+does not take a shape`. The template's `player` slot does.
+
+```json
+"slots": { "player": { "shape": [
+  { "prim": "capsule", "size": [0.3, 0.6] },
+  { "prim": "cone", "size": [0.3, 0.4], "at": [0, 0.75, 0] }
+] } }
+```
+
+### Primitives
+
+| `prim` | `size` | Notes |
+|---|---|---|
+| `sphere` | `[radius]` | |
+| `cuboid` | `[x, y, z]` | Full edge lengths. Ignores `detail`. |
+| `cylinder` | `[radius, height]` | |
+| `cone` | `[radius, height]` | The tip keeps a zero normal; fine for `StandardMaterial`. |
+| `torus` | `[ring_radius, tube_radius]` | |
+| `capsule` | `[radius, length]` | `length` is the straight section between the hemispheres. |
+| `quad` | `[x, z]` | A flat plane in XZ, two-sided (both faces generated, normals ±Y). Ignores `detail`. |
+
+`size` must have exactly the listed number of components. Optional fields on
+every primitive:
+
+| Field | Meaning | Default |
+|---|---|---|
+| `at` | `[x, y, z]` position | `[0, 0, 0]` |
+| `rot` | `[x, y, z]` degrees, applied in XYZ Euler order | `[0, 0, 0]` |
+| `scale` | `[x, y, z]` | `[1, 1, 1]` |
+| `detail` | Segments around the primitive's axis, integer `3..=32`. Spheres use `detail/2` rings (at least 2); a torus uses `detail` for the ring and `detail/2` (at least 3) for the tube. | `12` |
+
+Each primitive is scaled, then rotated, then moved. Normals follow the
+transform (inverse-transpose, renormalised), so a stretched `scale` still
+shades correctly. `"shape": []` is valid: an empty mesh that draws nothing.
+
+### Budgets
+
+The game sets three numbers per slot (`ShapeSpec` in `src/ui/theme.rs`). The
+template's `player` slot: `max_prims: 12`, `max_vertices: 3000`, `extent: 1.5`.
+
+| Budget | Meaning | Error looks like |
+|---|---|---|
+| `max_prims` | Primitives in the list. | `slots.player.shape: 13 primitives; at most 12` |
+| `max_vertices` | Total vertices of the merged mesh. | `slots.player.shape: 3366 vertices; budget 3000` |
+| `extent` | Half-width of the cube the shape lives in. Each `size` component is `0.001..=extent`, each `at` component `-extent..=extent`. | `slots.player.shape[1]: size components are 0.001..=1.5` |
+
+Independent of the game: each `scale` component is `0.01..=4`, every number
+must be finite, and `detail` is `3..=32`. Errors name the slot and the
+primitive index (`slots.player.shape[2]`).
+
+Vertices per primitive, with `d` = `detail`:
+
+| `prim` | Vertices |
+|---|---|
+| `sphere` | `(d + 1) * (max(d / 2, 2) + 1)` |
+| `cuboid` | `24` |
+| `cylinder` | `4d + 2` |
+| `cone` | `2d + 1` |
+| `torus` | `(d + 1) * (max(d / 2, 3) + 1)` |
+| `capsule` | `2d + (d + 1) * 2h`, `h = max(d / 4, 2)` |
+| `quad` | `8` |
+
+`look-check` prints the total for each shape slot of a valid pack:
+
+```
+$ cargo run --features look-check --bin look-check -- assets/looks/sample-shapes
+assets/looks/sample-shapes: shape player: 220 vertices (budget 3000)
+assets/looks/sample-shapes: ok, content_hash 2d032c899e93dd27083ce5a230fa4b3b123ec41acc77a7d056c836e29f2cee35
+```
+
+(`night-shift` and `sample-sponsor` set no shape, so they print only the `ok`
+line.) That 220 is the capsule at the default detail (24 + 13 * 6 = 102), the
+cone (25), two cuboids (48), and the sphere at detail 8 (9 * 5 = 45). If a
+shape is over budget `look-check` fails with the error above instead. Lower
+`detail` first: it is the cheapest way to save vertices.
+
+### Worked example: `sample-shapes`
+
+`assets/looks/sample-shapes/look.json` ("Rocket Run") is a v2 pack whose
+`player` slot is a rocket: a capsule body, a cone nose at `y = 0.75`, two fin
+cuboids at `x = ±0.36`, and a small sphere window at `detail: 8`. Try it:
+`GX_LOOK=sample-shapes cargo run`, or `?look=sample-shapes` on web.
+
+### How a game adopts shapes
+
+1. **Give the slot a budget**: set `shape: Some(ShapeSpec { max_prims,
+   max_vertices, extent })` on its `SlotSpec` in `LOOK`. Pick `extent` from
+   the art's real size (the sim's hitbox is the ceiling, since art is sized to
+   it) and `max_vertices` from what the platform can draw many of; a Pi 4 in
+   browser mode is the weak target.
+2. **Use the shape**, either way:
+   - **Handle-based art.** The game already spawns entities that draw
+     `Handle<Mesh>`s it created (the Voidrunner pattern: ships, rocks and
+     bullets all share meshes built at startup). From render-side code
+     (`AssetsPlugin`, never the sim), call
+     `ShapeTargets::register("slot_name", mesh_handle)`. `apply_shapes`
+     (registered by `LookPlugin`) then rewrites the mesh asset behind that
+     handle whenever the pack changes, so every entity drawing it changes
+     with no new entities, components or children. `register` is valid at any
+     time, including for meshes created after startup, and registering the
+     same handle twice is a no-op.
+   - **Mesh built at spawn.** For a one-off like the template's `player`,
+     match `look.slot("player")` for `Slot::Shape(s)` and call
+     `build_mesh(&s.shape)` (see `player_mesh` in `src/game/player.rs`).
+3. **Only handles whose mesh is in main-world memory.** Targets must keep
+   `RenderAssetUsages::MAIN_WORLD` (the `Mesh` default); the baseline is read
+   from it. A target registered before its asset exists waits for it, and
+   stays listed if it never arrives. A registered mesh whose asset is later
+   removed is forgotten.
+
+With no pack, or a pack that sets no shape for the slot, nothing is written
+and the mesh is bit-identical to the game's own. When a pack with a shape is
+swapped for one without, the baseline captured at first sight is written back.
+
+### The values-only rule
+
+Shapes obey the same one rule as everything else in a pack. `apply_shapes`
+writes the contents of `Assets<Mesh>` behind handles that already exist; it
+never adds or removes entities, components or children, and never reads or
+writes sim state. Hitboxes, spawn positions and collision stay the game's
+own, so a shape changes how a thing looks, never how it plays. `LookPlugin`
+stays out of `GamePlugin`; the headless replay verifier has no `Assets<Mesh>`
+and skips shapes entirely.
 
 ## Limits
 

@@ -13,7 +13,9 @@
 //!
 //! Normals: transformed by the inverse-transpose and renormalised. The one
 //! exception is Bevy's cone tip, which carries a deliberate zero normal
-//! (see `bevy_mesh`'s `cone.rs`); a zero normal stays zero.
+//! (see `bevy_mesh`'s `cone.rs`); a zero normal stays zero. That is fine for
+//! `StandardMaterial`; a custom material that normalises normals would get
+//! NaN at the tip.
 //!
 //! Vertex counts are closed-form per primitive (every one is verified
 //! against the built mesh by the tests at details 3, 12 and 32; none builds

@@ -10,6 +10,11 @@
 //! if the asset differs. Under the default look nothing is written, so
 //! every mesh stays bit-identical.
 //!
+//! A target registered before its asset exists waits for it (retried each
+//! frame) and stays listed if it never arrives. Targets must keep
+//! `RenderAssetUsages::MAIN_WORLD` (the `Mesh` default): the baseline is
+//! cloned from main-world data, which a render-world-only mesh does not have.
+//!
 //! Targets hold `AssetId`s, not strong handles, so registering never keeps
 //! a mesh alive; a baselined target whose asset is gone is dropped. Headless
 //! apps (the replay verifier) have no `Assets<Mesh>` and skip this.
@@ -31,7 +36,9 @@ pub struct ShapeTargets {
 
 impl ShapeTargets {
     /// Dresses `mesh` from slot `slot`. Registering a handle again is a
-    /// no-op. Register from presentation code only, never from the sim.
+    /// no-op. Valid at any time, including for meshes spawned after startup
+    /// (there is no separate register_spawned). Register from presentation
+    /// code only, never from the sim.
     pub fn register(&mut self, slot: &'static str, mesh: Handle<Mesh>) {
         let id = mesh.id();
         if !self.targets.iter().any(|(_, t)| *t == id) {
