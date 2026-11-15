@@ -63,10 +63,13 @@ fn embed_content() {
     walk(&root, "", &mut files);
     files.sort_by(|a, b| a.0.cmp(&b.0));
     let mut code = String::from("pub static EMBEDDED: &[(&str, &[u8])] = &[\n");
-    for (rel, abs) in &files {
+    // Paths are relative to CARGO_MANIFEST_DIR, never absolute: a copy of
+    // the game (the editor's gate export) builds into the same target dir,
+    // and an absolute path would let this crate embed the copy's files.
+    for (rel, _) in &files {
         code.push_str(&format!(
-            "    ({rel:?}, include_bytes!({:?})),\n",
-            abs.to_string_lossy()
+            "    ({rel:?}, include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), {:?}))),\n",
+            format!("/content/{rel}")
         ));
     }
     code.push_str("];\n");
