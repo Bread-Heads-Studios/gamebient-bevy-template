@@ -8,6 +8,8 @@ use bevy::color::{Color, Srgba};
 
 use super::contract::{Contract, ParamKind, ShapeSpec};
 use super::manifest::{self, MANIFEST_FILE, Manifest, Param, Primitive, Slot};
+// The id and file-name rules, shared with the build-time generator.
+use super::names::{is_file_name, is_id};
 use super::shape;
 use super::sniff;
 
@@ -28,9 +30,9 @@ pub mod limits {
     pub const STRING_MAX: usize = 64;
     pub const NAME_MAX: usize = 32;
     pub const CREATOR_MAX: usize = 48;
-    pub const ID_MAX: usize = 32;
+    pub const ID_MAX: usize = super::super::names::ID_MAX;
     pub const KEY_MAX: usize = 48;
-    pub const FILE_STEM_MAX: usize = 48;
+    pub const FILE_STEM_MAX: usize = super::super::names::FILE_STEM_MAX;
     pub const FRAMES_MAX: u32 = 64;
     pub const FPS_MAX: f32 = 60.0;
     pub const URL_MAX: usize = 200;
@@ -102,33 +104,12 @@ fn is_text(s: &str, max: usize) -> bool {
     s.len() <= max && s.bytes().all(|c| (0x20..=0x7e).contains(&c))
 }
 
-fn is_id(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= limits::ID_MAX
-        && s.bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
-}
-
 fn is_key(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= limits::KEY_MAX
         && s.bytes().all(|c| {
             c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'.' | b'_' | b'-')
         })
-}
-
-/// `[a-z0-9_-]{1,48}.png|.ogg`: no dots in the stem, so no `..`, no
-/// hidden files, no second extension.
-fn is_file_name(s: &str) -> bool {
-    let Some((stem, ext)) = s.rsplit_once('.') else {
-        return false;
-    };
-    matches!(ext, "png" | "ogg")
-        && !stem.is_empty()
-        && stem.len() <= limits::FILE_STEM_MAX
-        && stem
-            .bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'_' | b'-'))
 }
 
 const AXES: [&str; 3] = ["x", "y", "z"];

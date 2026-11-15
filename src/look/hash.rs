@@ -1,5 +1,5 @@
-//! A pack's content hash. Shared verbatim with `build.rs` (`#[path]`
-//! include), which hashes web-fetchable packs at build time, so this file
+//! A pack's content hash. Shared verbatim with the build-time generator
+//! (`embed.rs`, `#[path]` include), which hashes web-fetchable packs, so this file
 //! uses `std` and `blake3` only. Re-exported as `validate::content_hash`.
 
 use std::collections::BTreeMap;

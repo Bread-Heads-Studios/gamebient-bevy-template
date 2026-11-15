@@ -10,11 +10,15 @@
 //!
 //! This folder is copied verbatim into games. A game's own look surface is
 //! `src/ui/theme.rs` (`LOOK`). Authoring guide: docs/look-packs.md.
+//! `embed.rs` is the build-time generator for built-in packs: `build.rs`
+//! includes it by path; it is not a module of the crate.
 
 pub mod apply;
 pub mod contract;
+pub mod fetch;
 pub mod hash;
 pub mod manifest;
+pub mod names;
 pub mod pack;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod reload;
@@ -62,7 +66,7 @@ impl Plugin for LookPlugin {
             .unwrap_or_else(select::from_launch);
         let look = ActiveLook::resolve(self.contract, selection.clone());
         info!("look: {}", look.id());
-        app.insert_resource(selection)
+        app.insert_resource(selection.clone())
             .insert_resource(look)
             .init_resource::<LookAssets>()
             .init_resource::<ShapeTargets>()
@@ -98,5 +102,16 @@ impl Plugin for LookPlugin {
             );
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, reload::hot_reload);
+        // A large built-in pack (`Selection::Fetch`): boot on the default
+        // look, fetch its files, swap them in when they arrive.
+        #[cfg(target_arch = "wasm32")]
+        if let Selection::Fetch(id) = &selection
+            && let Some(pending) = fetch::start(id)
+        {
+            app.insert_resource(pending).add_systems(
+                Update,
+                fetch::arrive.run_if(resource_exists::<fetch::PendingFetch>),
+            );
+        }
     }
 }

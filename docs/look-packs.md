@@ -30,9 +30,18 @@ x86) embed every one. The web bundle embeds only packs of at most 64 KiB
 listed in `look::pack::FETCHABLE` with its build-time content hash, and
 fetched from `assets/looks/<id>/` when `?look=<id>` names it. The game boots
 on its own look and switches when the files arrive and match the hash, so a
-big pack costs only the players who pick it. Anything else is a folder
-you point the game at while working on it (native only). Symlinks are
-skipped there too: `build.rs` warns and leaves them out.
+big pack costs only the players who pick it. A fetch that fails (network,
+HTTP status, hash or validation) logs one warning and keeps the game's own
+look. Anything else is a folder you point the game at while working on it
+(native only). Symlinks are skipped there too: the generator
+(`src/look/embed.rs`, run by `build.rs`) warns and leaves them out. A
+built-in pack whose folder name or a file name breaks the rules above
+fails the build.
+
+To try the fetch with small packs, lower the threshold for one local
+build: `GX_WEB_EMBED_MAX=100 ./build.sh web` (bytes; testing only, never
+for a shipping build), serve `dist/` and open `?mute=1&look=<id>`. The
+console says `look: fetching <id>`, then `look: now wearing <id>`.
 
 ## Try one
 

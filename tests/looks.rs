@@ -738,3 +738,78 @@ mod swap {
         assert!(look::pack::fetchable("night-shift").is_none());
     }
 }
+
+/// The web fetch's hand-off, native-compiled: a slot filled by hand stands
+/// in for the async fetch, and `fetch::arrive` swaps the pack in once.
+mod fetch_arrival {
+    use super::*;
+    use gamebient_game::look::LookChanged;
+    use gamebient_game::look::fetch::{Arrival, PendingFetch, arrive};
+    use gamebient_game::look::validate::content_hash;
+
+    #[derive(Resource, Default)]
+    struct Announced(usize);
+
+    fn count(mut seen: MessageReader<LookChanged>, mut n: ResMut<Announced>) {
+        n.0 += seen.read().count();
+    }
+
+    /// A `?look=night-shift` launch whose pack is "in flight", expecting
+    /// `hash`.
+    fn in_flight(hash: &str) -> (App, Arrival) {
+        let mut app = app_with(Selection::Fetch("night-shift".into()));
+        let (pending, arrival) = PendingFetch::new("night-shift", hash);
+        app.insert_resource(pending)
+            .init_resource::<Announced>()
+            .add_systems(Update, (arrive, count).chain());
+        (app, arrival)
+    }
+
+    #[test]
+    fn the_fetched_pack_is_applied_once_and_polling_stops() {
+        let files = look::pack::embedded_files("night-shift").unwrap();
+        let (mut app, arrival) = in_flight(&content_hash(&files));
+        app.update();
+        app.update();
+        // Still in flight: the default look, nothing announced.
+        assert_eq!(app.world().resource::<ActiveLook>().id(), "default");
+        assert!(app.world().contains_resource::<PendingFetch>());
+        assert_eq!(app.world().resource::<Announced>().0, 0);
+
+        *arrival.lock().unwrap() = Some(Ok(files.clone()));
+        app.update();
+        assert_eq!(app.world().resource::<ActiveLook>().id(), "night-shift");
+        assert!(!app.world().contains_resource::<PendingFetch>());
+        assert_eq!(app.world().resource::<Announced>().0, 1);
+
+        // A late second delivery into the old slot is never read.
+        *arrival.lock().unwrap() = Some(Ok(files));
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<Announced>().0, 1);
+        assert!(arrival.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn a_failed_fetch_keeps_the_default_and_stops() {
+        let files = look::pack::embedded_files("night-shift").unwrap();
+        let (mut app, arrival) = in_flight(&content_hash(&files));
+        *arrival.lock().unwrap() = Some(Err("assets/looks/night-shift/look.json: HTTP 404".into()));
+        app.update();
+        assert_eq!(app.world().resource::<ActiveLook>().id(), "default");
+        assert!(!app.world().contains_resource::<PendingFetch>());
+        assert_eq!(app.world().resource::<Announced>().0, 0);
+    }
+
+    #[test]
+    fn a_fetched_pack_with_the_wrong_hash_is_never_applied() {
+        let files = look::pack::embedded_files("night-shift").unwrap();
+        let (mut app, arrival) = in_flight(&"0".repeat(64));
+        *arrival.lock().unwrap() = Some(Ok(files));
+        app.update();
+        assert_eq!(app.world().resource::<ActiveLook>().id(), "default");
+        assert!(!app.world().contains_resource::<PendingFetch>());
+        assert_eq!(app.world().resource::<Announced>().0, 0);
+    }
+}
