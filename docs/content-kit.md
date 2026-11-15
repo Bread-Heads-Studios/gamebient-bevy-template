@@ -65,6 +65,14 @@ Those runs also reset tunables to the Rust defaults
 (`saved::reset_to_defaults`), so neither `content/level.json` nor
 `content/tunables.json` can invalidate the committed fixtures.
 
+The rule for tests: a data save to `content/` (moving or adding Things, a
+new or redrawn sprite, saved card values) must never fail fmt, clippy or
+`cargo test`; only a Rust change may. So tests that play the game run on
+built-in content (`LevelSource::Test`, `saved::reset_to_defaults`, and
+`sprites::clear_sprites` with fixture PNGs), and the shipped files are
+checked for validity only (`the_content_level_file_is_valid`,
+`the_shipped_sprites_are_valid`), never for what they hold.
+
 ## What the replay hashes
 
 Run content is the **level** and the **tunables**; presentation is not.

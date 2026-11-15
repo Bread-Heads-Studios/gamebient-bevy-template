@@ -296,6 +296,22 @@ pub fn animate_sprites(
     }
 }
 
+/// Forgets every loaded sprite and `sprites.json`, so Things spawned from
+/// now on draw their boxes. Tests on built-in content call it after
+/// `Startup` so a sprite saved to `content/` never changes them. Art
+/// children that already exist are left as they are.
+pub fn clear_sprites(world: &mut World) {
+    if let Some(mut images) = world.get_resource_mut::<SpriteImages>() {
+        images.0.clear();
+    }
+    if let Some(mut meta) = world.get_resource_mut::<SpriteMetaTable>() {
+        meta.0.clear();
+    }
+    if let Some(mut art) = world.get_resource_mut::<SpriteArt>() {
+        art.materials.iter_mut().for_each(|m| *m = None);
+    }
+}
+
 /// What `spawn_level` needs to pick a kind's art: the sprite material and
 /// its transform, if the kind has a sprite.
 pub fn sprite_for(

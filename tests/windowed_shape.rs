@@ -132,6 +132,8 @@
 use bevy::prelude::*;
 use bevy::shader::Shader;
 
+use gamebient_game::game::content::level::LevelSource;
+use gamebient_game::game::content::saved::reset_to_defaults;
 use gamebient_game::game::replay::recorder::ReplayRecorder;
 use gamebient_game::game::replay::selftest::{SELFTEST_SEED, SELFTEST_TICKS, script};
 use gamebient_game::game::replay::{Replay, build_headless_app, verify};
@@ -399,6 +401,10 @@ fn record_windowed_after_menu(bot: Bot, menu_ticks: u32) -> Replay {
 /// run lives in [`play_one_run`].
 fn windowed_app(bot: Bot) -> App {
     let mut app = build_headless_app();
+    // Built-in content only (the selftest's own level and Rust default
+    // tunables), so a save to `content/` never changes this probe.
+    app.insert_resource(LevelSource::Test);
+    reset_to_defaults(app.world_mut());
     // The real `src/assets/` decorators, on hand-made asset stores.
     // `build_headless_app` is `MinimalPlugins`, so none of this exists by
     // default and `AssetsPlugin` cannot bake anything there; these four

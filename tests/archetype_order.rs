@@ -53,9 +53,10 @@
 //!
 //! # Extending this for your game (do this during the port)
 //!
-//! On this template the sim spawns its level through the content kit: one
-//! `Player` and three `Coin`s (`content/level.json`), `SpawnOrder` 0..=3 in
-//! file order, and `scoring::collect_coins` visits the coins. Its sum is
+//! On this template the sim spawns its level through the content kit; this
+//! probe runs on the built-in `test_level()` (`LevelSource::Test`, as the
+//! selftest does): one `Player` and three `Coin`s, `SpawnOrder` 0..=3 in
+//! its order, and `scoring::collect_coins` visits the coins. Its sum is
 //! order-independent, so the probe is still mostly a smoke test here, but
 //! both modes now cover both kinds: the faithful mode branches across them
 //! and the split mode halves them on `SpawnOrder` parity (even keys get the
@@ -100,6 +101,8 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use gamebient_input::{Buttons, VirtualInput};
 
+use gamebient_game::game::content::level::LevelSource;
+use gamebient_game::game::content::saved::reset_to_defaults;
 use gamebient_game::game::player::Player;
 use gamebient_game::game::replay::recorder::ReplayRecorder;
 use gamebient_game::game::replay::selftest::SELFTEST_TICKS;
@@ -227,6 +230,10 @@ fn script(tick: Res<SimTick>, mut virt: ResMut<VirtualInput>) {
 /// per `app.update()`.
 fn record(decorate: Decoration, seed: [u8; 32], ticks_per_frame: u32) -> (Replay, u64) {
     let mut app = build_headless_app();
+    // Built-in content only (the selftest's own level and Rust default
+    // tunables), so a save to `content/` never changes this probe.
+    app.insert_resource(LevelSource::Test);
+    reset_to_defaults(app.world_mut());
     if ticks_per_frame > 1 {
         app.insert_resource(TimeUpdateStrategy::ManualDuration(
             sim::tick_duration() * ticks_per_frame,

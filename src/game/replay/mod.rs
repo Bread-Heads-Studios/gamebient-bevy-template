@@ -598,7 +598,9 @@ mod tests {
         // A 120-tick run holding RIGHT: the player runs through the coin at
         // (3, 0), so the verdict is score 1 with the checksum the sim
         // produced; encode the sim's own answer as the claim and it must
-        // match.
+        // match. On built-in content (the test level, every tunable at its
+        // Rust default as a start value), so a save to `content/` never
+        // changes it.
         let mut r = sample();
         r.runs.clear();
         r.ticks = 0;
@@ -606,6 +608,21 @@ mod tests {
             r.push_tick(8, 0, 0, 0);
         }
         r.score = 0;
+        let defaults = build_headless_app()
+            .world()
+            .resource::<crate::game::tunables::TunableIndex>()
+            .clone();
+        r.starts = defaults
+            .entries
+            .iter()
+            .map(|e| (e.id, e.default.to_bytes()))
+            .collect();
+        r.tunes.clear();
+        r.content = hash::content_of_bytes(
+            test_level_hash(),
+            r.starts.iter().map(|(id, b)| (*id, b.as_slice())),
+            [],
+        );
         let first = verify(&r);
         assert_eq!(first.ticks, 120);
         assert_eq!(first.ended, Ended::InputExhausted);

@@ -44,7 +44,9 @@ pub fn test_level_hash() -> u64 {
 ///
 /// TEMPLATE NOTE: replace this with your game's own test layout. Keep it a
 /// valid level for your kinds (`test_level_uses_registered_kinds` checks).
-/// It need not match `content/level.json`; the template's does.
+/// It need not match `content/level.json`: the template's file starts as
+/// the same layout, but tests check only that the file is valid, so a data
+/// save never fails them.
 pub fn test_level() -> LevelFile {
     let thing = |id: &str, kind: &str, x: f32, y: f32| PlacedThing {
         id: id.into(),
@@ -179,10 +181,14 @@ mod tests {
         v
     }
 
+    /// Spawned straight from `spawn_level`, before any sim tick, so the
+    /// positions are the file's even for things that fall or move.
     #[test]
     fn the_template_level_spawns_in_file_order() {
+        use bevy::ecs::system::RunSystemOnce;
         let mut app = build_headless_app();
-        enter_playing(&mut app);
+        app.update();
+        app.world_mut().run_system_once(spawn_level).unwrap();
         let file = LevelFile::parse(embedded("level.json").unwrap()).unwrap();
         let got = spawned(&mut app);
         assert_eq!(got.len(), file.things.len());
@@ -218,10 +224,20 @@ mod tests {
         assert_eq!(LevelFile::parse(&bytes).unwrap(), level);
     }
 
+    /// The shipped level is valid, whatever it holds: it parses, uses only
+    /// registered kinds and `set_level` accepts it. (Not equal to
+    /// `test_level()`: a data save that moves a Thing must not fail tests.)
     #[test]
-    fn the_template_level_file_matches_test_level() {
-        let file = LevelFile::parse(embedded("level.json").unwrap()).unwrap();
-        assert_eq!(file, test_level());
+    fn the_content_level_file_is_valid() {
+        let Some(bytes) = embedded("level.json") else {
+            return;
+        };
+        let file = LevelFile::parse(bytes).unwrap();
+        let mut app = build_headless_app();
+        check_kinds(&file, app.world().resource::<Kinds>()).unwrap();
+        set_level(app.world_mut(), bytes).unwrap();
+        assert_eq!(app.world().resource::<Level>().0, file);
+        assert_eq!(app.world().resource::<LevelHash>().0, fnv1a64(bytes));
     }
 
     #[test]

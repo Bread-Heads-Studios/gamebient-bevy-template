@@ -2,14 +2,24 @@
 //! quad-or-box choice, and in-place replacement. Runs in an app with the
 //! windowed build's asset stores, built on the headless app like
 //! `windowed_shape.rs`.
+//!
+//! Everything runs on built-in content (the test level, Rust default
+//! tunables, the embedded sprites cleared, fixture PNGs for the sprite under
+//! test), so a save to `content/` never breaks these tests. What is shipped
+//! in `content/sprites/` is checked for validity only.
 
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::FilterMode;
 
+use gamebient_game::game::content::files::EMBEDDED;
 use gamebient_game::game::content::kit::{Kinds, Thing, ThingArt};
+use gamebient_game::game::content::level::LevelSource;
+use gamebient_game::game::content::model::SpritesFile;
+use gamebient_game::game::content::saved::reset_to_defaults;
 use gamebient_game::game::content::sprites::{
-    ArtOf, SpriteArt, SpriteImages, animate_sprites, decode_png, set_sprite, set_sprites_meta,
+    ArtOf, SpriteArt, SpriteImages, animate_sprites, clear_sprites, decode_png, set_sprite,
+    set_sprites_meta,
 };
 use gamebient_game::game::replay::build_headless_app;
 use gamebient_game::game::sim::{PendingSeed, seed_bytes};
@@ -25,7 +35,10 @@ fn windowed() -> App {
     app.init_asset::<Mesh>();
     app.init_asset::<StandardMaterial>();
     app.init_asset::<Image>();
-    app.update(); // Startup: ThingArt
+    app.update(); // Startup: ThingArt, then the embedded sprites
+    clear_sprites(app.world_mut());
+    app.insert_resource(LevelSource::Test);
+    reset_to_defaults(app.world_mut());
     app
 }
 
@@ -68,6 +81,29 @@ fn limits_are_enforced() {
     assert!(app.world().resource::<SpriteImages>().0.is_empty());
 }
 
+/// The shipped sprites are valid, whatever they are: each
+/// `content/sprites/<Kind>.png` names a registered kind and decodes within
+/// the limits, and `content/sprites.json` (if any) parses.
+#[test]
+fn the_shipped_sprites_are_valid() {
+    let app = windowed();
+    let kinds = app.world().resource::<Kinds>();
+    for (path, bytes) in EMBEDDED {
+        if *path == "sprites.json" {
+            SpritesFile::parse(bytes).unwrap_or_else(|e| panic!("{path}: {e:?}"));
+            continue;
+        }
+        let Some(kind) = path
+            .strip_prefix("sprites/")
+            .and_then(|f| f.strip_suffix(".png"))
+        else {
+            continue;
+        };
+        assert!(kinds.index(kind).is_some(), "{path}: no kind called {kind}");
+        decode_png(bytes).unwrap_or_else(|e| panic!("{path}: {e:?}"));
+    }
+}
+
 #[test]
 fn a_valid_png_decodes_with_nearest_sampling() {
     let mut app = windowed();
@@ -95,7 +131,7 @@ fn a_sprite_kind_gets_a_quad_and_others_keep_the_box() {
     let box_mesh = app.world().resource::<ThingArt>().mesh.clone();
     let quad = app.world().resource::<SpriteArt>().quad.clone();
     let got = art(&mut app);
-    assert_eq!(got.len(), 4);
+    assert_eq!(got.len(), 4, "the test level's things");
     for (kind, _, mesh, _) in &got {
         if kind == "Player" {
             assert_eq!(mesh, &quad);
