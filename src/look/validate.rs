@@ -6,8 +6,9 @@ use std::collections::BTreeMap;
 
 use bevy::color::{Color, Srgba};
 
-use super::contract::{Contract, ParamKind};
-use super::manifest::{self, MANIFEST_FILE, Manifest, Param, SCHEMA_VERSION, Slot};
+use super::contract::{Contract, ParamKind, ShapeSpec};
+use super::manifest::{self, MANIFEST_FILE, Manifest, Param, Primitive, SCHEMA_VERSION, Slot};
+use super::shape;
 use super::sniff;
 
 /// A pack's files by name, `look.json` included.
@@ -54,6 +55,8 @@ pub struct Report {
     pub manifest: Option<Manifest>,
     pub problems: Vec<Problem>,
     pub content_hash: String,
+    /// `(slot, vertices)` for every shape slot that passed its checks.
+    pub shapes: Vec<(String, usize)>,
 }
 
 impl Report {
@@ -75,6 +78,7 @@ impl Report {
                 message,
             }],
             content_hash: String::new(),
+            shapes: Vec::new(),
         }
     }
 }
@@ -144,6 +148,74 @@ struct Check<'a> {
 }
 
 impl Check<'_> {
+    /// Numeric rules for one shape slot. Returns the vertex count when the
+    /// shape is valid (and so counted); `None` after any error.
+    fn shape(&mut self, at: &str, prims: &[Primitive], limit: &ShapeSpec) -> Option<usize> {
+        let before = self.problems.len();
+        let ext = limit.extent;
+        if prims.len() > limit.max_prims {
+            self.error(
+                format!("{at}.shape"),
+                format!("{} primitives; at most {}", prims.len(), limit.max_prims),
+            );
+        }
+        for (i, p) in prims.iter().enumerate() {
+            let pat = format!("{at}.shape[{i}]");
+            let want = shape::arity(p.prim);
+            if p.size.len() != want {
+                self.error(
+                    pat.as_str(),
+                    format!("size needs {want} number(s), got {}", p.size.len()),
+                );
+            } else if !p
+                .size
+                .iter()
+                .all(|v| v.is_finite() && (0.001..=ext).contains(v))
+            {
+                self.error(pat.as_str(), format!("size components are 0.001..={ext}"));
+            }
+            if let Some(v) = p.at
+                && !v.iter().all(|c| c.is_finite() && (-ext..=ext).contains(c))
+            {
+                self.error(pat.as_str(), format!("at components are -{ext}..={ext}"));
+            }
+            if let Some(v) = p.rot
+                && !v.iter().all(|c| c.is_finite())
+            {
+                self.error(pat.as_str(), "rot components must be finite numbers");
+            }
+            if let Some(v) = p.scale
+                && !v.iter().all(|c| c.is_finite() && (0.01..=4.0).contains(c))
+            {
+                self.error(pat.as_str(), "scale components are 0.01..=4");
+            }
+            if let Some(d) = p.detail
+                && !shape::DETAIL_RANGE.contains(&d)
+            {
+                self.error(
+                    pat.as_str(),
+                    format!(
+                        "detail is {}..={}",
+                        shape::DETAIL_RANGE.start(),
+                        shape::DETAIL_RANGE.end()
+                    ),
+                );
+            }
+        }
+        if self.problems.len() != before {
+            return None;
+        }
+        let n = shape::vertex_count(prims);
+        if n > limit.max_vertices {
+            self.error(
+                format!("{at}.shape"),
+                format!("{n} vertices; budget {}", limit.max_vertices),
+            );
+            return None;
+        }
+        Some(n)
+    }
+
     fn error(&mut self, at: impl Into<String>, message: impl Into<String>) {
         self.problems.push(Problem {
             severity: Severity::Error,
@@ -273,6 +345,7 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
             manifest: None,
             problems: c.problems,
             content_hash,
+            shapes: Vec::new(),
         };
     };
     let m = match manifest::parse(raw) {
@@ -283,6 +356,7 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
                 manifest: None,
                 problems: c.problems,
                 content_hash,
+                shapes: Vec::new(),
             };
         }
     };
@@ -335,6 +409,7 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
         }
     }
 
+    let mut shapes = Vec::new();
     for (name, slot) in &m.slots {
         let at = format!("slots.{name}");
         let Some(spec) = contract.slot(name) else {
@@ -355,14 +430,18 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
                     c.error(at.as_str(), format!("fps is 0..={}", limits::FPS_MAX));
                 }
             }
-            Slot::Shape(_) => {
+            Slot::Shape(sh) => {
                 if m.v < 2 {
                     c.error(at.as_str(), r#"shape slots need "v": 2"#);
                 }
                 if spec.shape.is_none() {
                     c.error(at.as_str(), "this slot does not take a shape");
                 }
-                // Contents are only parse-checked here; numeric rules come with shape.rs.
+                if let Some(limit) = &spec.shape
+                    && let Some(n) = c.shape(&at, &sh.shape, limit)
+                {
+                    shapes.push((name.clone(), n));
+                }
             }
             Slot::Recipe(r) => {
                 let Some(recipe) = spec.recipe(&r.recipe) else {
@@ -469,6 +548,7 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
         manifest: Some(m),
         problems: c.problems,
         content_hash,
+        shapes,
     }
 }
 
@@ -855,5 +935,124 @@ mod tests {
         assert_eq!(content_hash(&a), content_hash(&a.clone()));
         assert_ne!(content_hash(&a), content_hash(&b));
         assert_ne!(content_hash(&a), content_hash(&c));
+    }
+
+    fn shape_errors(body: &str) -> Vec<String> {
+        let r = validate(&shape_pack(2, "player", body), &TEST, None);
+        errors(&r)
+    }
+
+    fn has(errs: &[String], needle: &str) -> bool {
+        errs.iter().any(|e| e.contains(needle))
+    }
+
+    #[test]
+    fn shape_size_arity_is_checked() {
+        let e = shape_errors(
+            r#""shape":[{"prim":"sphere","size":[0.3]},{"prim":"cuboid","size":[0.3,0.3]}]"#,
+        );
+        assert!(has(&e, "slots.player.shape[1]"), "{e:?}");
+        assert!(has(&e, "size needs 3"), "{e:?}");
+    }
+
+    #[test]
+    fn shape_numbers_out_of_range_are_errors() {
+        // Stand-ins for NaN: JSON cannot encode it, so use out-of-range values.
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[0.0]}]"#);
+        assert!(has(&e, "slots.player.shape[0]") && has(&e, "size"), "{e:?}");
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[-1]}]"#);
+        assert!(has(&e, "slots.player.shape[0]"), "{e:?}");
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[1e39]}]"#);
+        assert!(has(&e, "slots.player.shape[0]"), "{e:?}");
+    }
+
+    #[test]
+    fn shape_size_over_the_extent_is_an_error() {
+        let e = shape_errors(
+            r#""shape":[{"prim":"sphere","size":[0.3]},{"prim":"sphere","size":[1.6]}]"#,
+        );
+        assert!(has(&e, "slots.player.shape[1]") && has(&e, "size"), "{e:?}");
+        assert!(!has(&e, "shape[0]"), "{e:?}");
+        let ok = shape_errors(r#""shape":[{"prim":"sphere","size":[1.5]}]"#);
+        assert!(ok.is_empty(), "{ok:?}");
+    }
+
+    #[test]
+    fn shape_at_outside_the_extent_is_an_error() {
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[0.3],"at":[0,1.6,0]}]"#);
+        assert!(has(&e, "slots.player.shape[0]") && has(&e, "at"), "{e:?}");
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[0.3],"at":[0,-1.6,0]}]"#);
+        assert!(has(&e, "at"), "{e:?}");
+    }
+
+    #[test]
+    fn shape_scale_bounds_are_checked() {
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[0.3],"scale":[1,0.005,1]}]"#);
+        assert!(
+            has(&e, "slots.player.shape[0]") && has(&e, "scale"),
+            "{e:?}"
+        );
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[0.3],"scale":[4.5,1,1]}]"#);
+        assert!(has(&e, "scale"), "{e:?}");
+        let ok = shape_errors(r#""shape":[{"prim":"sphere","size":[0.3],"scale":[0.01,4,1]}]"#);
+        assert!(ok.is_empty(), "{ok:?}");
+    }
+
+    #[test]
+    fn too_many_primitives_is_an_error() {
+        let one = r#"{"prim":"cuboid","size":[0.1,0.1,0.1]}"#;
+        let body = format!(r#""shape":[{}]"#, [one; 13].join(","));
+        let e = shape_errors(&body);
+        assert!(
+            has(&e, "slots.player.shape") && has(&e, "13 primitives; at most 12"),
+            "{e:?}"
+        );
+        let body = format!(r#""shape":[{}]"#, [one; 12].join(","));
+        assert!(shape_errors(&body).is_empty());
+    }
+
+    #[test]
+    fn the_vertex_budget_is_enforced() {
+        // A detail-32 sphere is 33 * 17 = 561 vertices; six of them is 3366.
+        let one = r#"{"prim":"sphere","size":[0.3],"detail":32}"#;
+        let body = format!(r#""shape":[{}]"#, [one; 6].join(","));
+        let e = shape_errors(&body);
+        assert!(
+            has(&e, "slots.player.shape") && has(&e, "3366 vertices; budget 3000"),
+            "{e:?}"
+        );
+        let body = format!(r#""shape":[{}]"#, [one; 5].join(","));
+        assert!(shape_errors(&body).is_empty());
+    }
+
+    #[test]
+    fn detail_out_of_range_is_an_error_not_a_clamp() {
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[0.3],"detail":2}]"#);
+        assert!(
+            has(&e, "slots.player.shape[0]") && has(&e, "detail is 3..=32"),
+            "{e:?}"
+        );
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[0.3],"detail":33}]"#);
+        assert!(has(&e, "detail is 3..=32"), "{e:?}");
+    }
+
+    #[test]
+    fn a_valid_shape_reports_its_vertex_count() {
+        let r = validate(&shape_pack(2, "player", SHAPE), &TEST, Some("demo"));
+        assert!(r.ok(), "{:?}", errors(&r));
+        // sphere d12: 13 * 7 = 91; cone d8: 17.
+        assert_eq!(r.shapes, vec![("player".to_string(), 108)]);
+        let r = validate(&shape_pack(2, "player", r#""shape":[]"#), &TEST, None);
+        assert_eq!(r.shapes, vec![("player".to_string(), 0)]);
+    }
+
+    #[test]
+    fn an_invalid_shape_reports_no_vertex_count() {
+        let r = validate(
+            &shape_pack(2, "player", r#""shape":[{"prim":"sphere","size":[9]}]"#),
+            &TEST,
+            None,
+        );
+        assert!(r.shapes.is_empty());
     }
 }

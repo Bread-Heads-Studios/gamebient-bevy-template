@@ -46,6 +46,13 @@ fn main() -> std::process::ExitCode {
             println!("{d}: {tag}: {}: {}", p.at, p.message);
         }
         if report.ok() {
+            for (slot, n) in &report.shapes {
+                let budget = theme::LOOK
+                    .slot(slot)
+                    .and_then(|s| s.shape)
+                    .map_or(0, |s| s.max_vertices);
+                println!("{d}: shape {slot}: {n} vertices (budget {budget})");
+            }
             println!("{d}: ok, content_hash {}", report.content_hash);
         } else {
             failed = true;

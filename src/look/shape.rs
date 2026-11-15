@@ -48,7 +48,7 @@ fn detail_of(p: &Primitive) -> u32 {
         .clamp(*DETAIL_RANGE.start(), *DETAIL_RANGE.end())
 }
 
-fn arity(prim: Prim) -> usize {
+pub(crate) fn arity(prim: Prim) -> usize {
     match prim {
         Prim::Sphere => 1,
         Prim::Cuboid => 3,
