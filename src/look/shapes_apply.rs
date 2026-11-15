@@ -15,9 +15,14 @@
 //! `RenderAssetUsages::MAIN_WORLD` (the `Mesh` default): the baseline is
 //! cloned from main-world data, which a render-world-only mesh does not have.
 //!
+//! Registered meshes must be static: the baseline is captured once, so a
+//! game that edits a registered mesh at runtime gets the old baseline
+//! written back whenever the look returns to the default.
+//!
 //! Targets hold `AssetId`s, not strong handles, so registering never keeps
-//! a mesh alive; a baselined target whose asset is gone is dropped. Headless
-//! apps (the replay verifier) have no `Assets<Mesh>` and skip this.
+//! a mesh alive; a target whose asset is removed after it was baselined is
+//! dropped (one never baselined keeps waiting). Headless apps (the replay
+//! verifier) have no `Assets<Mesh>` and skip this.
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;

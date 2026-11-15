@@ -18,7 +18,7 @@
 //! NaN at the tip.
 //!
 //! Vertex counts are closed-form per primitive (every one is verified
-//! against the built mesh by the tests at details 3, 12 and 32; none builds
+//! against the built mesh by the tests at every detail in `DETAIL_RANGE`; none builds
 //! to count). With `d` the clamped detail:
 //!
 //! | prim     | vertices                                                     |
@@ -119,12 +119,15 @@ fn base_mesh(p: &Primitive) -> Mesh {
         Prim::Cuboid => Cuboid::new(s[0], s[1], s[2]).mesh().build(),
         Prim::Cylinder => Cylinder::new(s[0], s[1]).mesh().resolution(d).build(),
         Prim::Cone => Cone::new(s[0], s[1]).mesh().resolution(d).build(),
-        // size is [ring_radius, tube_radius]; Bevy wants (hole, outer).
-        Prim::Torus => Torus::new(s[0] - s[1], s[0] + s[1])
-            .mesh()
-            .major_resolution(d as usize)
-            .minor_resolution(((d / 2) as usize).max(3))
-            .build(),
+        // size is [ring_radius, tube_radius].
+        Prim::Torus => Torus {
+            minor_radius: s[1],
+            major_radius: s[0],
+        }
+        .mesh()
+        .major_resolution(d as usize)
+        .minor_resolution(((d / 2) as usize).max(3))
+        .build(),
         Prim::Capsule => Capsule3d::new(s[0], s[1])
             .mesh()
             .longitudes(d)
@@ -269,7 +272,7 @@ mod tests {
     #[test]
     fn vertex_count_matches_built_mesh_for_every_prim_and_detail() {
         for kind in ALL {
-            for d in [3, 12, 32] {
+            for d in DETAIL_RANGE {
                 let p = Primitive {
                     detail: Some(d),
                     ..prim(kind)

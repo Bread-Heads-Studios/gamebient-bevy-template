@@ -483,13 +483,58 @@ mod shapes {
         assert_eq!(t.len(), 1);
     }
 
+    /// Every `AssetEvent::Modified` the mesh store emits, in order.
+    #[derive(Resource, Default)]
+    struct Modified(Vec<AssetId<Mesh>>);
+
+    fn record_modified(mut events: MessageReader<AssetEvent<Mesh>>, mut seen: ResMut<Modified>) {
+        for e in events.read() {
+            if let AssetEvent::Modified { id } = e {
+                seen.0.push(*id);
+            }
+        }
+    }
+
+    /// `setup`, but with a real `AssetPlugin` so the mesh store emits its
+    /// `AssetEvent`s, and every `Modified` recorded: a test can then see a
+    /// write, not just compare data after it.
+    fn setup_watched(selection: Selection) -> (App, Handle<Mesh>, Handle<Mesh>) {
+        let mut app = app_with(selection);
+        app.add_plugins(AssetPlugin::default())
+            .init_asset::<Mesh>()
+            .init_resource::<Modified>()
+            .add_systems(Last, record_modified);
+        let mut meshes = app.world_mut().resource_mut::<Assets<Mesh>>();
+        let target = meshes.add(Cuboid::new(1.0, 2.0, 3.0));
+        let other = meshes.add(Cuboid::new(1.0, 2.0, 3.0));
+        app.world_mut()
+            .resource_mut::<ShapeTargets>()
+            .register("player", target.clone());
+        (app, target, other)
+    }
+
     #[test]
     fn a_registered_mesh_is_bit_identical_under_the_default_look() {
-        let (mut app, target, other) = setup(Selection::Default);
+        let (mut app, target, other) = setup_watched(Selection::Default);
+        app.update();
+        app.world_mut().write_message(look::LookChanged);
         app.update();
         app.update();
         assert_eq!(mesh_of(&app, &target), cuboid());
         assert_eq!(mesh_of(&app, &other), cuboid());
+        assert!(
+            app.world().resource::<Modified>().0.is_empty(),
+            "the default look wrote a mesh: {:?}",
+            app.world().resource::<Modified>().0
+        );
+    }
+
+    #[test]
+    fn the_modification_watch_sees_a_pack_write() {
+        // The watch above is only worth something if it can see a write.
+        let (mut app, target, _) = setup_watched(Selection::Embedded("sample-shapes".into()));
+        app.update();
+        assert_eq!(app.world().resource::<Modified>().0, vec![target.id()]);
     }
 
     #[test]

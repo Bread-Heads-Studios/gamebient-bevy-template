@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use bevy::color::{Color, Srgba};
 
 use super::contract::{Contract, ParamKind, ShapeSpec};
-use super::manifest::{self, MANIFEST_FILE, Manifest, Param, Primitive, SCHEMA_VERSION, Slot};
+use super::manifest::{self, MANIFEST_FILE, Manifest, Param, Primitive, Slot};
 use super::shape;
 use super::sniff;
 
@@ -141,6 +141,19 @@ fn is_file_name(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'_' | b'-'))
 }
 
+/// The largest absolute coordinate of any vertex `shape::build_mesh`
+/// produces: the half-width of the smallest centred cube holding the shape.
+fn shape_reach(prims: &[Primitive]) -> f32 {
+    use bevy::mesh::{Mesh, VertexAttributeValues};
+    match shape::build_mesh(prims).attribute(Mesh::ATTRIBUTE_POSITION) {
+        Some(VertexAttributeValues::Float32x3(pos)) => pos.iter().flatten().fold(
+            0.0_f32,
+            |m, c| if c.is_nan() { f32::NAN } else { m.max(c.abs()) },
+        ),
+        _ => 0.0,
+    }
+}
+
 struct Check<'a> {
     files: &'a Files,
     problems: Vec<Problem>,
@@ -210,6 +223,16 @@ impl Check<'_> {
             self.error(
                 format!("{at}.shape"),
                 format!("{n} vertices; budget {}", limit.max_vertices),
+            );
+            return None;
+        }
+        // Last, and only now that every rule above bounds the work: the
+        // built geometry itself must sit inside the extent cube.
+        let reach = shape_reach(prims);
+        if !(reach.is_finite() && reach <= ext * (1.0 + 1e-5)) {
+            self.error(
+                format!("{at}.shape"),
+                format!("reaches {reach:.3} from the centre; extent is {ext}"),
             );
             return None;
         }
@@ -348,6 +371,19 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
             shapes: Vec::new(),
         };
     };
+    // The version gate runs before the strict parse: a newer pack carries
+    // fields and primitives this build rejects, and must say it is newer.
+    if let Some(v) = manifest::version(raw)
+        && let Err(e) = manifest::check_version(v)
+    {
+        c.error("v", e);
+        return Report {
+            manifest: None,
+            problems: c.problems,
+            content_hash,
+            shapes: Vec::new(),
+        };
+    }
     let m = match manifest::parse(raw) {
         Ok(m) => m,
         Err(e) => {
@@ -360,14 +396,6 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
             };
         }
     };
-    if m.v == 0 {
-        c.error("v", "unknown schema version (0)");
-    } else if m.v > SCHEMA_VERSION {
-        c.error(
-            "v",
-            format!("made for a newer version of this game (v{})", m.v),
-        );
-    }
     if !is_id(&m.id) {
         c.error("id", "lowercase letters, digits and -, at most 32");
     }
@@ -660,27 +688,54 @@ mod tests {
 
     #[test]
     fn a_newer_schema_is_refused_cleanly() {
-        let r = validate(&pack(&MIN.replace("\"v\":1", "\"v\":3")), &TEST, None);
-        assert!(!r.ok());
-        assert!(
-            errors(&r)
-                .iter()
-                .any(|e| e.contains("made for a newer version of this game (v3)")),
-            "{:?}",
-            errors(&r)
+        // A real v3 pack: a top-level field and a primitive this build has
+        // never seen. The version gate must answer, not the strict parse.
+        let v3 = r#"{"v":3,"id":"demo","name":"D","kind":"skin","sparkle":true,
+            "slots":{"player":{"shape":[{"prim":"blob","size":[1],"wobble":2}]}}}"#;
+        let r = validate(&pack(v3), &TEST, Some("demo"));
+        assert!(!r.ok() && r.manifest.is_none());
+        assert_eq!(
+            errors(&r),
+            vec!["v: made for a newer version of this game (v3)".to_string()]
         );
         let r = validate(&pack(&MIN.replace("\"v\":1", "\"v\":99")), &TEST, None);
-        assert!(errors(&r).iter().any(|e| e.contains("(v99)")));
+        assert_eq!(
+            errors(&r),
+            vec!["v: made for a newer version of this game (v99)".to_string()]
+        );
     }
 
     #[test]
     fn schema_zero_is_unknown() {
-        let r = validate(&pack(&MIN.replace("\"v\":1", "\"v\":0")), &TEST, None);
+        let r = validate(
+            &pack(r#"{"v":0,"junk":[1,2],"slots":{"x":{"what":1}}}"#),
+            &TEST,
+            None,
+        );
         assert!(!r.ok());
+        assert_eq!(
+            errors(&r),
+            vec!["v: unknown schema version (0)".to_string()]
+        );
+        let r = validate(&pack(&MIN.replace("\"v\":1", "\"v\":0")), &TEST, None);
+        assert_eq!(
+            errors(&r),
+            vec!["v: unknown schema version (0)".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_current_schema_with_an_unknown_field_is_a_parse_error() {
+        let r = validate(
+            &pack(r#"{"v":2,"id":"demo","name":"D","kind":"skin","sparkle":true}"#),
+            &TEST,
+            None,
+        );
+        assert!(!r.ok());
+        let e = errors(&r);
         assert!(
-            errors(&r)
-                .iter()
-                .any(|e| e.contains("unknown schema version"))
+            e.len() == 1 && e[0].starts_with("look.json: unknown field `sparkle`"),
+            "{e:?}"
         );
     }
 
@@ -722,9 +777,21 @@ mod tests {
     #[test]
     fn unknown_primitive_fields_and_kinds_are_refused() {
         let bad = r#""shape":[{"prim":"sphere","size":[1],"colour":"red"}]"#;
-        assert!(!validate(&shape_pack(2, "player", bad), &TEST, None).ok());
-        let bad = r#""shape":[{"prim":"pyramid","size":[1]}]"#;
-        assert!(!validate(&shape_pack(2, "player", bad), &TEST, None).ok());
+        let r = validate(&shape_pack(2, "player", bad), &TEST, None);
+        assert!(!r.ok());
+        let e = errors(&r);
+        assert!(
+            has(&e, "shape[0]: unknown field `colour`"),
+            "names the primitive and field: {e:?}"
+        );
+        let bad = r#""shape":[{"prim":"sphere","size":[1]},{"prim":"pyramid","size":[1]}]"#;
+        let r = validate(&shape_pack(2, "player", bad), &TEST, None);
+        assert!(!r.ok());
+        let e = errors(&r);
+        assert!(
+            has(&e, "shape[1]: unknown variant `pyramid`"),
+            "names the primitive and variant: {e:?}"
+        );
     }
 
     #[test]
@@ -983,6 +1050,28 @@ mod tests {
         assert!(has(&e, "slots.player.shape[0]") && has(&e, "at"), "{e:?}");
         let e = shape_errors(r#""shape":[{"prim":"sphere","size":[0.3],"at":[0,-1.6,0]}]"#);
         assert!(has(&e, "at"), "{e:?}");
+    }
+
+    #[test]
+    fn built_geometry_past_the_extent_is_an_error() {
+        // Every number passes on its own (at 1.4, size 0.5, scale 3) but the
+        // sphere reaches 1.4 + 0.5 * 3 = 2.9 from the centre.
+        let body = r#""shape":[{"prim":"sphere","size":[0.5],"at":[1.4,0,0],"scale":[3,1,1]}]"#;
+        let e = shape_errors(body);
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(
+            e[0].starts_with("slots.player.shape: reaches 2.9") && e[0].ends_with("extent is 1.5"),
+            "{e:?}"
+        );
+        // A rotated cuboid's corner, not its size, is what reaches out.
+        let e = shape_errors(
+            r#""shape":[{"prim":"cuboid","size":[1.5,1.5,1.5],"at":[0.5,0,0],"rot":[0,45,0]}]"#,
+        );
+        assert!(has(&e, "slots.player.shape: reaches"), "{e:?}");
+        let r = validate(&shape_pack(2, "player", body), &TEST, None);
+        assert!(r.shapes.is_empty());
+        let ok = shape_errors(r#""shape":[{"prim":"sphere","size":[0.5],"at":[1.0,0,0]}]"#);
+        assert!(ok.is_empty(), "{ok:?}");
     }
 
     #[test]

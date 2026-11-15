@@ -78,6 +78,9 @@ skipped there too: `build.rs` warns and leaves them out.
 - **A newer `v` is refused**: `v: 3` on this game fails with `made for a newer
   version of this game (v3)`, and `v: 0` with `unknown schema version (0)`.
   A refused pack resolves to the game's own look, like any invalid pack.
+  The version is read on its own before anything else, so a newer pack full
+  of fields and primitives this game has never heard of still gets that one
+  message, not a parse error.
 - **Fields only arrive with a version bump.** A `shape` slot in a `v: 1` pack
   is an error (`shape slots need "v": 2`). Every manifest struct denies
   unknown fields, so a field this game does not know fails instead of being
@@ -132,7 +135,7 @@ template's `player` slot: `max_prims: 12`, `max_vertices: 3000`, `extent: 1.5`.
 |---|---|---|
 | `max_prims` | Primitives in the list. | `slots.player.shape: 13 primitives; at most 12` |
 | `max_vertices` | Total vertices of the merged mesh. | `slots.player.shape: 3366 vertices; budget 3000` |
-| `extent` | Half-width of the cube the shape lives in. Each `size` component is `0.001..=extent`, each `at` component `-extent..=extent`. | `slots.player.shape[1]: size components are 0.001..=1.5` |
+| `extent` | Half-width of the cube the whole shape lives in. Each `size` component is `0.001..=extent` and each `at` component `-extent..=extent`; then, once every other rule passes, the built mesh is checked: no vertex may lie more than `extent` from the centre on any axis (so `at`, `size`, `scale` and `rot` together count). | `slots.player.shape[1]: size components are 0.001..=1.5`, `slots.player.shape: reaches 2.900 from the centre; extent is 1.5` |
 
 Independent of the game: each `scale` component is `0.01..=4`, every number
 must be finite, and `detail` is `3..=32`. Errors name the slot and the
@@ -180,8 +183,9 @@ cuboids at `x = ±0.36`, and a small sphere window at `detail: 8`. Try it:
    browser mode is the weak target.
 2. **Use the shape**, either way:
    - **Handle-based art.** The game already spawns entities that draw
-     `Handle<Mesh>`s it created (the Voidrunner pattern: ships, rocks and
-     bullets all share meshes built at startup). From render-side code
+     `Handle<Mesh>`s it created (the Voidrunner pattern: the player ship,
+     wraiths, sentinels, pickups and projectiles all share meshes built at
+     startup). From render-side code
      (`AssetsPlugin`, never the sim), call
      `ShapeTargets::register("slot_name", mesh_handle)`. `apply_shapes`
      (registered by `LookPlugin`) then rewrites the mesh asset behind that
@@ -195,8 +199,12 @@ cuboids at `x = ±0.36`, and a small sphere window at `detail: 8`. Try it:
 3. **Only handles whose mesh is in main-world memory.** Targets must keep
    `RenderAssetUsages::MAIN_WORLD` (the `Mesh` default); the baseline is read
    from it. A target registered before its asset exists waits for it, and
-   stays listed if it never arrives. A registered mesh whose asset is later
-   removed is forgotten.
+   stays listed if it never arrives. A registered mesh whose asset is removed
+   after it was baselined (first seen) is forgotten.
+4. **Registered meshes are static.** The baseline is captured once, at first
+   sight. A game that edits a registered mesh at runtime will see its old
+   baseline written back whenever the look returns to the default; animate
+   transforms or materials instead, or register a different handle.
 
 With no pack, or a pack that sets no shape for the slot, nothing is written
 and the mesh is bit-identical to the game's own. When a pack with a shape is
