@@ -1,8 +1,9 @@
 //! The web fetch of a large built-in pack (`pack::FETCHABLE`): `?look=<id>`
 //! boots on the default look, `start` fetches exactly the listed files from
 //! `assets/looks/<id>/<file>?h=<hash prefix>` (relative, so same-origin and
-//! resolved like Bevy's own `assets/`; the query busts stale caches), and `arrive` hands them to `swap::LookSwap`
-//! with the build's content hash once they are all in.
+//! resolved like Bevy's own `assets/`; the query busts stale caches), and
+//! `arrive` hands them to `swap::LookSwap` with the build's content hash once
+//! they are all in.
 //!
 //! The hand-off is a one-shot slot shared with the async task. `arrive`
 //! (presentation, `Update`) is target-independent so it tests natively with

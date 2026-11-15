@@ -40,8 +40,8 @@ build-time one and the validator must pass, then the pack is applied through
 `look::swap::LookSwap` and `LookChanged` is sent, so appliers restyle live. A
 big pack costs only the players who pick it. A fetch that fails (network,
 HTTP status, hash or validation) logs one warning, applies nothing and keeps
-the game's own look. Anything else is a folder you point the game at while working on it
-(native only). Symlinks are skipped there too: the generator
+the game's own look. Anything else is a folder you point the game at while
+working on it (native only). Symlinks are skipped there too: the generator
 (`src/look/embed.rs`, run by `build.rs`) warns and leaves them out. A
 built-in pack whose folder name or a file name breaks the rules above
 fails the build.

@@ -86,7 +86,7 @@ impl Report {
     }
 }
 
-/// Lives in `hash.rs` so `build.rs` hashes fetchable packs with the same code.
+/// Lives in `hash.rs` so `src/look/embed.rs` hashes fetchable packs with the same code.
 pub use super::hash::content_hash;
 
 /// `#rrggbb` or `#rrggbbaa`, nothing looser.
