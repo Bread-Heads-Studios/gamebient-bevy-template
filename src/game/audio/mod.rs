@@ -2,7 +2,7 @@
 //!
 //! * **SFX.** Gameplay and UI write [`SfxEvent`]s; [`play_sfx`] spawns a
 //!   despawn-on-finish player for each. Every event is baked once at startup
-//!   by [`bake`] from its [`program`], on the house chip ([`chip`], [`tracker::Fx`]), so a game's
+//!   by [`bake`], on the house chip ([`chip`], [`tracker::Fx`]), so a game's
 //!   sounds share one timbre with its music. Events that are stings
 //!   ([`SfxEvent::is_sting`]) duck the music while they play.
 //! * **Music.** [`MUSIC`] maps every `GameState` to a [`Cue`]: a looping or
@@ -20,8 +20,12 @@
 //!   reads them. [`preview`] plays any event or cue by name (the editor's
 //!   `sound.preview`).
 //!
-//! Port checklist: replace the three template events and their `program`
-//! arms with the game's own, compose `songs.rs`, point `MUSIC` at it (every
+//! Port checklist: replace the three template events and their `bake` arms
+//! with the game's own. `bake` is the per-game hook and may return any
+//! `AudioSource` (a chip program, a `synth.rs` voice). Where an event *is*
+//! a chip program, also return it from [`program`] (the editor shows and
+//! tests it); return `None` for one that is not. A `sfx.json` program
+//! replaces either kind at runtime ([`bake_with`]). Then compose `songs.rs`, point `MUSIC` at it (every
 //! cue and layer named, unique, snake_case), and write
 //! `docs/audio-identity.md`. Never play audio directly from a gameplay
 //! system; emit a message. `chip.rs`, `tracker.rs` and `house.rs` are copied
@@ -77,11 +81,13 @@ fn hz(name: &str) -> f32 {
     note_hz(name).expect("note name")
 }
 
-/// One event's chip program. The template speaks C major: confirm is a
-/// rising fifth, pause a falling one, the screen sweep a rising glide with a
-/// noise shimmer. A game replaces all three in its own key.
-pub fn program(event: SfxEvent) -> Fx {
-    match event {
+/// One event's built-in chip program, when its sound is one; `None` for an
+/// event whose `bake` arm is not a chip program (a `synth.rs` voice). The
+/// template speaks C major: confirm is a rising fifth, pause a falling one,
+/// the screen sweep a rising glide with a noise shimmer. A game replaces
+/// all three in its own key.
+pub fn program(event: SfxEvent) -> Option<Fx> {
+    Some(match event {
         SfxEvent::Confirm => Fx::new()
             .hit(0, hz("c5"), 5)
             .then(Fx::new().hit(0, hz("g5"), 9)),
@@ -91,12 +97,18 @@ pub fn program(event: SfxEvent) -> Fx {
         SfxEvent::ScreenSweep => Fx::new()
             .tone(0, hz("c4"), hz("c6"), 2, 15, 18)
             .with(Fx::new().noise(NoiseMode::White, NoiseRate::Div512, 6, 15, 12)),
-    }
+    })
 }
 
-/// Renders one event's built-in program on the house chip.
+/// Renders one event's built-in sound: the per-game hook. The template's
+/// are all chip programs, so it renders [`program`]; a game may return any
+/// `AudioSource` here.
 pub fn bake(event: SfxEvent) -> AudioSource {
-    program(event).render()
+    match event {
+        SfxEvent::Confirm | SfxEvent::Pause | SfxEvent::ScreenSweep => program(event)
+            .expect("the template's events are chip programs")
+            .render(),
+    }
 }
 
 /// Renders one event: its `sfx.json` program when there is one, else
@@ -1046,7 +1058,9 @@ mod tests {
     #[test]
     fn bake_renders_the_program() {
         for e in SfxEvent::ALL {
-            assert!(bake(*e).bytes == program(*e).render().bytes);
+            // Every template event is a chip program; a game's may be None.
+            let fx = program(*e).expect("template events are chip programs");
+            assert!(bake(*e).bytes == fx.render().bytes);
             assert!(bake_with(*e, None).bytes == bake(*e).bytes);
         }
     }

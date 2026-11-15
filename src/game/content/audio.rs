@@ -1,7 +1,7 @@
 //! Songs and sound effects as files. `content/audio/songs.json` replaces the
 //! song of a named cue or layer (`audio::Cue::name`), `content/audio/sfx.json`
 //! the chip program of a named event (`SfxEvent::name`). A name the file
-//! leaves out keeps its Rust default (`songs.rs`, `audio::program`); the
+//! leaves out keeps its Rust default (`songs.rs`, `audio::bake`); the
 //! template ships neither file.
 //!
 //! Presentation only: the overrides live in [`SongOverrides`] and
@@ -493,7 +493,7 @@ mod tests {
         );
         assert_eq!(
             fx_from_program(&confirm).unwrap(),
-            audio::program(SfxEvent::Confirm)
+            audio::program(SfxEvent::Confirm).unwrap()
         );
         let sweep = program(
             r#"[[{"op":"tone","voice":0,"from":"c4","to":"c6","a0":2,"a1":15,"frames":18},
@@ -501,7 +501,7 @@ mod tests {
         );
         assert_eq!(
             fx_from_program(&sweep).unwrap(),
-            audio::program(SfxEvent::ScreenSweep)
+            audio::program(SfxEvent::ScreenSweep).unwrap()
         );
         let bad = program(r#"[[{"op":"hit","voice":0,"note":"h4","frames":5}]]"#);
         assert!(fx_from_program(&bad).unwrap_err().0.contains("\"h4\""));

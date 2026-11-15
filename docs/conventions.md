@@ -561,8 +561,9 @@ env)` with `.with_release(frames)`, `.with_arp(&[0, 4, 7])` and
 `.with_vibrato(cents, hz)`; `env` is attenuation per 60 Hz frame, last value
 held. Every voice must tile to the song's length; `render_loop` names the
 voice that does not. Sound effects are `tracker::Fx` programs (`.hit`,
-`.slide`, `.tone`, `.noise`, `.then`, `.with`) built in `audio::program`
-and baked by `audio::bake`. `content/audio/sfx.json` may replace an
+`.slide`, `.tone`, `.noise`, `.then`, `.with`) baked in `audio::bake`, the
+per-game hook (it may also return a `synth.rs` voice); `audio::program`
+returns an event's chip program when it is one, else `None`. `content/audio/sfx.json` may replace an
 event's program and `content/audio/songs.json` a named cue's song
 (`game::content::audio`); presentation only, never read by the sim.
 
