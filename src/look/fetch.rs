@@ -1,7 +1,7 @@
 //! The web fetch of a large built-in pack (`pack::FETCHABLE`): `?look=<id>`
 //! boots on the default look, `start` fetches exactly the listed files from
-//! `assets/looks/<id>/<file>` (a relative URL, so same-origin and resolved
-//! like Bevy's own `assets/`), and `arrive` hands them to `swap::LookSwap`
+//! `assets/looks/<id>/<file>?h=<hash prefix>` (relative, so same-origin and
+//! resolved like Bevy's own `assets/`; the query busts stale caches), and `arrive` hands them to `swap::LookSwap`
 //! with the build's content hash once they are all in.
 //!
 //! The hand-off is a one-shot slot shared with the async task. `arrive`
@@ -82,7 +82,7 @@ pub fn start(id: &str) -> Option<PendingFetch> {
     let fetchable = super::pack::fetchable(id)?;
     let (pending, arrival) = PendingFetch::new(fetchable.id, fetchable.content_hash);
     wasm_bindgen_futures::spawn_local(async move {
-        let result = fetch_all(fetchable.id, fetchable.files).await;
+        let result = fetch_all(fetchable).await;
         if let Ok(mut slot) = arrival.lock() {
             *slot = Some(result);
         }
@@ -91,22 +91,14 @@ pub fn start(id: &str) -> Option<PendingFetch> {
     Some(pending)
 }
 
-/// Every listed file, or the first failure. `id` and the names come from
-/// the build-time table and passed the naming rules there (`embed.rs`), so
-/// the URL stays under `assets/looks/<id>/`.
+/// Every listed file, fetched concurrently, or the first failure. `id` and
+/// the names come from the build-time table and passed the naming rules
+/// there (`embed.rs`), so the URL stays under `assets/looks/<id>/`. The
+/// query is the first 16 hex of the pack's build-time content hash: files
+/// sit at stable unhashed URLs, so after a redeploy it keeps a browser's
+/// cached old file from failing the hash check.
 #[cfg(target_arch = "wasm32")]
-async fn fetch_all(id: &str, names: &[&str]) -> Result<Files, String> {
-    let mut files = Files::new();
-    for name in names {
-        let url = format!("assets/looks/{id}/{name}");
-        let bytes = fetch_bytes(&url).await.map_err(|e| format!("{url}: {e}"))?;
-        files.insert(name.to_string(), bytes);
-    }
-    Ok(files)
-}
-
-#[cfg(target_arch = "wasm32")]
-async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+async fn fetch_all(fetchable: super::pack::Fetchable) -> Result<Files, String> {
     use js_sys::wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
 
@@ -115,16 +107,42 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
     }
 
     let window = web_sys::window().ok_or("no window")?;
-    let response: web_sys::Response = JsFuture::from(window.fetch_with_str(url))
-        .await
-        .map_err(describe)?
-        .dyn_into()
-        .map_err(|_| "not a Response".to_string())?;
-    if !response.ok() {
-        return Err(format!("HTTP {}", response.status()));
+    let tag = &fetchable.content_hash[..fetchable.content_hash.len().min(16)];
+    let urls: Vec<String> = fetchable
+        .files
+        .iter()
+        .map(|name| format!("assets/looks/{}/{name}?h={tag}", fetchable.id))
+        .collect();
+
+    let requests = js_sys::Array::new();
+    for url in &urls {
+        requests.push(&window.fetch_with_str(url));
     }
-    let buffer = JsFuture::from(response.array_buffer().map_err(describe)?)
+    let responses = JsFuture::from(js_sys::Promise::all(&requests))
         .await
         .map_err(describe)?;
-    Ok(js_sys::Uint8Array::new(&buffer).to_vec())
+
+    let bodies = js_sys::Array::new();
+    for (url, response) in urls.iter().zip(js_sys::Array::from(&responses).iter()) {
+        let response: web_sys::Response = response
+            .dyn_into()
+            .map_err(|_| format!("{url}: not a Response"))?;
+        if !response.ok() {
+            return Err(format!("{url}: HTTP {}", response.status()));
+        }
+        bodies.push(&response.array_buffer().map_err(describe)?.into());
+    }
+    let buffers = JsFuture::from(js_sys::Promise::all(&bodies))
+        .await
+        .map_err(describe)?;
+
+    let mut files = Files::new();
+    for (name, buffer) in fetchable
+        .files
+        .iter()
+        .zip(js_sys::Array::from(&buffers).iter())
+    {
+        files.insert(name.to_string(), js_sys::Uint8Array::new(&buffer).to_vec());
+    }
+    Ok(files)
 }

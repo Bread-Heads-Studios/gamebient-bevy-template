@@ -28,11 +28,19 @@ Folders in `assets/looks/` are built into the game. Native bundles (Pi,
 x86) embed every one. The web bundle embeds only packs of at most 64 KiB
 (`look::split::WEB_EMBED_MAX_BYTES`); a larger one (audio, art) is left out,
 listed in `look::pack::FETCHABLE` with its build-time content hash, and
-fetched from `assets/looks/<id>/` when `?look=<id>` names it. The game boots
-on its own look and switches when the files arrive and match the hash, so a
+fetched when `?look=<id>` names it. Only the files in the table are
+requested, concurrently, from `assets/looks/<id>/<file>?h=<first 16 hex of
+the build-time content hash>`. The URL is relative, so it is same-origin and
+also resolves under the full bundle's `/full/<token>/` path (`build_web.sh`
+copies `assets/` into `dist/` and `dist/full/`). The `?h=` query is a cache
+buster: the files sit at stable unhashed URLs, so without it a browser's
+cached copy from before a redeploy would fail the hash check. The game boots
+on its own look; when all files are in, their content hash must equal the
+build-time one and the validator must pass, then the pack is applied through
+`look::swap::LookSwap` and `LookChanged` is sent, so appliers restyle live. A
 big pack costs only the players who pick it. A fetch that fails (network,
-HTTP status, hash or validation) logs one warning and keeps the game's own
-look. Anything else is a folder you point the game at while working on it
+HTTP status, hash or validation) logs one warning, applies nothing and keeps
+the game's own look. Anything else is a folder you point the game at while working on it
 (native only). Symlinks are skipped there too: the generator
 (`src/look/embed.rs`, run by `build.rs`) warns and leaves them out. A
 built-in pack whose folder name or a file name breaks the rules above

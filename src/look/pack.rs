@@ -1,9 +1,11 @@
 //! Where pack bytes come from: built into the binary at compile time
-//! (`build.rs` embeds `assets/looks/*/`), or, natively, a folder on disk.
+//! (`embed.rs`, run by `build.rs`, embeds `assets/looks/*/`), or, natively,
+//! a folder on disk.
 //!
-//! On wasm, `build.rs` embeds only packs `split::web_embeds` allows; each
-//! larger one is listed in `FETCHABLE` (id, file names, build-time content
-//! hash) and fetched on demand. Natively `FETCHABLE` is empty.
+//! On wasm, `embed.rs` embeds only packs `split::web_embeds_within` allows
+//! (64 KiB, or the `GX_WEB_EMBED_MAX` test override); each larger one is
+//! listed in `FETCHABLE` (id, file names, build-time content hash) and
+//! fetched on demand. Natively `FETCHABLE` is empty.
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
