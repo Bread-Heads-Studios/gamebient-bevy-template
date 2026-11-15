@@ -31,6 +31,7 @@ fn record_under_display(panel: UVec2, insets: FrameInsets) -> Replay {
     let mut app = build_headless_app();
     // On the selftest's own level, so it compares with `record_scripted_run`.
     app.insert_resource(LevelSource::Test);
+    gamebient_game::game::content::saved::reset_to_defaults(app.world_mut());
     app.add_plugins(DisplayPlugin);
     app.insert_resource(insets);
     app.world_mut().spawn((

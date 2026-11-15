@@ -116,6 +116,7 @@ pub mod tests {
         let mut app = build_headless_app();
         // Checks run on the built-in test level, never `content/level.json`.
         app.insert_resource(crate::game::content::level::LevelSource::Test);
+        crate::game::content::saved::reset_to_defaults(app.world_mut());
         let idx = app.world().resource::<TunableIndex>().clone();
         let tunes: Tunes = snapshot(app.world())
             .into_iter()

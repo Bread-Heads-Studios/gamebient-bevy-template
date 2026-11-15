@@ -50,7 +50,12 @@ pub fn apply_saved(world: &mut World, file: &TunablesFile) -> Vec<String> {
 
 /// Called by `ContentPlugin::build`: parses the embedded file and applies it.
 pub fn apply_embedded_saved(world: &mut World) {
-    let Some(bytes) = files::embedded("tunables.json") else {
+    apply_embedded_saved_from(world, files::embedded("tunables.json"));
+}
+
+/// The plugin's path with the file's bytes injectable (`None`: no file).
+pub fn apply_embedded_saved_from(world: &mut World, bytes: Option<&[u8]>) {
+    let Some(bytes) = bytes else {
         return;
     };
     let warnings = match TunablesFile::parse(bytes) {
@@ -61,6 +66,16 @@ pub fn apply_embedded_saved(world: &mut World) {
         warn!("content/tunables.json: {w}");
     }
     world.resource_mut::<ContentWarnings>().0.extend(warnings);
+}
+
+/// Writes every tunable's Rust default back. Built-in test content (the
+/// selftest, the checks harness) calls this so saved values never reach the
+/// committed fixtures.
+pub fn reset_to_defaults(world: &mut World) {
+    let idx = world.resource::<TunableIndex>().clone();
+    for e in &idx.entries {
+        write(world, e, &e.default);
+    }
 }
 
 #[cfg(test)]
@@ -136,6 +151,40 @@ mod tests {
         app.update();
         let log = app.world().resource::<TuneLog>();
         assert_eq!(log.starts[usize::from(entry.id)].1, v);
+    }
+
+    /// The plugin's own path (bytes in, applied at build time), then a run
+    /// entered on the very first update.
+    #[test]
+    fn plugin_path_lands_before_a_run_entered_on_the_first_update() {
+        let mut app = build_headless_app();
+        let (entry, v) = pick(&app);
+        let text = serde_json::json!({ "v": 1, "values": { entry.path.clone(): v.to_json() } })
+            .to_string();
+        apply_embedded_saved_from(app.world_mut(), Some(text.as_bytes()));
+        assert!(app.world().resource::<ContentWarnings>().0.is_empty());
+        app.world_mut().resource_mut::<PendingSeed>().0 = Some(seed_bytes(1));
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        app.update();
+        let log = app.world().resource::<TuneLog>();
+        assert_eq!(log.starts[usize::from(entry.id)].1, v);
+        // A broken file warns and changes nothing.
+        let mut app = build_headless_app();
+        apply_embedded_saved_from(app.world_mut(), Some(b"nope"));
+        assert_eq!(app.world().resource::<ContentWarnings>().0.len(), 1);
+    }
+
+    #[test]
+    fn reset_to_defaults_undoes_saved_values() {
+        let mut app = build_headless_app();
+        let (entry, v) = pick(&app);
+        apply_saved(app.world_mut(), &file_with(&entry.path, v.to_json()));
+        assert_eq!(read(app.world(), &entry), Some(v));
+        reset_to_defaults(app.world_mut());
+        assert_eq!(read(app.world(), &entry), Some(entry.default.clone()));
     }
 
     #[test]
