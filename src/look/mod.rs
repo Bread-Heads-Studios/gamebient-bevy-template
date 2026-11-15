@@ -19,6 +19,7 @@ pub mod pack;
 pub mod reload;
 pub mod runtime;
 pub mod select;
+pub mod shape;
 pub mod sniff;
 pub mod validate;
 
@@ -31,6 +32,7 @@ pub use manifest::{
 };
 pub use runtime::ActiveLook;
 pub use select::Selection;
+pub use shape::{DEFAULT_DETAIL, DETAIL_RANGE, build_mesh, primitive_transform, vertex_count};
 pub use validate::{Files, Problem, Report, Severity};
 
 /// Retint and retext, in `PostUpdate` so a tag spawned this frame is
