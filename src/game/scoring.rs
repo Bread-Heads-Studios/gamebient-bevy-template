@@ -1,5 +1,46 @@
 use bevy::prelude::*;
 
+use super::content::kit::Size;
+use super::player::Player;
+
+/// A collectible: the `Coin` kind's `on_spawn` inserts it.
+#[derive(Component)]
+pub struct Coin;
+
+/// Points one coin is worth.
+pub const COIN_POINTS: u32 = 1;
+
+/// Whether two axis-aligned boxes (centre, size) overlap. Touching edges do
+/// not count.
+pub fn overlaps(a: Vec2, a_size: Vec2, b: Vec2, b_size: Vec2) -> bool {
+    let d = (a - b).abs();
+    let r = (a_size + b_size) * 0.5;
+    d.x < r.x && d.y < r.y
+}
+
+/// In `SimSet` after `move_player`: a player overlapping a coin (boxes from
+/// `Size`) scores [`COIN_POINTS`] and the coin is despawned. The score sum
+/// does not depend on the order coins are visited in.
+pub fn collect_coins(
+    mut commands: Commands,
+    player: Query<(&Transform, &Size), With<Player>>,
+    coins: Query<(Entity, &Transform, &Size), With<Coin>>,
+    mut score: MessageWriter<ScoreEvent>,
+) {
+    let Ok((ptf, psize)) = player.single() else {
+        return;
+    };
+    let p = ptf.translation.truncate();
+    for (e, tf, size) in &coins {
+        if overlaps(p, psize.0, tf.translation.truncate(), size.0) {
+            score.write(ScoreEvent {
+                points: COIN_POINTS,
+            });
+            commands.entity(e).despawn();
+        }
+    }
+}
+
 /// Buffered message awarding score.
 #[derive(Message)]
 pub struct ScoreEvent {
@@ -70,6 +111,29 @@ pub fn handle_score_events(mut reader: MessageReader<ScoreEvent>, mut game_data:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlap_is_strict_aabb() {
+        let one = Vec2::ONE;
+        assert!(overlaps(
+            Vec2::ZERO,
+            one,
+            Vec2::new(0.7, 0.0),
+            Vec2::splat(0.6)
+        ));
+        assert!(!overlaps(
+            Vec2::ZERO,
+            one,
+            Vec2::new(0.9, 0.0),
+            Vec2::splat(0.6)
+        ));
+        assert!(!overlaps(
+            Vec2::ZERO,
+            one,
+            Vec2::new(0.0, 3.0),
+            Vec2::splat(0.6)
+        ));
+    }
 
     #[test]
     fn add_score_accumulates() {

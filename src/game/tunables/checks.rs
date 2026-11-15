@@ -113,7 +113,9 @@ pub mod tests {
     fn every_registered_check_passes_at_defaults() {
         use crate::game::replay::build_headless_app;
         use crate::game::tunables::{TunableIndex, snapshot};
-        let app = build_headless_app();
+        let mut app = build_headless_app();
+        // Checks run on the built-in test level, never `content/level.json`.
+        app.insert_resource(crate::game::content::level::LevelSource::Test);
         let idx = app.world().resource::<TunableIndex>().clone();
         let tunes: Tunes = snapshot(app.world())
             .into_iter()

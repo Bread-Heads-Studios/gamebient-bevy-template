@@ -1,50 +1,15 @@
 use bevy::prelude::*;
 
-use super::GameEntity;
-use super::scoring::GameData;
-use super::sim::{Checksum, SpawnCounter};
+use super::scoring::{Coin, GameData};
+use super::sim::Checksum;
 
-/// The player-controlled entity.
+/// The player-controlled entity. Spawned by the level (`content/level.json`)
+/// as the `Player` kind, whose `on_spawn` inserts this marker; see
+/// `kinds_registration` in `game/mod.rs`.
 #[derive(Component)]
 pub struct Player;
 
 const PLAYER_SPEED: f32 = 8.0;
-
-/// Spawns a simple procedural player mesh when entering `Playing`. Headless
-/// builds (the replay verifier) have no `Assets<Mesh>` / `Assets<StandardMaterial>`
-/// resources, so the mesh/material are only inserted when both are present.
-///
-/// Every sim entity is stamped with a [`SpawnOrder`](super::sim::SpawnOrder)
-/// as it is spawned — the stable key determinism rule 1's sorting clause asks
-/// order-sensitive sim systems to sort by. This template has exactly one sim
-/// entity, so nothing here has an order to get wrong yet; the stamp is here
-/// because a game grows its second sim entity long before anyone remembers
-/// to add the key, and `tests/archetype_order.rs` needs a key the sim owns to
-/// split archetypes on.
-pub fn spawn_player(
-    mut commands: Commands,
-    mut spawn: ResMut<SpawnCounter>,
-    meshes: Option<ResMut<Assets<Mesh>>>,
-    materials: Option<ResMut<Assets<StandardMaterial>>>,
-) {
-    let entity = commands
-        .spawn((
-            Player,
-            GameEntity,
-            spawn.stamp(),
-            Transform::from_xyz(0.0, 0.0, 0.0),
-        ))
-        .id();
-    if let (Some(mut meshes), Some(mut materials)) = (meshes, materials) {
-        commands.entity(entity).insert((
-            Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::srgb(0.2, 0.8, 1.0),
-                ..default()
-            })),
-        ));
-    }
-}
 
 /// Moves the player using the per-tick [`TickInput`](gamebient_input::TickInput)
 /// resource. This is the canonical "add a gameplay system" example: a plain
@@ -68,11 +33,13 @@ pub fn move_player(
 /// module doc calls for: registered right after `sim::checksum_tick` in the
 /// `SimSet` chain, folding the key run state `checksum_tick` itself doesn't
 /// know about (see docs/replay-verification.md, determinism rule 6). Folds
-/// `lives` then the player transform bit-exactly, in that order, so the
-/// checksum is sensitive to both game-over state and movement.
+/// `lives`, the player transform bit-exactly, then the number of coins left,
+/// in that order, so the checksum is sensitive to game-over state, movement
+/// and which coins were taken.
 pub fn checksum_player(
     data: Res<GameData>,
     player: Query<&Transform, With<Player>>,
+    coins: Query<(), With<Coin>>,
     mut sum: ResMut<Checksum>,
 ) {
     sum.fold(u64::from(data.lives));
@@ -80,4 +47,5 @@ pub fn checksum_player(
         sum.fold(u64::from(tf.translation.x.to_bits()));
         sum.fold(u64::from(tf.translation.y.to_bits()));
     }
+    sum.fold(coins.iter().count() as u64);
 }

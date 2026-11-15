@@ -248,6 +248,7 @@ use bevy::time::TimeUpdateStrategy;
 use gamebient_input::TickInputSet;
 
 use super::GamePlugin;
+use super::content::level::{LevelHash, LevelSource, test_level_hash};
 use super::scoring::{GameData, LeaderboardScore};
 use super::sim::{Checksum, PendingSeed, RunSeed, SimTick, tick_duration};
 use super::states::GameState;
@@ -311,6 +312,8 @@ pub fn build_headless_app() -> App {
 /// app the verifier runs; drive it with [`run_verify_app`].
 pub fn build_verify_app(replay: &Replay) -> App {
     let mut app = build_headless_app();
+    let content_level = app.world().get_resource::<LevelHash>().map_or(0, |h| h.0);
+    app.insert_resource(level_source_for(replay, content_level));
     app.insert_resource(ReplayFeeder::new(replay))
         .add_systems(FixedPreUpdate, feed_tick.in_set(TickInputSet::Feed));
     // Seed the run exactly as the recording game did.
@@ -331,6 +334,34 @@ pub fn build_verify_app(replay: &Replay) -> App {
         }
     }
     app
+}
+
+/// The level a replay is re-simulated on. Real replays name the game's
+/// own level (`LevelSource::Content`). Only a replay whose content hash is
+/// exactly what the built-in test level would give, and not what the
+/// content level gives, is replayed on the test level: the selftest
+/// fixtures, recorded under `LevelSource::Test` so a level edit never
+/// invalidates them. Such a run's content hash is never a release's
+/// default, so a leaderboard still refuses it.
+/// `content_level` is the app's `LevelHash`.
+pub fn level_source_for(replay: &Replay, content_level: u64) -> LevelSource {
+    let with_level = |level: u64| {
+        hash::content_of_bytes(
+            level,
+            replay.starts.iter().map(|(id, b)| (*id, b.as_slice())),
+            replay
+                .tunes
+                .iter()
+                .map(|t| (t.tick, t.id, t.bytes.as_slice())),
+        )
+    };
+    if replay.content != with_level(content_level)
+        && replay.content == with_level(test_level_hash())
+    {
+        LevelSource::Test
+    } else {
+        LevelSource::Content
+    }
 }
 
 /// Re-simulates `replay` and reports what the sim produced.
@@ -561,9 +592,10 @@ mod tests {
 
     #[test]
     fn headless_app_runs_a_replay_to_a_verdict() {
-        // A 120-tick run holding RIGHT: the template scores nothing, so the
-        // verdict is score 0 with the checksum the sim produced; encode the
-        // sim's own answer as the claim and it must match.
+        // A 120-tick run holding RIGHT: the player runs through the coin at
+        // (3, 0), so the verdict is score 1 with the checksum the sim
+        // produced; encode the sim's own answer as the claim and it must
+        // match.
         let mut r = sample();
         r.runs.clear();
         r.ticks = 0;
@@ -574,6 +606,8 @@ mod tests {
         let first = verify(&r);
         assert_eq!(first.ticks, 120);
         assert_eq!(first.ended, Ended::InputExhausted);
+        assert_eq!(first.score, 1, "holding RIGHT takes the coin at (3, 0)");
+        r.score = first.score;
         r.checksum = first.checksum;
         r.content = first.content;
         let second = verify(&r);
@@ -581,6 +615,19 @@ mod tests {
         assert_eq!(second.checksum, first.checksum);
         r.score = 999;
         assert!(!verify(&r).matches);
+    }
+
+    #[test]
+    fn the_selftest_names_the_test_level_whatever_the_content_level() {
+        let r = selftest::record_scripted_run();
+        for content_level in [0, 1, u64::MAX] {
+            assert_eq!(level_source_for(&r, content_level), LevelSource::Test);
+        }
+        // A replay recorded on the content level is replayed on it.
+        let mut real = r.clone();
+        real.content =
+            hash::content_of_bytes(7, real.starts.iter().map(|(id, b)| (*id, b.as_slice())), []);
+        assert_eq!(level_source_for(&real, 7), LevelSource::Content);
     }
 
     #[test]

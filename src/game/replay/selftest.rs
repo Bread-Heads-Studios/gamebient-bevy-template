@@ -7,6 +7,7 @@ use gamebient_input::{Buttons, VirtualInput};
 
 use super::recorder::ReplayRecorder;
 use super::{Replay, build_headless_app};
+use crate::game::content::level::LevelSource;
 use crate::game::sim::{PendingSeed, RunOver, SimTick};
 use crate::game::states::GameState;
 
@@ -37,6 +38,10 @@ pub fn script(tick: Res<SimTick>, mut virt: ResMut<VirtualInput>) {
 /// Records the scripted run and returns the sealed replay.
 pub fn record_scripted_run() -> Replay {
     let mut app = build_headless_app();
+    // The built-in test level, never `content/level.json`, so a level edit
+    // does not invalidate the fixtures. `verify` sees the test level's hash
+    // in the replay's content and replays it on the same level.
+    app.insert_resource(LevelSource::Test);
     app.add_systems(
         PreUpdate,
         script.before(gamebient_input::input::accumulate_input),

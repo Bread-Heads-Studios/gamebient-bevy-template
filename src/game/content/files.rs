@@ -41,5 +41,11 @@ mod tests {
     fn table_is_sorted_and_skips_schema() {
         assert!(EMBEDDED.windows(2).all(|w| w[0].0 < w[1].0));
         assert!(EMBEDDED.iter().all(|(p, _)| !p.starts_with("schema/")));
+        assert!(
+            EMBEDDED
+                .iter()
+                .all(|(p, _)| p.split('/').all(|part| !part.starts_with('.'))),
+            "dotfiles are never content"
+        );
     }
 }

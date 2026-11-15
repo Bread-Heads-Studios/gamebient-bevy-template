@@ -4,6 +4,7 @@
 
 use bevy::prelude::*;
 
+use crate::game::content::level::{LevelHash, LevelSource, test_level_hash};
 use crate::game::sim::{Checksum, SimTick};
 use crate::game::states::GameState;
 
@@ -22,9 +23,13 @@ pub struct TuneChange {
     pub value: Value,
 }
 
-/// Start values and mid-run changes of the current (or last) run.
+/// The level hash, start values and mid-run changes of the current (or
+/// last) run.
 #[derive(Resource, Default, Clone, Debug, PartialEq)]
 pub struct TuneLog {
+    /// The run's level (`content::level::LevelHash`, or the test level's
+    /// hash under `LevelSource::Test`); folded first by `hash::content`.
+    pub level: u64,
     pub starts: Vec<(u16, Value)>,
     pub changes: Vec<TuneChange>,
 }
@@ -81,12 +86,17 @@ pub fn apply_pending_tunes(world: &mut World) {
     }
 }
 
-/// `OnEnter(Playing)`, chained after `sim::begin_run`: the run's start
-/// values become the log's `starts`, and their hash is the first thing the
-/// fresh checksum folds.
+/// `OnEnter(Playing)`, chained after `sim::begin_run`: the run's level hash
+/// and start values become the log's `level` and `starts`, and their hash is
+/// the first thing the fresh checksum folds.
 pub fn begin_run_tunables(world: &mut World) {
     let starts = snapshot(world);
+    let level = match world.get_resource::<LevelSource>() {
+        Some(LevelSource::Test) => test_level_hash(),
+        _ => world.get_resource::<LevelHash>().map_or(0, |h| h.0),
+    };
     let log = TuneLog {
+        level,
         starts,
         changes: Vec::new(),
     };
@@ -203,5 +213,42 @@ mod tests {
         let log = app.world().resource::<TuneLog>();
         assert_eq!(log.starts[usize::from(entry.id)].1, v);
         assert!(log.changes.is_empty());
+    }
+
+    #[test]
+    fn begin_run_copies_the_level_hash_into_the_log() {
+        let mut app = build_headless_app();
+        app.insert_resource(LevelHash(42));
+        app.world_mut().resource_mut::<PendingSeed>().0 = Some(seed_bytes(1));
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        assert_eq!(app.world().resource::<TuneLog>().level, 42);
+    }
+
+    #[test]
+    fn begin_run_uses_zero_without_a_level_hash() {
+        let mut app = build_headless_app();
+        app.world_mut().remove_resource::<LevelHash>();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        assert_eq!(app.world().resource::<TuneLog>().level, 0);
+    }
+
+    #[test]
+    fn begin_run_uses_the_test_hash_under_the_test_source() {
+        let mut app = build_headless_app();
+        app.insert_resource(LevelSource::Test);
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        assert_eq!(app.world().resource::<TuneLog>().level, test_level_hash());
     }
 }

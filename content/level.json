@@ -1,0 +1,6 @@
+{"v":1,"things":[
+  {"id":"player","kind":"Player","at":[0,0]},
+  {"id":"coin-1","kind":"Coin","at":[3,0]},
+  {"id":"coin-2","kind":"Coin","at":[-3,2]},
+  {"id":"coin-3","kind":"Coin","at":[0,-3]}
+]}

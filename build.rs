@@ -26,7 +26,7 @@ fn main() {
 }
 
 /// Writes `$OUT_DIR/content_files.rs`: every file under `content/` except
-/// `content/schema/`, as `(path relative to content/, bytes)` sorted by path.
+/// `content/schema/` and anything whose name starts with '.', as `(path relative to content/, bytes)` sorted by path.
 fn embed_content() {
     use std::path::{Path, PathBuf};
 
@@ -36,6 +36,11 @@ fn embed_content() {
         };
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
+            // Dotfiles and dot-directories (.DS_Store, editor swap files)
+            // are never content.
+            if name.starts_with('.') {
+                continue;
+            }
             let path = e.path();
             let rel_path = if rel.is_empty() {
                 name.clone()

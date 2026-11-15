@@ -17,6 +17,7 @@ use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResolution};
 
 use gamebient_game::display::{DisplayPlugin, FrameInsets, GameViewport};
+use gamebient_game::game::content::level::LevelSource;
 use gamebient_game::game::replay::recorder::ReplayRecorder;
 use gamebient_game::game::replay::selftest::{SELFTEST_SEED, SELFTEST_TICKS};
 use gamebient_game::game::replay::selftest::{record_scripted_run, script};
@@ -28,6 +29,8 @@ use gamebient_game::game::states::GameState;
 /// layer with something to act on.
 fn record_under_display(panel: UVec2, insets: FrameInsets) -> Replay {
     let mut app = build_headless_app();
+    // On the selftest's own level, so it compares with `record_scripted_run`.
+    app.insert_resource(LevelSource::Test);
     app.add_plugins(DisplayPlugin);
     app.insert_resource(insets);
     app.world_mut().spawn((
