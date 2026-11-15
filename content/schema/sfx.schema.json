@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sound effects",
+  "description": "One program per sound event. A program is a list of parts played one after another; each part is a list of sounds played together. 64 KB.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "sfx"],
+  "properties": {
+    "v": { "const": 1 },
+    "sfx": {
+      "type": "object",
+      "maxProperties": 128,
+      "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$" },
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 32,
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/op" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "voice": { "type": "integer", "minimum": 0, "maximum": 2 },
+    "atten": { "type": "integer", "minimum": 0, "maximum": 15 },
+    "frames": { "type": "integer", "minimum": 1, "maximum": 600 },
+    "pitch": {
+      "oneOf": [
+        { "type": "number", "exclusiveMinimum": 0, "maximum": 20000 },
+        { "type": "string", "minLength": 1, "maxLength": 8 }
+      ]
+    },
+    "op": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "voice", "from", "to", "a0", "a1", "frames"],
+          "properties": {
+            "op": { "const": "tone" },
+            "voice": { "$ref": "#/$defs/voice" },
+            "from": { "$ref": "#/$defs/pitch" },
+            "to": { "$ref": "#/$defs/pitch" },
+            "a0": { "$ref": "#/$defs/atten" },
+            "a1": { "$ref": "#/$defs/atten" },
+            "frames": { "$ref": "#/$defs/frames" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "voice", "note", "frames"],
+          "properties": {
+            "op": { "const": "hit" },
+            "voice": { "$ref": "#/$defs/voice" },
+            "note": { "$ref": "#/$defs/pitch" },
+            "frames": { "$ref": "#/$defs/frames" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "voice", "from", "to", "frames"],
+          "properties": {
+            "op": { "const": "slide" },
+            "voice": { "$ref": "#/$defs/voice" },
+            "from": { "$ref": "#/$defs/pitch" },
+            "to": { "$ref": "#/$defs/pitch" },
+            "frames": { "$ref": "#/$defs/frames" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "mode", "rate", "a0", "a1", "frames"],
+          "properties": {
+            "op": { "const": "noise" },
+            "mode": { "type": "string", "minLength": 1, "maxLength": 16 },
+            "rate": { "type": "string", "minLength": 1, "maxLength": 16 },
+            "a0": { "$ref": "#/$defs/atten" },
+            "a1": { "$ref": "#/$defs/atten" },
+            "frames": { "$ref": "#/$defs/frames" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "frames"],
+          "properties": {
+            "op": { "const": "rest" },
+            "frames": { "$ref": "#/$defs/frames" }
+          }
+        }
+      ]
+    }
+  }
+}

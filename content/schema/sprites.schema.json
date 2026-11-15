@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sprites",
+  "description": "How each kind's picture in content/sprites/<kind>.png is drawn. 16 KB.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "sprites"],
+  "properties": {
+    "v": { "const": 1 },
+    "sprites": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "frames": { "type": "integer", "minimum": 1, "maximum": 256 },
+          "fps": { "type": "number", "exclusiveMinimum": 0, "maximum": 120 },
+          "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 64 },
+          "anchor": {
+            "type": "array",
+            "items": { "type": "number", "minimum": 0, "maximum": 1 },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      }
+    }
+  }
+}
