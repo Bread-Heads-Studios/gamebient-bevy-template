@@ -2,7 +2,7 @@
 //!
 //! * **SFX.** Gameplay and UI write [`SfxEvent`]s; [`play_sfx`] spawns a
 //!   despawn-on-finish player for each. Every event is baked once at startup
-//!   by [`bake`], on the house chip ([`chip`], [`tracker::Fx`]), so a game's
+//!   by [`bake`] from its [`program`], on the house chip ([`chip`], [`tracker::Fx`]), so a game's
 //!   sounds share one timbre with its music. Events that are stings
 //!   ([`SfxEvent::is_sting`]) duck the music while they play.
 //! * **Music.** [`MUSIC`] maps every `GameState` to a [`Cue`]: a looping or
@@ -13,9 +13,16 @@
 //!   [`CueEvent::Switch`]; the table wins again on the next state change.
 //!   Baked cues render lazily into [`MusicCache`]; [`prewarm_music`] renders
 //!   them all while the player reads the title screen.
+//! * **Files.** Every cue and layer has a `name`; `content/audio/songs.json`
+//!   may replace a named cue's song and `content/audio/sfx.json` an event's
+//!   program ([`crate::game::content::audio`]). The Rust songs and programs
+//!   here stay the defaults. Overrides are presentation only: no sim code
+//!   reads them. [`preview`] plays any event or cue by name (the editor's
+//!   `sound.preview`).
 //!
-//! Port checklist: replace the three template events and their `bake` arms
-//! with the game's own, compose `songs.rs`, point `MUSIC` at it, and write
+//! Port checklist: replace the three template events and their `program`
+//! arms with the game's own, compose `songs.rs`, point `MUSIC` at it (every
+//! cue and layer named, unique, snake_case), and write
 //! `docs/audio-identity.md`. Never play audio directly from a gameplay
 //! system; emit a message. `chip.rs`, `tracker.rs` and `house.rs` are copied
 //! verbatim from the template.
@@ -29,9 +36,10 @@ pub mod tracker;
 use bevy::audio::{PlaybackMode, Volume};
 use bevy::prelude::*;
 
+use crate::game::content::audio::{SfxOverrides, SongOverrides};
 use crate::game::states::GameState;
 use chip::{NoiseMode, NoiseRate, note_hz};
-use tracker::{Fx, wav_secs};
+use tracker::{Fx, Song, wav_secs};
 
 // --- Sound effects ------------------------------------------------------------
 
@@ -53,9 +61,15 @@ impl SfxEvent {
         false
     }
 
-    /// Lower-case variant name, used for export file names.
+    /// Lower-case variant name, used for export file names, the keys of
+    /// `content/audio/sfx.json` and `sound.preview`.
     pub fn name(self) -> String {
         format!("{self:?}").to_lowercase()
+    }
+
+    /// The event called `name` (see [`SfxEvent::name`]).
+    pub fn from_name(name: &str) -> Option<SfxEvent> {
+        Self::ALL.iter().copied().find(|e| e.name() == name)
     }
 }
 
@@ -63,23 +77,35 @@ fn hz(name: &str) -> f32 {
     note_hz(name).expect("note name")
 }
 
-/// Renders one event on the house chip. The template speaks C major:
-/// confirm is a rising fifth, pause a falling one, the screen sweep a rising
-/// glide with a noise shimmer. A game replaces all three in its own key.
-pub fn bake(event: SfxEvent) -> AudioSource {
+/// One event's chip program. The template speaks C major: confirm is a
+/// rising fifth, pause a falling one, the screen sweep a rising glide with a
+/// noise shimmer. A game replaces all three in its own key.
+pub fn program(event: SfxEvent) -> Fx {
     match event {
         SfxEvent::Confirm => Fx::new()
             .hit(0, hz("c5"), 5)
-            .then(Fx::new().hit(0, hz("g5"), 9))
-            .render(),
+            .then(Fx::new().hit(0, hz("g5"), 9)),
         SfxEvent::Pause => Fx::new()
             .hit(0, hz("g4"), 5)
-            .then(Fx::new().hit(0, hz("c4"), 9))
-            .render(),
+            .then(Fx::new().hit(0, hz("c4"), 9)),
         SfxEvent::ScreenSweep => Fx::new()
             .tone(0, hz("c4"), hz("c6"), 2, 15, 18)
-            .with(Fx::new().noise(NoiseMode::White, NoiseRate::Div512, 6, 15, 12))
-            .render(),
+            .with(Fx::new().noise(NoiseMode::White, NoiseRate::Div512, 6, 15, 12)),
+    }
+}
+
+/// Renders one event's built-in program on the house chip.
+pub fn bake(event: SfxEvent) -> AudioSource {
+    program(event).render()
+}
+
+/// Renders one event: its `sfx.json` program when there is one, else
+/// [`bake`].
+pub fn bake_with(event: SfxEvent, overrides: Option<&SfxOverrides>) -> AudioSource {
+    let name = event.name();
+    match overrides.and_then(|o| o.0.iter().find(|(n, _)| *n == name)) {
+        Some((_, fx)) => fx.render(),
+        None => bake(event),
     }
 }
 
@@ -92,20 +118,40 @@ pub struct SfxAssets {
 }
 
 impl SfxAssets {
-    fn get(&self, event: SfxEvent) -> Option<(&Handle<AudioSource>, f32)> {
+    pub fn get(&self, event: SfxEvent) -> Option<(&Handle<AudioSource>, f32)> {
         self.clips
             .iter()
             .find(|(e, _, _)| *e == event)
             .map(|(_, h, secs)| (h, *secs))
     }
+
+    /// Re-renders `event` (override or built-in) so its next play is new.
+    pub fn rebake(
+        &mut self,
+        sources: &mut Assets<AudioSource>,
+        event: SfxEvent,
+        overrides: Option<&SfxOverrides>,
+    ) {
+        let source = bake_with(event, overrides);
+        let secs = wav_secs(&source);
+        let handle = sources.add(source);
+        match self.clips.iter_mut().find(|(e, _, _)| *e == event) {
+            Some(clip) => *clip = (event, handle, secs),
+            None => self.clips.push((event, handle, secs)),
+        }
+    }
 }
 
-pub fn setup_sfx(mut commands: Commands, mut sources: ResMut<Assets<AudioSource>>) {
+/// `Startup`, after `content::audio::load_embedded_audio`: bakes every
+/// event, from `sfx.json` where it has one.
+pub fn setup_sfx(
+    mut commands: Commands,
+    mut sources: ResMut<Assets<AudioSource>>,
+    overrides: Option<Res<SfxOverrides>>,
+) {
     let mut assets = SfxAssets::default();
     for event in SfxEvent::ALL {
-        let source = bake(*event);
-        let secs = wav_secs(&source);
-        assets.clips.push((*event, sources.add(source), secs));
+        assets.rebake(&mut sources, *event, overrides.as_deref());
     }
     commands.insert_resource(assets);
 }
@@ -148,9 +194,36 @@ impl Source {
     }
 }
 
+/// An extra voice of a cue (see [`Cue::layers`]), named like a cue so
+/// `songs.json` can replace it.
+#[derive(Debug)]
+pub struct Layer {
+    pub name: &'static str,
+    pub source: Source,
+}
+
+impl Layer {
+    pub const fn baked(name: &'static str, f: fn() -> AudioSource) -> Self {
+        Self {
+            name,
+            source: Source::Baked(f),
+        }
+    }
+
+    pub const fn file(name: &'static str, path: &'static str) -> Self {
+        Self {
+            name,
+            source: Source::File(path),
+        }
+    }
+}
+
 /// Music for one state (or one switch): a source, how it plays, its layers.
 #[derive(Debug)]
 pub struct Cue {
+    /// The cue's name: its key in `content/audio/songs.json` and for
+    /// `sound.preview`. Unique across `MUSIC` and its layers (a test checks).
+    pub name: &'static str,
     pub source: Source,
     pub looping: bool,
     /// Seconds to full volume when the cue starts.
@@ -160,15 +233,16 @@ pub struct Cue {
     pub volume: f32,
     /// Extra voices of the same length and tempo, started with the cue at
     /// zero volume; `LayerEvent::Start(i)` fades layer `i` in.
-    pub layers: &'static [Source],
+    pub layers: &'static [Layer],
 }
 
 /// Layer fade time, both ways.
 pub const LAYER_FADE: f32 = 0.8;
 
 impl Cue {
-    pub const fn loop_baked(f: fn() -> AudioSource) -> Self {
+    pub const fn loop_baked(name: &'static str, f: fn() -> AudioSource) -> Self {
         Self {
+            name,
             source: Source::Baked(f),
             looping: true,
             fade_in: 2.0,
@@ -178,8 +252,9 @@ impl Cue {
         }
     }
 
-    pub const fn sting_baked(f: fn() -> AudioSource) -> Self {
+    pub const fn sting_baked(name: &'static str, f: fn() -> AudioSource) -> Self {
         Self {
+            name,
             source: Source::Baked(f),
             looping: false,
             fade_in: 0.0,
@@ -189,8 +264,9 @@ impl Cue {
         }
     }
 
-    pub const fn loop_file(path: &'static str) -> Self {
+    pub const fn loop_file(name: &'static str, path: &'static str) -> Self {
         Self {
+            name,
             source: Source::File(path),
             looping: true,
             fade_in: 2.0,
@@ -200,8 +276,9 @@ impl Cue {
         }
     }
 
-    pub const fn sting_file(path: &'static str) -> Self {
+    pub const fn sting_file(name: &'static str, path: &'static str) -> Self {
         Self {
+            name,
             source: Source::File(path),
             looping: false,
             fade_in: 0.0,
@@ -211,7 +288,7 @@ impl Cue {
         }
     }
 
-    pub const fn with_layers(mut self, layers: &'static [Source]) -> Self {
+    pub const fn with_layers(mut self, layers: &'static [Layer]) -> Self {
         self.layers = layers;
         self
     }
@@ -229,16 +306,25 @@ impl Cue {
 }
 
 /// The house sting under the studio logo. Same in every game.
-pub static HOUSE_CUE: Cue = Cue::sting_baked(house::house_sting);
-pub static MENU_CUE: Cue =
-    Cue::loop_baked(|| tracker::render_loop(&songs::MENU).expect("MENU is well-formed"));
-pub static PLAY_CUE: Cue =
-    Cue::loop_baked(|| tracker::render_loop(&songs::PLAY).expect("PLAY is well-formed"))
-        .with_layers(&[Source::Baked(|| {
-            tracker::render_loop(&songs::PLAY_LAYER).expect("PLAY_LAYER is well-formed")
-        })]);
-pub static GAME_OVER_CUE: Cue = Cue::sting_baked(songs::game_over_sting);
-pub static DEMO_END_CUE: Cue = Cue::sting_baked(songs::demo_end_tag);
+/// Its name is `"house"`; `songs.json` cannot replace it.
+pub static HOUSE_CUE: Cue = Cue::sting_baked(HOUSE, house::house_sting);
+pub static MENU_CUE: Cue = Cue::loop_baked("menu", || {
+    tracker::render_loop(&songs::MENU).expect("MENU is well-formed")
+});
+pub static PLAY_CUE: Cue = Cue::loop_baked("play", || {
+    tracker::render_loop(&songs::PLAY).expect("PLAY is well-formed")
+})
+.with_layers(&[Layer::baked("play_layer", || {
+    tracker::render_loop(&songs::PLAY_LAYER).expect("PLAY_LAYER is well-formed")
+})]);
+pub static GAME_OVER_CUE: Cue = Cue::sting_baked("game_over", songs::game_over_sting);
+pub static DEMO_END_CUE: Cue = Cue::sting_baked("demo_end", songs::demo_end_tag);
+
+/// The house sting's cue name. The one sound a game's files cannot replace.
+pub const HOUSE: &str = "house";
+
+/// Release tail of a sting whose song comes from `songs.json`.
+pub const OVERRIDE_STING_TAIL: f32 = 1.5;
 
 /// Per-state music. Every `GameState` has a row (a test checks); `None` is a
 /// deliberate silence, written up in `docs/audio-identity.md`. `HowToPlay`
@@ -268,21 +354,143 @@ pub enum LayerEvent {
     Stop(usize),
 }
 
-/// Baked cues, rendered once and kept (keyed by the render function).
+/// One playable part of a cue: the cue itself or one of its layers.
+#[derive(Clone, Copy, Debug)]
+pub struct Part<'a> {
+    pub name: &'a str,
+    pub source: &'a Source,
+    pub looping: bool,
+}
+
+impl Cue {
+    /// The cue's own part.
+    pub fn part(&self) -> Part<'_> {
+        Part {
+            name: self.name,
+            source: &self.source,
+            looping: self.looping,
+        }
+    }
+
+    /// Layer `i` as a part (it plays the way its cue does).
+    pub fn layer_part(&self, i: usize) -> Option<Part<'_>> {
+        self.layers.get(i).map(|l| Part {
+            name: l.name,
+            source: &l.source,
+            looping: self.looping,
+        })
+    }
+
+    /// The cue's part and its layers', in order.
+    pub fn parts(&self) -> impl Iterator<Item = Part<'_>> {
+        std::iter::once(self.part())
+            .chain((0..self.layers.len()).filter_map(|i| self.layer_part(i)))
+    }
+}
+
+/// Every distinct cue in `MUSIC`, in table order.
+pub fn music_cues() -> Vec<&'static Cue> {
+    let mut out: Vec<&'static Cue> = Vec::new();
+    for cue in MUSIC.iter().filter_map(|(_, c)| *c) {
+        if !out.iter().any(|c| std::ptr::eq(*c, cue)) {
+            out.push(cue);
+        }
+    }
+    out
+}
+
+/// Every cue and layer name in `MUSIC`, in table order, once each.
+pub fn cue_names() -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for cue in music_cues() {
+        for name in std::iter::once(cue.name).chain(cue.layers.iter().map(|l| l.name)) {
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
+/// The part called `name` (a cue or a layer in `MUSIC`).
+pub fn find_part(name: &str) -> Option<Part<'static>> {
+    music_cues()
+        .into_iter()
+        .flat_map(|c| c.parts())
+        .find(|p| p.name == name)
+}
+
+/// Every name `sound.preview` takes: the events, then the cues and layers.
+pub fn sound_names() -> Vec<String> {
+    SfxEvent::ALL
+        .iter()
+        .map(|e| e.name())
+        .chain(cue_names().into_iter().map(str::to_string))
+        .collect()
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum CacheKey {
+    /// A built-in baked source, by its render function.
+    Baked(usize),
+    /// A `songs.json` song, by cue (or layer) name.
+    Song(String),
+}
+
+/// Rendered music, kept: built-in baked sources by render function and
+/// `songs.json` songs by name. Overrides win over the built-in source.
 #[derive(Resource, Default)]
-pub struct MusicCache(Vec<(usize, Handle<AudioSource>)>);
+pub struct MusicCache(Vec<(CacheKey, Handle<AudioSource>)>);
+
+fn override_for<'a>(overrides: Option<&'a SongOverrides>, name: &str) -> Option<&'a Song> {
+    overrides.and_then(|o| o.0.iter().find(|(n, _)| n == name).map(|(_, s)| s))
+}
 
 impl MusicCache {
+    fn key_for(part: &Part, overrides: Option<&SongOverrides>) -> Option<CacheKey> {
+        if override_for(overrides, part.name).is_some() {
+            return Some(CacheKey::Song(part.name.to_string()));
+        }
+        part.source.key().map(CacheKey::Baked)
+    }
+
+    fn cached(&self, key: &CacheKey) -> Option<&Handle<AudioSource>> {
+        self.0.iter().find(|(k, _)| k == key).map(|(_, h)| h)
+    }
+
+    /// The part's audio: its `songs.json` song when it has one, else its
+    /// source. Rendered on first use and kept.
     pub fn handle(
         &mut self,
         sources: &mut Assets<AudioSource>,
         asset_server: &AssetServer,
-        source: &Source,
+        part: Part,
+        overrides: Option<&SongOverrides>,
     ) -> Handle<AudioSource> {
-        match source {
+        if let Some(song) = override_for(overrides, part.name) {
+            let key = CacheKey::Song(part.name.to_string());
+            if let Some(h) = self.cached(&key) {
+                return h.clone();
+            }
+            let rendered = if part.looping {
+                tracker::render_loop(song)
+            } else {
+                tracker::render_sting(song, OVERRIDE_STING_TAIL)
+            };
+            match rendered {
+                Ok(source) => {
+                    let handle = sources.add(source);
+                    self.0.push((key, handle.clone()));
+                    return handle;
+                }
+                // `set_songs` checked it; never expected.
+                Err(e) => error!("song \"{}\": {e:?}", part.name),
+            }
+        }
+        match part.source {
             Source::Baked(f) => {
-                let key = *f as usize;
-                if let Some((_, h)) = self.0.iter().find(|(k, _)| *k == key) {
+                let key = CacheKey::Baked(*f as usize);
+                if let Some(h) = self.cached(&key) {
                     return h.clone();
                 }
                 let handle = sources.add(f());
@@ -293,35 +501,47 @@ impl MusicCache {
         }
     }
 
-    /// Every baked source in `MUSIC` and its layers, in table order.
-    fn baked_sources() -> impl Iterator<Item = &'static Source> {
-        MUSIC
-            .iter()
-            .filter_map(|(_, cue)| *cue)
-            .flat_map(|cue| std::iter::once(&cue.source).chain(cue.layers.iter()))
-            .filter(|s| matches!(s, Source::Baked(_)))
+    /// Drops the rendered `songs.json` song for `name`, so the next play
+    /// renders the new one (or the built-in source).
+    pub fn forget_song(&mut self, name: &str) {
+        self.0
+            .retain(|(k, _)| !matches!(k, CacheKey::Song(n) if n == name));
     }
 
-    /// Renders every baked source in `MUSIC` and its layers.
-    pub fn prewarm(&mut self, sources: &mut Assets<AudioSource>, asset_server: &AssetServer) {
-        for source in Self::baked_sources() {
-            self.handle(sources, asset_server, source);
+    /// Every part in `MUSIC` that renders in-process, in table order.
+    fn renderable_parts(overrides: Option<&SongOverrides>) -> Vec<(Part<'static>, CacheKey)> {
+        music_cues()
+            .into_iter()
+            .flat_map(|c| c.parts())
+            .filter_map(|p| Self::key_for(&p, overrides).map(|k| (p, k)))
+            .collect()
+    }
+
+    /// Renders every baked part in `MUSIC` and its layers.
+    pub fn prewarm(
+        &mut self,
+        sources: &mut Assets<AudioSource>,
+        asset_server: &AssetServer,
+        overrides: Option<&SongOverrides>,
+    ) {
+        for (part, _) in Self::renderable_parts(overrides) {
+            self.handle(sources, asset_server, part, overrides);
         }
     }
 
-    /// Renders one not-yet-cached baked source; false when all are done.
+    /// Renders one not-yet-cached part; false when all are done.
     pub fn prewarm_step(
         &mut self,
         sources: &mut Assets<AudioSource>,
         asset_server: &AssetServer,
+        overrides: Option<&SongOverrides>,
     ) -> bool {
-        let next = Self::baked_sources().find(|s| {
-            s.key()
-                .is_some_and(|key| !self.0.iter().any(|(k, _)| *k == key))
-        });
+        let next = Self::renderable_parts(overrides)
+            .into_iter()
+            .find(|(_, key)| self.cached(key).is_none());
         match next {
-            Some(source) => {
-                self.handle(sources, asset_server, source);
+            Some((part, _)) => {
+                self.handle(sources, asset_server, part, overrides);
                 true
             }
             None => false,
@@ -335,8 +555,9 @@ pub fn prewarm_music(
     mut cache: ResMut<MusicCache>,
     mut sources: ResMut<Assets<AudioSource>>,
     asset_server: Res<AssetServer>,
+    overrides: Option<Res<SongOverrides>>,
 ) {
-    cache.prewarm_step(&mut sources, &asset_server);
+    cache.prewarm_step(&mut sources, &asset_server, overrides.as_deref());
 }
 
 /// What the director is playing and whether a switch overrides the table.
@@ -344,6 +565,9 @@ pub fn prewarm_music(
 pub struct CurrentCue {
     pub cue: Option<&'static Cue>,
     pub switched: Option<&'static Cue>,
+    /// Set when the current cue's song changed (`set_songs`): the director
+    /// starts it again from the new audio.
+    pub restart: bool,
 }
 
 /// Music ducks to half while a sting plays.
@@ -441,8 +665,10 @@ pub fn music_director(
     mut sources: ResMut<Assets<AudioSource>>,
     asset_server: Res<AssetServer>,
     mut playing: Query<(Entity, &mut MusicVoice), With<MusicTrack>>,
+    overrides: Option<Res<SongOverrides>>,
 ) {
-    let mut changed = false;
+    let restart = std::mem::take(&mut current.restart);
+    let mut changed = restart;
     if state.is_changed() {
         current.switched = None;
         changed = true;
@@ -467,7 +693,7 @@ pub fn music_director(
         (None, None) => true,
         _ => false,
     };
-    if same {
+    if same && !restart {
         return;
     }
     current.cue = want;
@@ -485,7 +711,8 @@ pub fn music_director(
     } else {
         PlaybackMode::Once
     };
-    let handle = cache.handle(&mut sources, &asset_server, &cue.source);
+    let overrides = overrides.as_deref();
+    let handle = cache.handle(&mut sources, &asset_server, cue.part(), overrides);
     commands.spawn((
         MusicTrack,
         AudioPlayer::new(handle),
@@ -505,8 +732,11 @@ pub fn music_director(
             layer: None,
         },
     ));
-    for (i, layer) in cue.layers.iter().enumerate() {
-        let handle = cache.handle(&mut sources, &asset_server, layer);
+    for i in 0..cue.layers.len() {
+        let Some(part) = cue.layer_part(i) else {
+            continue;
+        };
+        let handle = cache.handle(&mut sources, &asset_server, part, overrides);
         commands.spawn((
             MusicTrack,
             AudioPlayer::new(handle),
@@ -566,6 +796,58 @@ pub fn update_music_voices(
     }
 }
 
+// --- Preview ------------------------------------------------------------------
+
+/// A cue or layer playing for `sound.preview`; the next preview replaces it.
+#[derive(Component)]
+pub struct PreviewVoice;
+
+/// True in a build that plays sound (the windowed game). The headless sim
+/// and the verifier have none of these, and no song or sound override.
+pub fn audio_present(world: &World) -> bool {
+    world.contains_resource::<Assets<AudioSource>>()
+        && world.contains_resource::<AssetServer>()
+        && world.contains_resource::<MusicCache>()
+}
+
+/// Plays the event or cue called `name` once. An event goes through the
+/// bus like gameplay's (a sting ducks the music); a cue or layer plays its
+/// current audio (its `songs.json` song when it has one) once, over the
+/// music, replacing the last preview. False for an unknown name or in a
+/// build without sound.
+pub fn preview(world: &mut World, name: &str) -> bool {
+    if !audio_present(world) {
+        return false;
+    }
+    if let Some(event) = SfxEvent::from_name(name) {
+        world.write_message(event);
+        return true;
+    }
+    let Some(part) = find_part(name) else {
+        return false;
+    };
+    let handle = world.resource_scope(|world, mut cache: Mut<MusicCache>| {
+        world.resource_scope(|world, mut sources: Mut<Assets<AudioSource>>| {
+            let server = world.resource::<AssetServer>();
+            let overrides = world.get_resource::<SongOverrides>();
+            cache.handle(&mut sources, server, part, overrides)
+        })
+    });
+    let old: Vec<Entity> = world
+        .query_filtered::<Entity, With<PreviewVoice>>()
+        .iter(world)
+        .collect();
+    for e in old {
+        world.despawn(e);
+    }
+    world.spawn((
+        PreviewVoice,
+        AudioPlayer::new(handle),
+        PlaybackSettings::DESPAWN,
+    ));
+    true
+}
+
 // --- Export -------------------------------------------------------------------
 
 /// Every baked cue, layer and sound effect, named for a WAV dump
@@ -588,7 +870,7 @@ pub fn export_inventory() -> Vec<(String, AudioSource)> {
         let state = format!("{state:?}").to_lowercase();
         push_baked(&mut out, format!("music/{state}"), &cue.source);
         for (i, layer) in cue.layers.iter().enumerate() {
-            push_baked(&mut out, format!("music/{state}-layer-{i}"), layer);
+            push_baked(&mut out, format!("music/{state}-layer-{i}"), &layer.source);
         }
     }
     for event in SfxEvent::ALL {
@@ -708,12 +990,64 @@ mod tests {
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         let asset_server = app.world().resource::<AssetServer>().clone();
         let mut cache = MusicCache::default();
-        let a = cache.handle(&mut sources, &asset_server, &HOUSE_CUE.source);
-        let b = cache.handle(&mut sources, &asset_server, &HOUSE_CUE.source);
+        let a = cache.handle(&mut sources, &asset_server, HOUSE_CUE.part(), None);
+        let b = cache.handle(&mut sources, &asset_server, HOUSE_CUE.part(), None);
         assert_eq!(a, b);
         assert_eq!(sources.len(), 1);
-        cache.prewarm(&mut sources, &asset_server);
+        cache.prewarm(&mut sources, &asset_server, None);
         // house, menu, play, play layer, game over, demo end
         assert_eq!(sources.len(), 6);
+        assert!(!cache.prewarm_step(&mut sources, &asset_server, None));
+    }
+
+    #[test]
+    fn every_cue_and_layer_has_a_unique_name() {
+        let mut seen: Vec<(&str, *const Source)> = Vec::new();
+        for cue in MUSIC.iter().filter_map(|(_, c)| *c) {
+            for part in cue.parts() {
+                assert!(!part.name.is_empty());
+                match seen.iter().find(|(n, _)| *n == part.name) {
+                    // The same cue in two rows (menu, how-to-play) is fine.
+                    Some((_, src)) => assert!(
+                        std::ptr::eq(*src, part.source),
+                        "two parts are called {}",
+                        part.name
+                    ),
+                    None => seen.push((part.name, part.source)),
+                }
+            }
+        }
+        assert_eq!(
+            cue_names(),
+            [
+                "house",
+                "menu",
+                "play",
+                "play_layer",
+                "game_over",
+                "demo_end"
+            ]
+        );
+        for e in SfxEvent::ALL {
+            assert!(!cue_names().contains(&e.name().as_str()), "{e:?}");
+            assert_eq!(SfxEvent::from_name(&e.name()), Some(*e));
+        }
+        let names = sound_names();
+        let mut sorted = names.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), names.len());
+        assert_eq!(names.len(), SfxEvent::ALL.len() + 6);
+        assert_eq!(find_part("play_layer").map(|p| p.looping), Some(true));
+        assert_eq!(find_part("game_over").map(|p| p.looping), Some(false));
+        assert!(find_part("nope").is_none());
+    }
+
+    #[test]
+    fn bake_renders_the_program() {
+        for e in SfxEvent::ALL {
+            assert!(bake(*e).bytes == program(*e).render().bytes);
+            assert!(bake_with(*e, None).bytes == bake(*e).bytes);
+        }
     }
 }

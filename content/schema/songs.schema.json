@@ -59,7 +59,11 @@
         },
         "noise": {
           "type": "array",
-          "items": { "type": "string" },
+          "prefixItems": [
+            { "enum": ["white", "periodic"] },
+            { "enum": ["div512", "div1024", "div2048", "tone3"] }
+          ],
+          "items": false,
           "minItems": 2,
           "maxItems": 2
         }

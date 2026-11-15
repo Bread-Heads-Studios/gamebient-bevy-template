@@ -278,6 +278,14 @@ pub struct InstrumentData {
 
 const MAX_PATTERN_CHARS: usize = 16384;
 
+/// The noise modes and clock rates the chip has, by their file names.
+pub const NOISE_MODES: [&str; 2] = ["white", "periodic"];
+pub const NOISE_RATES: [&str; 4] = ["div512", "div1024", "div2048", "tone3"];
+
+fn noise_names_ok(mode: &str, rate: &str) -> bool {
+    NOISE_MODES.contains(&mode) && NOISE_RATES.contains(&rate)
+}
+
 fn check_instruments(cue: &str, list: &[InstrumentData]) -> Result<(), ContentError> {
     if list.len() > 64 {
         return err(format!("The song \"{cue}\" has more than 64 instruments"));
@@ -298,6 +306,13 @@ fn check_instruments(cue: &str, list: &[InstrumentData]) -> Result<(), ContentEr
         {
             return err(format!(
                 "An instrument in \"{cue}\" has a vibrato that is not valid"
+            ));
+        }
+        if let Some((mode, rate)) = &i.noise
+            && !noise_names_ok(mode, rate)
+        {
+            return err(format!(
+                "An instrument in \"{cue}\" needs a noise of white or periodic at div512, div1024, div2048 or tone3"
             ));
         }
     }
@@ -393,7 +408,9 @@ pub enum FxOp {
 fn note_ok(n: &NoteOrHz) -> bool {
     match n {
         NoteOrHz::Hz(h) => h.is_finite() && *h > 0.0 && *h <= 20000.0,
-        NoteOrHz::Note(s) => !s.is_empty() && s.len() <= 8,
+        NoteOrHz::Note(s) => {
+            !s.is_empty() && s.len() <= 8 && crate::game::audio::chip::note_hz(s).is_some()
+        }
     }
 }
 
@@ -432,15 +449,7 @@ fn op_ok(op: &FxOp) -> bool {
             a0,
             a1,
             frames,
-        } => {
-            !mode.is_empty()
-                && mode.len() <= 16
-                && !rate.is_empty()
-                && rate.len() <= 16
-                && *a0 <= 15
-                && *a1 <= 15
-                && frames_ok(*frames)
-        }
+        } => noise_names_ok(mode, rate) && *a0 <= 15 && *a1 <= 15 && frames_ok(*frames),
         FxOp::Rest { frames } => frames_ok(*frames),
     }
 }
@@ -466,7 +475,7 @@ impl SfxFile {
             }
             if !parts.iter().flatten().all(op_ok) {
                 return err(format!(
-                    "A sound in \"{k}\" has a voice above 2, a volume above 15, a pitch that is not valid or a length outside 1 to 600 frames"
+                    "A sound in \"{k}\" has a voice above 2, a volume above 15, a pitch that is not valid, a noise that is not white or periodic at div512, div1024, div2048 or tone3, or a length outside 1 to 600 frames"
                 ));
             }
         }
@@ -577,6 +586,15 @@ mod tests {
     #[test]
     fn songs_rules() {
         assert!(SongsFile::parse(&song("")).is_ok());
+        for mode in NOISE_MODES {
+            for rate in NOISE_RATES {
+                let s = String::from_utf8(song("")).unwrap().replace(
+                    "[15,8,0]}",
+                    &format!("[1],\"noise\":[\"{mode}\",\"{rate}\"]}}"),
+                );
+                assert!(SongsFile::parse(s.as_bytes()).is_ok(), "{mode} {rate}");
+            }
+        }
         for (from, to) in [
             ("\"bpm\":120", "\"bpm\":29"),
             ("\"bpm\":120", "\"bpm\":301"),
@@ -586,6 +604,8 @@ mod tests {
             ("[\"a\",\"b\",\"c\"]", "[\"a\",\"b\",\"c\",\"d\"]"),
             ("[15,8,0]", "[16]"),
             ("[15,8,0]", "[]"),
+            ("[15,8,0]}", "[1],\"noise\":[\"white\",\"low\"]}"),
+            ("[15,8,0]}", "[1],\"noise\":[\"loud\",\"div512\"]}"),
         ] {
             let s = String::from_utf8(song("")).unwrap().replace(from, to);
             assert!(SongsFile::parse(s.as_bytes()).is_err(), "{to}");
@@ -596,7 +616,7 @@ mod tests {
     #[test]
     fn sfx_rules() {
         let ok = br#"{"v":1,"sfx":{"Jump":[[{"op":"tone","voice":0,"from":"C4","to":440.0,"a0":15,"a1":0,"frames":6}],
-            [{"op":"rest","frames":2},{"op":"noise","mode":"white","rate":"low","a0":8,"a1":0,"frames":3}]]}}"#;
+            [{"op":"rest","frames":2},{"op":"noise","mode":"white","rate":"div512","a0":8,"a1":0,"frames":3}]]}}"#;
         assert!(SfxFile::parse(ok).is_ok());
         for op in [
             r#"{"op":"hit","voice":3,"note":"C4","frames":1}"#,
@@ -606,6 +626,10 @@ mod tests {
             r#"{"op":"rest"}"#,
             r#"{"op":"boom","frames":1}"#,
             r#"{"op":"slide","voice":0,"from":0,"to":2,"frames":1}"#,
+            r#"{"op":"hit","voice":0,"note":"h4","frames":1}"#,
+            r#"{"op":"hit","voice":0,"note":"c#","frames":1}"#,
+            r#"{"op":"noise","mode":"white","rate":"low","a0":8,"a1":0,"frames":3}"#,
+            r#"{"op":"noise","mode":"pink","rate":"div512","a0":8,"a1":0,"frames":3}"#,
         ] {
             let s = format!(r#"{{"v":1,"sfx":{{"X":[[{op}]]}}}}"#);
             assert!(SfxFile::parse(s.as_bytes()).is_err(), "{op}");

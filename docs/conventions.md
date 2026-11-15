@@ -561,10 +561,13 @@ env)` with `.with_release(frames)`, `.with_arp(&[0, 4, 7])` and
 `.with_vibrato(cents, hz)`; `env` is attenuation per 60 Hz frame, last value
 held. Every voice must tile to the song's length; `render_loop` names the
 voice that does not. Sound effects are `tracker::Fx` programs (`.hit`,
-`.slide`, `.tone`, `.noise`, `.then`, `.with`) baked in `audio::bake`.
+`.slide`, `.tone`, `.noise`, `.then`, `.with`) built in `audio::program`
+and baked by `audio::bake`. `content/audio/sfx.json` may replace an
+event's program and `content/audio/songs.json` a named cue's song
+(`game::content::audio`); presentation only, never read by the sim.
 
 **Cues.** `MUSIC` in `src/game/audio/mod.rs` maps every `GameState` to a
-`Cue`: a `Source::Baked(fn)` or `Source::File("audio/music/x.ogg")`, looping
+`Cue` with a unique `name`: a `Source::Baked(fn)` or `Source::File("audio/music/x.ogg")`, looping
 or one-shot, its fades and volume, and `layers` of the same length that
 start with it at zero volume and fade in on `LayerEvent::Start(i)`. Gameplay
 changes the music within a state with `CueEvent::Switch(&CUE)` (a boss, a

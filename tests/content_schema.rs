@@ -127,7 +127,7 @@ fn songs() {
         song(r#""bars":4"#, r#""bars":64"#),
         song(
             r#"{"env":[15,8,0]}"#,
-            r#"{"env":[15],"release":3,"arp":[0,4,7],"vibrato":[5,0.5],"noise":["white","low"]}"#,
+            r#"{"env":[15],"release":3,"arp":[0,4,7],"vibrato":[5,0.5],"noise":["periodic","div2048"]}"#,
         ),
         song(
             r#""bars":4"#,
@@ -148,6 +148,14 @@ fn songs() {
         song(r#"{"env":[15,8,0]}"#, r#"{"env":[1],"arp":[200]}"#),
         song(r#"{"env":[15,8,0]}"#, r#"{"env":[1],"vibrato":[1]}"#),
         song(r#"{"env":[15,8,0]}"#, r#"{"env":[1],"noise":["white"]}"#),
+        song(
+            r#"{"env":[15,8,0]}"#,
+            r#"{"env":[1],"noise":["white","low"]}"#,
+        ),
+        song(
+            r#"{"env":[15,8,0]}"#,
+            r#"{"env":[1],"noise":["loud","div512"]}"#,
+        ),
         r#"{"v":1,"songs":{"1x":{}}}"#.to_string(),
     ];
     let valid: Vec<&str> = valid.iter().map(String::as_str).collect();
@@ -163,7 +171,8 @@ fn sfx() {
         wrap(r#"{"op":"tone","voice":0,"from":"C4","to":440.5,"a0":15,"a1":0,"frames":6}"#),
         wrap(r#"{"op":"hit","voice":2,"note":880,"frames":600}"#),
         wrap(r#"{"op":"slide","voice":1,"from":"C4","to":"C5","frames":1}"#),
-        wrap(r#"{"op":"noise","mode":"white","rate":"low","a0":8,"a1":0,"frames":3}"#),
+        wrap(r#"{"op":"noise","mode":"white","rate":"div512","a0":8,"a1":0,"frames":3}"#),
+        wrap(r#"{"op":"noise","mode":"periodic","rate":"tone3","a0":8,"a1":0,"frames":3}"#),
         wrap(r#"{"op":"rest","frames":2}"#),
         r#"{"v":1,"sfx":{"Win":[[{"op":"rest","frames":1}],[{"op":"rest","frames":2},{"op":"rest","frames":3}]]}}"#
             .to_string(),
@@ -178,7 +187,9 @@ fn sfx() {
         wrap(r#"{"op":"rest","frames":1,"voice":0}"#),
         wrap(r#"{"op":"boom","frames":1}"#),
         wrap(r#"{"op":"slide","voice":0,"from":0,"to":2,"frames":1}"#),
-        wrap(r#"{"op":"noise","mode":"","rate":"low","a0":1,"a1":0,"frames":1}"#),
+        wrap(r#"{"op":"noise","mode":"","rate":"div512","a0":1,"a1":0,"frames":1}"#),
+        wrap(r#"{"op":"noise","mode":"white","rate":"low","a0":1,"a1":0,"frames":1}"#),
+        wrap(r#"{"op":"noise","mode":"pink","rate":"div512","a0":1,"a1":0,"frames":1}"#),
         r#"{"v":1,"sfx":{"X":[]}}"#.to_string(),
         r#"{"v":1,"sfx":{"X":[[]]}}"#.to_string(),
         r#"{"v":1,"sfx":{"1x":[[{"op":"rest","frames":1}]]}}"#.to_string(),

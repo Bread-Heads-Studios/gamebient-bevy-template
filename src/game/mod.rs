@@ -163,7 +163,14 @@ impl Plugin for GamePlugin {
             app.init_resource::<audio::MusicCache>()
                 .init_resource::<audio::CurrentCue>()
                 .init_resource::<audio::Duck>()
-                .add_systems(Startup, (setup_scene, audio::setup_sfx))
+                .add_systems(
+                    Startup,
+                    (
+                        setup_scene,
+                        // Bakes `sfx.json` programs, so after they load.
+                        audio::setup_sfx.after(content::audio::load_embedded_audio),
+                    ),
+                )
                 .add_systems(
                     Update,
                     (

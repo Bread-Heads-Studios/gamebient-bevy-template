@@ -10,6 +10,8 @@
 //! | host → game | `checks.run`     | `{ "names": [ … ] }`                              |
 //! | game → host | `check`          | `{ name, ok, message }`, one per check            |
 //! | host → game | `run.restart`    | —                                                 |
+//! | host → game | `sound.preview`  | `{ name }`: an `SfxEvent` name or a cue/layer name |
+//! | game → host | `sound`          | `{ name, ok: true }` or `{ name, ok: false, error }` |
 //!
 //! Everything here runs in `Update`; the only thing that touches run state
 //! is a push onto `PendingTunes`, which `apply_pending_tunes` drains inside
@@ -29,11 +31,15 @@ use super::index::{TunableIndex, snapshot};
 use super::value::Value;
 
 /// What the game tells the editor beyond its tunables: the sound names a
-/// sound picker may offer. Filled by the game's plugin.
+/// sound picker may offer (and `sound.preview` takes). Starts as every
+/// event and cue name (`audio::sound_names`).
 #[derive(Resource, Default)]
 pub struct EditorInfo {
-    pub sounds: Vec<&'static str>,
+    pub sounds: Vec<String>,
 }
+
+#[derive(Resource, Default)]
+struct PreviewsRequested(Vec<String>);
 
 #[derive(Resource, Default)]
 struct ListRequested(bool);
@@ -49,32 +55,36 @@ pub struct EditorProtocolPlugin;
 
 impl Plugin for EditorProtocolPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<EditorInfo>()
-            .init_resource::<ListRequested>()
-            .init_resource::<ChecksRequested>()
-            .init_resource::<RestartPending>()
-            // Around the menu-time drain (`apply_pending_tunes` in `Update`,
-            // registered by `TunablesPlugin`): a set received this frame
-            // applies this frame and is reported this frame. During a run
-            // the drain is in `SimSet` and the report follows a tick later.
-            .add_systems(
-                Update,
-                (handle_custom_commands, restart_run)
-                    .chain()
-                    .before(apply_pending_tunes),
+        app.insert_resource(EditorInfo {
+            sounds: crate::game::audio::sound_names(),
+        })
+        .init_resource::<PreviewsRequested>()
+        .init_resource::<ListRequested>()
+        .init_resource::<ChecksRequested>()
+        .init_resource::<RestartPending>()
+        // Around the menu-time drain (`apply_pending_tunes` in `Update`,
+        // registered by `TunablesPlugin`): a set received this frame
+        // applies this frame and is reported this frame. During a run
+        // the drain is in `SimSet` and the report follows a tick later.
+        .add_systems(
+            Update,
+            (handle_custom_commands, restart_run)
+                .chain()
+                .before(apply_pending_tunes),
+        )
+        .add_systems(
+            Update,
+            (
+                answer_tunables_list,
+                run_requested_checks,
+                report_tune_applied,
+                run_sound_previews,
             )
-            .add_systems(
-                Update,
-                (
-                    answer_tunables_list,
-                    run_requested_checks,
-                    report_tune_applied,
-                )
-                    .chain()
-                    .after(apply_pending_tunes),
-            )
-            .add_systems(OnEnter(GameState::Playing), request_list)
-            .add_systems(OnEnter(GameState::Menu), resume_restart);
+                .chain()
+                .after(apply_pending_tunes),
+        )
+        .add_systems(OnEnter(GameState::Playing), request_list)
+        .add_systems(OnEnter(GameState::Menu), resume_restart);
     }
 }
 
@@ -89,6 +99,7 @@ fn handle_custom_commands(
     mut list: ResMut<ListRequested>,
     mut checks: ResMut<ChecksRequested>,
     mut restart: ResMut<RestartPending>,
+    mut previews: ResMut<PreviewsRequested>,
     mut out: MessageWriter<HostEvent>,
 ) {
     for command in commands.read() {
@@ -129,6 +140,12 @@ fn handle_custom_commands(
                 }
             }
             "run.restart" => restart.0 = true,
+            "sound.preview" => previews.0.push(
+                data.get("name")
+                    .and_then(Json::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
             _ => {}
         }
     }
@@ -228,6 +245,25 @@ fn run_requested_checks(world: &mut World) {
             "check",
             json!({ "name": name, "ok": ok, "message": message }),
         ));
+    }
+}
+
+/// `sound.preview`: plays each requested sound and answers `sound`.
+fn run_sound_previews(world: &mut World) {
+    let names: Vec<String> = core::mem::take(&mut world.resource_mut::<PreviewsRequested>().0);
+    for name in names {
+        let reply = if crate::game::audio::preview(world, &name) {
+            json!({ "name": name, "ok": true })
+        } else {
+            let known = crate::game::audio::sound_names().contains(&name);
+            let error = if known {
+                "This build plays no sound.".to_string()
+            } else {
+                format!("There is no sound called \"{name}\".")
+            };
+            json!({ "name": name, "ok": false, "error": error })
+        };
+        world.write_message(custom("sound", reply));
     }
 }
 
@@ -404,6 +440,48 @@ mod tests {
         assert_eq!(j["value"], next.to_json());
         assert_eq!(j["applied"], "now");
         assert_eq!(read(app.world(), &entry), Some(next));
+    }
+
+    #[test]
+    fn sound_preview_answers_and_the_catalog_lists_sounds() {
+        let mut app = build_headless_app();
+        app.update();
+        drain_custom(&mut app);
+        let j = catalog_json(app.world());
+        let sounds: Vec<&str> = j["sounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Json::as_str)
+            .collect();
+        for want in [
+            "confirm",
+            "pause",
+            "screensweep",
+            "house",
+            "menu",
+            "play_layer",
+        ] {
+            assert!(sounds.contains(&want), "{want}: {sounds:?}");
+        }
+        send(&mut app, "sound.preview", "{\"name\":\"nope\"}");
+        send(&mut app, "sound.preview", "{\"name\":\"menu\"}");
+        app.update();
+        let events: Vec<Json> = drain_custom(&mut app)
+            .iter()
+            .filter(|e| e.0 == "sound")
+            .map(|e| serde_json::from_str(&e.1).unwrap())
+            .collect();
+        assert_eq!(
+            events[0],
+            json!({ "name": "nope", "ok": false, "error": "There is no sound called \"nope\"." })
+        );
+        // The headless sim has no sound; the windowed path is tested in
+        // `content::audio`.
+        assert_eq!(
+            events[1],
+            json!({ "name": "menu", "ok": false, "error": "This build plays no sound." })
+        );
     }
 
     #[test]

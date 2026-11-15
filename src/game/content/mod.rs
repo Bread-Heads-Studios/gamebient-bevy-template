@@ -4,8 +4,10 @@
 //! limits the JSON schemas in `content/schema/` state. `kit` holds the kinds
 //! of Thing a level places and `level` the level itself, which is run
 //! content (it is in the replay content hash). `sprites` swaps a kind's box
-//! for a picture; it is presentation only.
+//! for a picture; it is presentation only. `audio` replaces songs and sound
+//! effects by name; also presentation only.
 
+pub mod audio;
 pub mod files;
 pub mod kit;
 pub mod level;
@@ -40,6 +42,8 @@ impl Plugin for ContentPlugin {
                 Startup,
                 (kit::setup_thing_art, sprites::load_embedded_sprites).chain(),
             )
+            // Songs and SFX files; a no-op without sound (headless).
+            .add_systems(Startup, audio::load_embedded_audio)
             .add_systems(Update, sprites::animate_sprites);
         // Saved tunables are start values: applied here, at plugin build,
         // so they are in place before the first `Update` and before any
