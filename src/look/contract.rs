@@ -40,8 +40,24 @@ pub struct SlotSpec {
 pub struct ShapeSpec {
     pub max_prims: usize,
     pub max_vertices: usize,
-    /// Half-width of the cube the shape lives in; sizes and `at` are bounded by it.
-    pub extent: f32,
+    /// Per-axis half-size `[x, y, z]` of the box the shape lives in, centred
+    /// on the slot origin. Each `at` component is bounded by its own axis, each
+    /// `size` component by the largest axis (sizes are not axis-aligned before
+    /// rotation), and the built mesh by its own axis per vertex coordinate.
+    /// A wide thin wall might use `[7.5, 0.5, 0.25]`; square slots use
+    /// [`ShapeSpec::cube`].
+    pub extent: [f32; 3],
+}
+
+impl ShapeSpec {
+    /// A spec whose box is a cube of half-width `e`.
+    pub const fn cube(max_prims: usize, max_vertices: usize, e: f32) -> Self {
+        Self {
+            max_prims,
+            max_vertices,
+            extent: [e; 3],
+        }
+    }
 }
 
 #[derive(Debug)]

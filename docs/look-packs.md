@@ -129,13 +129,13 @@ shades correctly. `"shape": []` is valid: an empty mesh that draws nothing.
 ### Budgets
 
 The game sets three numbers per slot (`ShapeSpec` in `src/ui/theme.rs`). The
-template's `player` slot: `max_prims: 12`, `max_vertices: 3000`, `extent: 1.5`.
+template's `player` slot: `max_prims: 12`, `max_vertices: 3000`, `extent: [1.5, 1.5, 1.5]` (`ShapeSpec::cube(12, 3000, 1.5)`).
 
 | Budget | Meaning | Error looks like |
 |---|---|---|
 | `max_prims` | Primitives in the list. | `slots.player.shape: 13 primitives; at most 12` |
 | `max_vertices` | Total vertices of the merged mesh. | `slots.player.shape: 3366 vertices; budget 3000` |
-| `extent` | Half-width of the cube the whole shape lives in. Each `size` component is `0.001..=extent` and each `at` component `-extent..=extent`; then, once every other rule passes, the built mesh is checked: no vertex may lie more than `extent` from the centre on any axis (so `at`, `size`, `scale` and `rot` together count). | `slots.player.shape[1]: size components are 0.001..=1.5`, `slots.player.shape: reaches 2.900 from the centre; extent is 1.5` |
+| `extent` | Per-axis half-size `[x, y, z]` of the box the whole shape lives in, so a slot far from cubic is bounded tightly. A wide thin wall might use `[7.5, 0.5, 0.25]`: 15 wide, 1 tall, 0.5 deep. Each `at` component is bounded by its own axis (`-extent[i]..=extent[i]`); each `size` component is `0.001..=max(extent)` (sizes are not axis-aligned before `rot`, so the largest axis bounds them); then, once every other rule passes, the built mesh is checked per axis: `abs(x) <= extent[0]`, `abs(y) <= extent[1]`, `abs(z) <= extent[2]` for every vertex (so `at`, `size`, `scale` and `rot` together count). | `slots.player.shape[1]: size components are 0.001..=1.5`, `slots.wall.shape[0]: at y is 0.6; must be -0.5..=0.5`, `slots.wall.shape: reaches 0.800 on y; extent is 0.5` |
 
 Independent of the game: each `scale` component is `0.01..=4`, every number
 must be finite, and `detail` is `3..=32`. Errors name the slot and the
@@ -177,7 +177,8 @@ cuboids at `x = ±0.36`, and a small sphere window at `detail: 8`. Try it:
 ### How a game adopts shapes
 
 1. **Give the slot a budget**: set `shape: Some(ShapeSpec { max_prims,
-   max_vertices, extent })` on its `SlotSpec` in `LOOK`. Pick `extent` from
+   max_vertices, extent })` on its `SlotSpec` in `LOOK` (`ShapeSpec::cube(max_prims,
+   max_vertices, e)` for square slots; `extent` is `[x, y, z]`). Pick `extent` per axis from
    the art's real size (the sim's hitbox is the ceiling, since art is sized to
    it) and `max_vertices` from what the platform can draw many of; a Pi 4 in
    browser mode is the weak target.

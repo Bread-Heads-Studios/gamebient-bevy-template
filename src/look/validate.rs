@@ -143,15 +143,25 @@ fn is_file_name(s: &str) -> bool {
 
 /// The largest absolute coordinate of any vertex `shape::build_mesh`
 /// produces: the half-width of the smallest centred cube holding the shape.
-fn shape_reach(prims: &[Primitive]) -> f32 {
+const AXES: [&str; 3] = ["x", "y", "z"];
+
+fn shape_reach(prims: &[Primitive]) -> [f32; 3] {
     use bevy::mesh::{Mesh, VertexAttributeValues};
-    match shape::build_mesh(prims).attribute(Mesh::ATTRIBUTE_POSITION) {
-        Some(VertexAttributeValues::Float32x3(pos)) => pos.iter().flatten().fold(
-            0.0_f32,
-            |m, c| if c.is_nan() { f32::NAN } else { m.max(c.abs()) },
-        ),
-        _ => 0.0,
+    let mut reach = [0.0_f32; 3];
+    if let Some(VertexAttributeValues::Float32x3(pos)) =
+        shape::build_mesh(prims).attribute(Mesh::ATTRIBUTE_POSITION)
+    {
+        for v in pos {
+            for (r, c) in reach.iter_mut().zip(v) {
+                *r = r.max(c.abs());
+            }
+        }
+        // `f32::max` drops NaN, so check for it explicitly.
+        if pos.iter().flatten().any(|c| c.is_nan()) {
+            return [f32::NAN; 3];
+        }
     }
+    reach
 }
 
 struct Check<'a> {
@@ -166,6 +176,7 @@ impl Check<'_> {
     fn shape(&mut self, at: &str, prims: &[Primitive], limit: &ShapeSpec) -> Option<usize> {
         let before = self.problems.len();
         let ext = limit.extent;
+        let max_ext = ext.iter().copied().fold(0.0_f32, f32::max);
         if prims.len() > limit.max_prims {
             self.error(
                 format!("{at}.shape"),
@@ -183,14 +194,23 @@ impl Check<'_> {
             } else if !p
                 .size
                 .iter()
-                .all(|v| v.is_finite() && (0.001..=ext).contains(v))
+                .all(|v| v.is_finite() && (0.001..=max_ext).contains(v))
             {
-                self.error(pat.as_str(), format!("size components are 0.001..={ext}"));
+                self.error(
+                    pat.as_str(),
+                    format!("size components are 0.001..={max_ext}"),
+                );
             }
-            if let Some(v) = p.at
-                && !v.iter().all(|c| c.is_finite() && (-ext..=ext).contains(c))
-            {
-                self.error(pat.as_str(), format!("at components are -{ext}..={ext}"));
+            if let Some(v) = p.at {
+                for (i, c) in v.iter().enumerate() {
+                    let e = ext[i];
+                    if !(c.is_finite() && (-e..=e).contains(c)) {
+                        self.error(
+                            pat.as_str(),
+                            format!("at {} is {c}; must be -{e}..={e}", AXES[i]),
+                        );
+                    }
+                }
             }
             if let Some(v) = p.rot
                 && !v.iter().all(|c| c.is_finite())
@@ -229,12 +249,17 @@ impl Check<'_> {
         // Last, and only now that every rule above bounds the work: the
         // built geometry itself must sit inside the extent cube.
         let reach = shape_reach(prims);
-        if !(reach.is_finite() && reach <= ext * (1.0 + 1e-5)) {
-            self.error(
-                format!("{at}.shape"),
-                format!("reaches {reach:.3} from the centre; extent is {ext}"),
-            );
-            return None;
+        for i in 0..3 {
+            if !(reach[i].is_finite() && reach[i] <= ext[i] * (1.0 + 1e-5)) {
+                self.error(
+                    format!("{at}.shape"),
+                    format!(
+                        "reaches {:.3} on {}; extent is {}",
+                        reach[i], AXES[i], ext[i]
+                    ),
+                );
+                return None;
+            }
         }
         Some(n)
     }
@@ -604,13 +629,19 @@ mod tests {
                 shape: None,
             },
             SlotSpec {
+                name: "wall",
+                image: false,
+                recipes: &[],
+                shape: Some(ShapeSpec {
+                    max_prims: 4,
+                    max_vertices: 3000,
+                    extent: [7.5, 0.5, 0.25],
+                }),
+            },
+            SlotSpec {
                 name: "player",
                 image: true,
-                shape: Some(ShapeSpec {
-                    max_prims: 12,
-                    max_vertices: 3000,
-                    extent: 1.5,
-                }),
+                shape: Some(ShapeSpec::cube(12, 3000, 1.5)),
                 recipes: &[RecipeSpec {
                     name: "cuboid",
                     params: &[
@@ -1052,6 +1083,46 @@ mod tests {
         assert!(has(&e, "at"), "{e:?}");
     }
 
+    fn wall_errors(body: &str) -> Vec<String> {
+        errors(&validate(&shape_pack(2, "wall", body), &TEST, None))
+    }
+
+    #[test]
+    fn non_cubic_extent_accepts_wide_flat_and_rejects_tall_or_deep() {
+        // 15 wide, 1 tall, 0.5 deep: exactly the box.
+        let ok = wall_errors(r#""shape":[{"prim":"cuboid","size":[7.5,0.5,0.25]}]"#);
+        assert!(ok.is_empty(), "{ok:?}");
+        // Too tall on y: the scaled cuboid reaches 0.9 on y.
+        let e = wall_errors(r#""shape":[{"prim":"cuboid","size":[7.0,0.4,0.2],"scale":[1,4,1]}]"#);
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(
+            e[0].starts_with("slots.wall.shape: reaches ")
+                && e[0].contains(" on y; ")
+                && e[0].ends_with("extent is 0.5"),
+            "{e:?}"
+        );
+        // Too deep on z.
+        let e = wall_errors(r#""shape":[{"prim":"cuboid","size":[1.0,0.1,0.4],"scale":[1,1,4]}]"#);
+        assert!(
+            has(&e, " on z; extent is 0.25") && has(&e, "extent is 0.25"),
+            "{e:?}"
+        );
+        // A size over the largest axis is still a size error.
+        let e = wall_errors(r#""shape":[{"prim":"sphere","size":[7.6]}]"#);
+        assert!(has(&e, "size components are 0.001..=7.5"), "{e:?}");
+    }
+
+    #[test]
+    fn shape_at_is_bounded_per_axis() {
+        let ok = wall_errors(r#""shape":[{"prim":"sphere","size":[0.1],"at":[7.0,0.3,0.1]}]"#);
+        assert!(ok.is_empty(), "{ok:?}");
+        let e = wall_errors(r#""shape":[{"prim":"sphere","size":[0.1],"at":[0,0.6,0]}]"#);
+        assert!(has(&e, "at y is 0.6"), "{e:?}");
+        let e = wall_errors(r#""shape":[{"prim":"sphere","size":[0.1],"at":[0,0,0.3]}]"#);
+        assert!(has(&e, "at z is 0.3"), "{e:?}");
+        assert!(!has(&e, "at x"), "{e:?}");
+    }
+
     #[test]
     fn built_geometry_past_the_extent_is_an_error() {
         // Every number passes on its own (at 1.4, size 0.5, scale 3) but the
@@ -1060,7 +1131,8 @@ mod tests {
         let e = shape_errors(body);
         assert_eq!(e.len(), 1, "{e:?}");
         assert!(
-            e[0].starts_with("slots.player.shape: reaches 2.9") && e[0].ends_with("extent is 1.5"),
+            e[0].starts_with("slots.player.shape: reaches 2.9")
+                && e[0].ends_with("on x; extent is 1.5"),
             "{e:?}"
         );
         // A rotated cuboid's corner, not its size, is what reaches out.

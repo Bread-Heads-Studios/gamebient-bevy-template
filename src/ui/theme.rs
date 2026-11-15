@@ -142,11 +142,7 @@ pub const SLOTS: &[SlotSpec] = &[SlotSpec {
             },
         }],
     }],
-    shape: Some(ShapeSpec {
-        max_prims: 12,
-        max_vertices: 3000,
-        extent: 1.5,
-    }),
+    shape: Some(ShapeSpec::cube(12, 3000, 1.5)),
 }];
 
 /// `sfx.<SfxEvent::name>` and `music.<GameState, lower case>`.
