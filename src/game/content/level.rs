@@ -14,6 +14,7 @@ use bevy::prelude::*;
 use super::files::fnv1a64;
 use super::kit::{Kinds, Size, Thing, ThingArt, ThingId};
 use super::model::{ContentError, LevelFile, PlacedThing};
+use super::sprites::{ArtOf, SpriteArt, SpriteImages, sprite_for};
 use crate::game::GameEntity;
 use crate::game::sim::SpawnCounter;
 
@@ -95,6 +96,8 @@ pub fn spawn_level(
     kinds: Res<Kinds>,
     mut spawn: ResMut<SpawnCounter>,
     art: Option<Res<ThingArt>>,
+    sprite_art: Option<Res<SpriteArt>>,
+    sprite_images: Option<Res<SpriteImages>>,
 ) {
     let test;
     let file = if source.is_some_and(|s| *s == LevelSource::Test) {
@@ -121,13 +124,28 @@ pub fn spawn_level(
         if let Some(on_spawn) = props.on_spawn {
             on_spawn(&mut e);
         }
-        if let Some(art) = art.as_deref()
+        // Art goes on a child: the sprite when the kind has one, else the box.
+        if let Some((quad, material, transform)) = sprite_for(
+            sprite_art.as_deref(),
+            sprite_images.as_deref(),
+            &kinds,
+            kind,
+            size,
+        ) {
+            e.with_child((
+                Mesh3d(quad),
+                MeshMaterial3d(material),
+                transform,
+                ArtOf(kind),
+            ));
+        } else if let Some(art) = art.as_deref()
             && let Some(material) = art.materials.get(usize::from(kind))
         {
             e.with_child((
                 Mesh3d(art.mesh.clone()),
                 MeshMaterial3d(material.clone()),
                 Transform::from_scale(size.extend(1.0)),
+                ArtOf(kind),
             ));
         }
     }

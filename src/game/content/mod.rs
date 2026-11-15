@@ -3,13 +3,15 @@
 //! `files` embeds them at build time; `model` parses them with the same
 //! limits the JSON schemas in `content/schema/` state. `kit` holds the kinds
 //! of Thing a level places and `level` the level itself, which is run
-//! content (it is in the replay content hash).
+//! content (it is in the replay content hash). `sprites` swaps a kind's box
+//! for a picture; it is presentation only.
 
 pub mod files;
 pub mod kit;
 pub mod level;
 pub mod model;
 pub mod saved;
+pub mod sprites;
 
 use bevy::prelude::*;
 
@@ -32,7 +34,13 @@ impl Plugin for ContentPlugin {
                 things: Vec::new(),
             }))
             .insert_resource(LevelHash(0))
-            .add_systems(Startup, kit::setup_thing_art);
+            .init_resource::<sprites::SpriteImages>()
+            .init_resource::<sprites::SpriteMetaTable>()
+            .add_systems(
+                Startup,
+                (kit::setup_thing_art, sprites::load_embedded_sprites).chain(),
+            )
+            .add_systems(Update, sprites::animate_sprites);
         // Saved tunables are start values: applied here, at plugin build,
         // so they are in place before the first `Update` and before any
         // state transition can enter `Playing` (a `Startup` system is not
