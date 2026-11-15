@@ -71,7 +71,17 @@ new or redrawn sprite, saved card values) must never fail fmt, clippy or
 built-in content (`LevelSource::Test`, `saved::reset_to_defaults`, and
 `sprites::clear_sprites` with fixture PNGs), and the shipped files are
 checked for validity only (`the_content_level_file_is_valid`,
-`the_shipped_sprites_are_valid`), never for what they hold.
+`the_shipped_sprites_are_valid`), never for what they hold. In code: start
+from `replay::build_builtin_app()` (or call `replay::use_builtin_content` on
+a verify app), and change a value with `tunables::index::bumped_in_range`,
+which stays inside the tunable's range even when the value is at its end.
+
+`tools/test_extreme_content.sh` (run in CI) proves the rule: it copies the
+repo to a scratch folder, saves every tunable at its max and then at its min
+(the file comes from the ignored unit test `write_extreme_tunables`, so it
+follows the game's own tunables), moves one Thing and removes one, and runs
+`cargo test --all-targets --all-features` there, in its own target dir
+(`target/extreme-content`). Run it after adding a test that plays the game.
 
 ## What the replay hashes
 
@@ -89,9 +99,12 @@ Run content is the **level** and the **tunables**; presentation is not.
 - Sprites, `sprites.json`, songs and sfx never enter the sim or the hash.
   No sim system reads them.
 
-A leaderboard accepts a run only when `content` equals the release's default
-hash, so editing the level or a saved tunable changes the default for the next
-release; it does not invalidate old releases' verifiers.
+A leaderboard must accept a run only when `content` equals the release's
+default hash (so test-level runs and runs on edited content stay off it);
+the website does not check that yet: its verifier reports `content`, but
+nothing compares it with the release default. Editing the level or a saved
+tunable changes the default for the next release; it does not invalidate old
+releases' verifiers.
 
 ## File hash and `content.set`
 

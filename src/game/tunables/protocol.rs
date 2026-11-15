@@ -461,8 +461,9 @@ fn resume_restart(mut restart: ResMut<RestartPending>, mut next: ResMut<NextStat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::replay::build_headless_app;
+    use crate::game::replay::{build_builtin_app, build_headless_app};
     use crate::game::sim::SimTick;
+    use crate::game::tunables::index::bumped_in_range;
 
     fn drain_custom(app: &mut App) -> Vec<(String, String)> {
         app.world_mut()
@@ -482,22 +483,12 @@ mod tests {
         });
     }
 
-    /// Changes a number or a bool; leaves other kinds alone.
-    fn bump(v: &Value) -> Value {
-        match v {
-            Value::Float(f) => Value::Float(f + 1.0),
-            Value::Int(i) => Value::Int(i + 1),
-            Value::Bool(b) => Value::Bool(!b),
-            other => other.clone(),
-        }
-    }
-
     /// Generic over the game's first tunable, so this test survives a game
     /// replacing `tuning.rs` (this file is copied into every game).
     #[test]
     fn list_set_and_report_over_host_messages() {
         use crate::game::tunables::read;
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         app.update();
         drain_custom(&mut app);
         let entry = app.world().resource::<TunableIndex>().entries[0].clone();
@@ -544,7 +535,7 @@ mod tests {
             "untouched"
         );
 
-        let next = bump(&entry.default);
+        let next = bumped_in_range(&entry, &entry.default);
         send(
             &mut app,
             "tunables.set",
@@ -562,7 +553,7 @@ mod tests {
 
     #[test]
     fn sound_preview_answers_and_the_catalog_lists_sounds() {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         app.update();
         drain_custom(&mut app);
         let j = catalog_json(app.world());
@@ -604,7 +595,7 @@ mod tests {
 
     #[test]
     fn catalog_lists_content_warnings() {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         app.update();
         app.world_mut()
             .resource_mut::<crate::game::content::saved::ContentWarnings>()
@@ -616,7 +607,7 @@ mod tests {
 
     #[test]
     fn checks_run_against_the_current_values_and_unknown_names_answer() {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         app.update();
         drain_custom(&mut app);
         send(&mut app, "checks.run", "{\"names\":[\"no_such_check\"]}");
@@ -630,7 +621,7 @@ mod tests {
 
     #[test]
     fn restart_enters_playing_and_posts_the_catalog() {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         app.update();
         drain_custom(&mut app);
         send(&mut app, "run.restart", "null");
@@ -710,7 +701,7 @@ mod tests {
     #[test]
     fn content_set_invalid_level_changes_nothing() {
         use crate::game::content::level::LevelHash;
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         app.update();
         drain_custom(&mut app);
         let before = app.world().resource::<LevelHash>().0;
@@ -731,11 +722,11 @@ mod tests {
     #[test]
     fn content_set_tunables_goes_through_pending_and_is_atomic() {
         use crate::game::tunables::read;
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         app.update();
         drain_custom(&mut app);
         let entry = app.world().resource::<TunableIndex>().entries[0].clone();
-        let next = bump(&entry.default);
+        let next = bumped_in_range(&entry, &entry.default);
         let good = json!({ "v": 1, "values": { entry.path.clone(): next.to_json() } }).to_string();
         send(
             &mut app,
@@ -770,7 +761,7 @@ mod tests {
     #[test]
     fn content_set_sprite_decodes_base64() {
         use crate::game::content::{base64, files};
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         app.update();
         drain_custom(&mut app);
         send(
@@ -808,7 +799,7 @@ mod tests {
 
     #[test]
     fn content_set_unknown_file_is_refused_and_name_is_capped() {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         app.update();
         drain_custom(&mut app);
         send(
@@ -837,7 +828,7 @@ mod tests {
 
     #[test]
     fn content_set_audio_answers_for_a_headless_build() {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         app.update();
         drain_custom(&mut app);
         send(
@@ -853,7 +844,7 @@ mod tests {
 
     #[test]
     fn catalog_lists_every_embedded_file() {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         app.update();
         let j = catalog_json(app.world());
         for (p, b) in crate::game::content::files::EMBEDDED {

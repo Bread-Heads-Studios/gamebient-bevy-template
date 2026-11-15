@@ -222,6 +222,59 @@ pub fn snapshot(world: &World) -> Vec<(u16, Value)> {
         .collect()
 }
 
+/// For tests: a value of `entry`'s kind that differs from `v` and that
+/// [`write`] accepts. A number moves one `step` up, or down when that would
+/// pass `max` (so a saved value at the end of its range still bumps); a bool
+/// flips; a choice picks another option; a colour, place or curve moves its
+/// first component the same way. Returns `v` unchanged only when the
+/// tunable has a single possible value.
+#[cfg(test)]
+pub(crate) fn bumped_in_range(entry: &Entry, v: &Value) -> Value {
+    let (min, max) = (entry.tune.min, entry.tune.max);
+    let step = if entry.tune.step > 0.0 {
+        entry.tune.step
+    } else {
+        1.0
+    };
+    // One step up, else one step down, else either end; checked after the
+    // round trip through f32, as `write` checks it.
+    let nudge = |x: f32| -> f32 {
+        let x64 = f64::from(x);
+        [x64 + step, x64 - step, min, max]
+            .into_iter()
+            .map(|c| c as f32)
+            .find(|c| (min..=max).contains(&f64::from(*c)) && *c != x)
+            .unwrap_or(x)
+    };
+    match v {
+        Value::Float(f) => Value::Float(nudge(*f)),
+        Value::Int(i) => {
+            let step = step.max(1.0).round() as i64;
+            [i + step, i - step, min as i64, max as i64]
+                .into_iter()
+                .find(|c| (min..=max).contains(&(*c as f64)) && c != i)
+                .map_or(v.clone(), Value::Int)
+        }
+        Value::Bool(b) => Value::Bool(!b),
+        Value::Choice(s) => entry
+            .options
+            .iter()
+            .find(|o| *o != s)
+            .map_or_else(|| v.clone(), |o| Value::Choice(o.clone())),
+        Value::Colour(c) => {
+            let mut c = *c;
+            c.red = if c.red > 0.5 { 0.0 } else { 1.0 };
+            Value::Colour(c)
+        }
+        Value::Place(p) => Value::Place(Vec2::new(nudge(p.x), p.y)),
+        Value::Curve(c) => {
+            let mut c = *c;
+            c[0] = nudge(c[0]);
+            Value::Curve(c)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

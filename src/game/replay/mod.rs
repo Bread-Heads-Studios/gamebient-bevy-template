@@ -20,8 +20,10 @@
 //! on its tick, and `content` says which game was played: it folds in the
 //! level hash too (`replay::level_source_for` picks the content level or the
 //! selftest's `LevelSource::Test`; the selftest and checks start from Rust
-//! default tunables). A leaderboard
-//! accepts a run only when `content` equals the release's default hash.
+//! default tunables). A leaderboard must accept a run only when `content`
+//! equals the release's default hash; the website does not check that yet
+//! (its verifier reports `content` but nothing compares it with the
+//! release default).
 
 pub mod feeder;
 pub mod recorder;
@@ -309,6 +311,26 @@ pub fn build_headless_app() -> App {
     app
 }
 
+/// [`build_headless_app`] on built-in content only: the built-in
+/// `test_level()` and every tunable at its Rust default. A test that
+/// assumes default values or the built-in level starts here, so a data save
+/// to `content/` (a moved Thing, a saved value at the end of its range)
+/// never fails `cargo test`. `tools/test_extreme_content.sh` proves it.
+pub fn build_builtin_app() -> App {
+    let mut app = build_headless_app();
+    use_builtin_content(&mut app);
+    app
+}
+
+/// Puts an app built from [`build_headless_app`] (or [`build_verify_app`])
+/// on built-in content: `LevelSource::Test` and the Rust default tunables.
+/// Call it before the first `Playing`; staged `PendingTunes` still apply on
+/// top.
+pub fn use_builtin_content(app: &mut App) {
+    app.insert_resource(LevelSource::Test);
+    super::content::saved::reset_to_defaults(app.world_mut());
+}
+
 /// The headless sim wired to replay `replay`: the feeder in
 /// `TickInputSet::Feed` and the run's seed staged in `PendingSeed`. Split
 /// out of [`verify`] so a test can add its own observer systems to the very
@@ -345,7 +367,8 @@ pub fn build_verify_app(replay: &Replay) -> App {
 /// content level gives, is replayed on the test level: the selftest
 /// fixtures, recorded under `LevelSource::Test` so a level edit never
 /// invalidates them. Such a run's content hash is never a release's
-/// default, so a leaderboard still refuses it.
+/// default, so the website must refuse it for a leaderboard (any run whose
+/// `content` is not the release default); that check does not exist yet.
 /// `content_level` is the app's `LevelHash`.
 pub fn level_source_for(replay: &Replay, content_level: u64) -> LevelSource {
     let with_level = |level: u64| {
@@ -473,6 +496,20 @@ impl<'a> Cursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`build_verify_app`] on built-in content (see [`build_builtin_app`]),
+    /// so these replays never run on `content/`.
+    fn builtin_verify_app(replay: &Replay) -> App {
+        let mut app = build_verify_app(replay);
+        use_builtin_content(&mut app);
+        app
+    }
+
+    /// [`verify`] on built-in content.
+    fn verify_builtin(replay: &Replay) -> Verdict {
+        let mut app = builtin_verify_app(replay);
+        run_verify_app(&mut app, replay)
+    }
 
     fn sample() -> Replay {
         let mut r = Replay {
@@ -608,7 +645,7 @@ mod tests {
             r.push_tick(8, 0, 0, 0);
         }
         r.score = 0;
-        let defaults = build_headless_app()
+        let defaults = build_builtin_app()
             .world()
             .resource::<crate::game::tunables::TunableIndex>()
             .clone();
@@ -623,18 +660,18 @@ mod tests {
             r.starts.iter().map(|(id, b)| (*id, b.as_slice())),
             [],
         );
-        let first = verify(&r);
+        let first = verify_builtin(&r);
         assert_eq!(first.ticks, 120);
         assert_eq!(first.ended, Ended::InputExhausted);
         assert_eq!(first.score, 1, "holding RIGHT takes the coin at (3, 0)");
         r.score = first.score;
         r.checksum = first.checksum;
         r.content = first.content;
-        let second = verify(&r);
+        let second = verify_builtin(&r);
         assert!(second.matches, "{second:?}");
         assert_eq!(second.checksum, first.checksum);
         r.score = 999;
-        assert!(!verify(&r).matches);
+        assert!(!verify_builtin(&r).matches);
     }
 
     #[test]
@@ -659,7 +696,7 @@ mod tests {
         r.runs.clear();
         r.ticks = 0;
         r.score = 0;
-        let v = verify(&r);
+        let v = verify_builtin(&r);
         assert_eq!(v.ticks, 0, "{v:?}");
         assert_eq!(v.ended, Ended::InputExhausted);
     }
@@ -671,12 +708,12 @@ mod tests {
         r.ticks = 0;
         r.push_tick(8, 0, 0, 0);
         r.score = 0;
-        let first = verify(&r);
+        let first = verify_builtin(&r);
         assert_eq!(first.ticks, 1, "{first:?}");
         assert_eq!(first.ended, Ended::InputExhausted);
         r.checksum = first.checksum;
         r.content = first.content;
-        let second = verify(&r);
+        let second = verify_builtin(&r);
         assert!(second.matches, "{second:?}");
     }
 
@@ -696,7 +733,7 @@ mod tests {
             r.push_tick(PAUSE, 0, 0, 0); // and stays "held" every tick after
         }
         r.score = 0;
-        let v = verify(&r);
+        let v = verify_builtin(&r);
         assert_eq!(v.ticks, 10, "{v:?}");
         assert_eq!(v.ended, Ended::InputExhausted);
     }
@@ -770,7 +807,7 @@ mod tests {
     /// `Playing`, with an `EdgeLog` and a `PauseTrace` filled in.
     fn build_live_app(frames: Vec<(gamebient_input::Buttons, bool)>) -> App {
         let n = frames.len();
-        let mut live = build_headless_app();
+        let mut live = build_builtin_app();
         live.insert_resource(Script { frames, at: 0 });
         log_edges_in_sim_set(&mut live);
         live.init_resource::<PauseTrace>().add_systems(
@@ -814,7 +851,7 @@ mod tests {
             .expect("run sealed on OnExit(Playing)");
         let live_log = live.world().resource::<EdgeLog>().clone();
 
-        let mut replayed = build_verify_app(&replay);
+        let mut replayed = builtin_verify_app(&replay);
         log_edges_in_sim_set(&mut replayed);
         let verdict = run_verify_app(&mut replayed, &replay);
         let replay_log = replayed.world().resource::<EdgeLog>().clone();
@@ -999,7 +1036,7 @@ mod tests {
         const END_AT: u32 = 30;
         const FRAMES: u32 = 120; // well past the 0.4 s fade
 
-        let mut live = build_headless_app();
+        let mut live = build_builtin_app();
         // A windowed game in every respect that matters here: it has a fade,
         // and `update_fade` drives the state change when the fade completes.
         live.insert_resource(crate::ui::transition::ScreenFade::default())
@@ -1038,7 +1075,7 @@ mod tests {
         // game's own game-over system is. `verify()` alone would replay 30
         // ticks of input through a sim that never ends, which reproduces the
         // checksum but tests nothing about how the run ended.
-        let mut replayed = build_verify_app(&replay);
+        let mut replayed = builtin_verify_app(&replay);
         end_the_run_at_in_sim_set(&mut replayed, END_AT);
         let v = run_verify_app(&mut replayed, &replay);
         assert!(v.matches, "{v:?}");
@@ -1052,7 +1089,7 @@ mod tests {
         // The contrast: the same replay through a sim with no ending system
         // reproduces exactly the same numbers and reports `input_exhausted`,
         // because nothing queued a transition -- the input simply ran out.
-        let plain = verify(&replay);
+        let plain = verify_builtin(&replay);
         assert_eq!(plain.ended, Ended::InputExhausted, "{plain:?}");
         assert_eq!(plain.ticks, v.ticks);
         assert_eq!(plain.checksum, v.checksum);
@@ -1072,7 +1109,7 @@ mod tests {
         }
         r.score = 0;
 
-        let mut app = build_verify_app(&r);
+        let mut app = builtin_verify_app(&r);
         end_the_run_at_in_sim_set(&mut app, END_AT);
         let v = run_verify_app(&mut app, &r);
 

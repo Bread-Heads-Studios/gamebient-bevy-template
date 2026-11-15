@@ -374,9 +374,11 @@ review.
     `content` (level hash, then starts and changes) to equal the header's, so a replay recorded under one set of
     values cannot verify against another, and a header stripped of its
     changes fails too. The registration order is the index: never reorder
-    `tunables::register` calls between releases. A leaderboard accepts a
-    run only when `content` equals the release's default hash, which also
-    rejects runs that changed a value mid-way. `tests/tunables.rs` is the
+    `tunables::register` calls between releases. A leaderboard must
+    accept a run only when `content` equals the release's default hash,
+    which would also reject test-level runs and runs that changed a value
+    mid-way; the website's verifier does not check that yet (it reports
+    `content` but nothing compares it with the release default). `tests/tunables.rs` is the
     probe.
 ## Keeping a ported game current
 

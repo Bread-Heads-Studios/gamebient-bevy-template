@@ -81,7 +81,7 @@ pub fn reset_to_defaults(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::replay::build_headless_app;
+    use crate::game::replay::{build_builtin_app, build_headless_app};
     use crate::game::sim::{PendingSeed, seed_bytes};
     use crate::game::states::GameState;
     use crate::game::tunables::{TuneLog, read};
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn saved_values_override_defaults_and_become_starts() {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         let (entry, v) = pick(&app);
         let file = file_with(&entry.path, v.to_json());
         let warnings = apply_saved(app.world_mut(), &file);
@@ -139,7 +139,7 @@ mod tests {
     /// value: the values are written before any update, as the plugin does.
     #[test]
     fn saved_values_land_before_a_run_entered_on_the_first_update() {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         let (entry, v) = pick(&app);
         let file = file_with(&entry.path, v.to_json());
         apply_saved(app.world_mut(), &file);
@@ -157,7 +157,7 @@ mod tests {
     /// entered on the very first update.
     #[test]
     fn plugin_path_lands_before_a_run_entered_on_the_first_update() {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         let (entry, v) = pick(&app);
         let text = serde_json::json!({ "v": 1, "values": { entry.path.clone(): v.to_json() } })
             .to_string();
@@ -172,14 +172,14 @@ mod tests {
         let log = app.world().resource::<TuneLog>();
         assert_eq!(log.starts[usize::from(entry.id)].1, v);
         // A broken file warns and changes nothing.
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         apply_embedded_saved_from(app.world_mut(), Some(b"nope"));
         assert_eq!(app.world().resource::<ContentWarnings>().0.len(), 1);
     }
 
     #[test]
     fn reset_to_defaults_undoes_saved_values() {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         let (entry, v) = pick(&app);
         apply_saved(app.world_mut(), &file_with(&entry.path, v.to_json()));
         assert_eq!(read(app.world(), &entry), Some(v));
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn unknown_path_and_wrong_type_warn_and_change_nothing() {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         let (entry, _) = pick(&app);
         let before = read(app.world(), &entry);
         let mut file = file_with("no.such", serde_json::json!(1));
@@ -217,5 +217,64 @@ mod tests {
             entry.tune.kind.name()
         )));
         assert_eq!(read(app.world(), &entry), before);
+    }
+
+    /// One end of `entry`'s range as saved JSON: what the editor writes with
+    /// a slider at its end. `None` for buttons (never saved).
+    fn end_of_range(
+        entry: &crate::game::tunables::Entry,
+        at_max: bool,
+    ) -> Option<serde_json::Value> {
+        use crate::game::tunables::Kind;
+        use serde_json::json;
+        let (min, max) = (entry.tune.min, entry.tune.max);
+        let end = if at_max { max } else { min };
+        Some(match entry.tune.kind {
+            Kind::Float => json!(end),
+            Kind::Int => json!(end as i64),
+            Kind::Bool => json!(at_max),
+            Kind::Colour => json!(if at_max { "#ffffff" } else { "#000000" }),
+            Kind::Place => json!([end, end]),
+            Kind::Curve => json!([end, end, end, end]),
+            Kind::Choice | Kind::Sound => {
+                let o = if at_max {
+                    entry.options.last()
+                } else {
+                    entry.options.first()
+                };
+                json!(o?)
+            }
+            Kind::Button => return None,
+        })
+    }
+
+    /// Not a check: writes `content/tunables.json` with every tunable at its
+    /// max (`GX_EXTREME=max`) or min (`GX_EXTREME=min`) to the path in
+    /// `GX_EXTREME_OUT`, for `tools/test_extreme_content.sh`. Asserts the
+    /// game accepts every value, so the file it writes is one a real save
+    /// could produce.
+    #[test]
+    #[ignore = "run by tools/test_extreme_content.sh"]
+    fn write_extreme_tunables() {
+        let at_max = match std::env::var("GX_EXTREME").as_deref() {
+            Ok("max") => true,
+            Ok("min") => false,
+            other => panic!("GX_EXTREME must be max or min, not {other:?}"),
+        };
+        let out = std::env::var("GX_EXTREME_OUT").expect("GX_EXTREME_OUT names the file to write");
+        let mut app = build_builtin_app();
+        let idx = app.world().resource::<TunableIndex>().clone();
+        let values: serde_json::Map<String, serde_json::Value> = idx
+            .entries
+            .iter()
+            .filter_map(|e| Some((e.path.clone(), end_of_range(e, at_max)?)))
+            .collect();
+        let text = serde_json::to_string_pretty(&serde_json::json!({ "v": 1, "values": values }))
+            .unwrap()
+            + "\n";
+        let file = TunablesFile::parse(text.as_bytes()).unwrap();
+        let warnings = apply_saved(app.world_mut(), &file);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        std::fs::write(&out, text).unwrap();
     }
 }

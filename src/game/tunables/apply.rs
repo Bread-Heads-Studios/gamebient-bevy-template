@@ -108,12 +108,15 @@ pub fn begin_run_tunables(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::replay::build_headless_app;
+    use crate::game::replay::{build_builtin_app, build_headless_app};
     use crate::game::sim::{PendingSeed, seed_bytes};
+    use crate::game::tunables::index::bumped_in_range;
     use crate::game::tunables::read;
 
+    /// A run on built-in content: the saved values and level in
+    /// `content/` never reach these tests.
     fn playing() -> App {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         app.world_mut().resource_mut::<PendingSeed>().0 = Some(seed_bytes(1));
         app.update();
         app.world_mut()
@@ -132,21 +135,12 @@ mod tests {
             .expect("the template registers at least one tunable (RunTuning)")
     }
 
-    fn bump(v: &Value) -> Value {
-        match v {
-            Value::Float(f) => Value::Float(f + 1.0),
-            Value::Int(i) => Value::Int(i + 1),
-            Value::Bool(b) => Value::Bool(!b),
-            other => other.clone(),
-        }
-    }
-
     #[test]
     fn a_change_lands_on_the_next_tick_and_is_logged() {
         let mut app = playing();
         let entry = first(&app);
         let before = read(app.world(), &entry).unwrap();
-        let next = bump(&before);
+        let next = bumped_in_range(&entry, &before);
         app.world_mut()
             .resource_mut::<PendingTunes>()
             .0
@@ -179,7 +173,7 @@ mod tests {
         let mut a = playing();
         let mut b = playing();
         let entry = first(&a);
-        let v = bump(&read(a.world(), &entry).unwrap());
+        let v = bumped_in_range(&entry, &read(a.world(), &entry).unwrap());
         b.world_mut()
             .resource_mut::<PendingTunes>()
             .0
@@ -196,10 +190,10 @@ mod tests {
 
     #[test]
     fn outside_a_run_a_change_applies_at_once_and_becomes_a_start_value() {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         app.update();
         let entry = first(&app);
-        let v = bump(&read(app.world(), &entry).unwrap());
+        let v = bumped_in_range(&entry, &read(app.world(), &entry).unwrap());
         app.world_mut()
             .resource_mut::<PendingTunes>()
             .0
@@ -242,8 +236,7 @@ mod tests {
 
     #[test]
     fn begin_run_uses_the_test_hash_under_the_test_source() {
-        let mut app = build_headless_app();
-        app.insert_resource(LevelSource::Test);
+        let mut app = build_builtin_app();
         app.update();
         app.world_mut()
             .resource_mut::<NextState<GameState>>()

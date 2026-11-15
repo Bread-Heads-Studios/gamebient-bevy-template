@@ -75,6 +75,12 @@ jobs:
       - name: Test
         run: cargo test --all-targets --all-features
 
+      # The content kit's promise: a data save to content/ (every tunable at
+      # its max, then its min; one Thing moved and one removed) never fails
+      # `cargo test`. Builds a scratch copy in target/extreme-content.
+      - name: Extreme content tests
+        run: tools/test_extreme_content.sh
+
       - name: Cutter tests
         working-directory: tools
         run: python3 -m unittest test_cut_clips -v
