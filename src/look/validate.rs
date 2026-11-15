@@ -68,7 +68,8 @@ impl Report {
             .iter()
             .filter(|p| p.severity == Severity::Error)
     }
-    /// A pack that could not even be read (missing folder, too large).
+    /// A pack refused before validation: unreadable, too large, or not the
+    /// bytes the build expected (content hash mismatch).
     pub fn read_error(message: String) -> Self {
         Self {
             manifest: None,
@@ -83,19 +84,8 @@ impl Report {
     }
 }
 
-/// BLAKE3 over every file, in name order: name length, name, byte length,
-/// bytes. Domain-separated so it can never collide with another use.
-pub fn content_hash(files: &Files) -> String {
-    let mut h = blake3::Hasher::new();
-    h.update(b"gx-look-v1\0");
-    for (name, bytes) in files {
-        h.update(&(name.len() as u64).to_le_bytes());
-        h.update(name.as_bytes());
-        h.update(&(bytes.len() as u64).to_le_bytes());
-        h.update(bytes);
-    }
-    h.finalize().to_hex().to_string()
-}
+/// Lives in `hash.rs` so `build.rs` hashes fetchable packs with the same code.
+pub use super::hash::content_hash;
 
 /// `#rrggbb` or `#rrggbbaa`, nothing looser.
 pub fn parse_colour(s: &str) -> Option<Color> {

@@ -95,6 +95,8 @@ impl ActiveLook {
             Selection::Dir(path) => Self::load_dir(contract, std::path::Path::new(path)),
             #[cfg(target_arch = "wasm32")]
             Selection::Dir(_) => return Self::default_for(contract),
+            // Boots on the default; the pack arrives later via `swap`.
+            Selection::Fetch(_) => return Self::default_for(contract),
         };
         attempt.unwrap_or_else(|report| {
             log_report(&report);
@@ -106,10 +108,7 @@ impl ActiveLook {
     #[cfg(not(target_arch = "wasm32"))]
     #[allow(clippy::result_large_err)] // see from_files
     pub fn load_dir(contract: &'static Contract, path: &std::path::Path) -> Result<Self, Report> {
-        let id = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(str::to_string);
+        let id = pack::dir_id(path);
         let files = pack::read_dir(path).map_err(Report::read_error)?;
         Self::from_files(
             contract,

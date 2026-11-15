@@ -24,8 +24,13 @@ assets/looks/<id>/
 - File names: lowercase letters, digits, `-` and `_`, then `.png` or `.ogg`.
 - `<id>` is the folder name: `[a-z0-9-]{1,32}`.
 
-Folders in `assets/looks/` are built into the game, every bundle of it, so
-each built-in pack adds its files to the download. Anything else is a folder
+Folders in `assets/looks/` are built into the game. Native bundles (Pi,
+x86) embed every one. The web bundle embeds only packs of at most 64 KiB
+(`look::split::WEB_EMBED_MAX_BYTES`); a larger one (audio, art) is left out,
+listed in `look::pack::FETCHABLE` with its build-time content hash, and
+fetched from `assets/looks/<id>/` when `?look=<id>` names it. The game boots
+on its own look and switches when the files arrive and match the hash, so a
+big pack costs only the players who pick it. Anything else is a folder
 you point the game at while working on it (native only). Symlinks are
 skipped there too: `build.rs` warns and leaves them out.
 

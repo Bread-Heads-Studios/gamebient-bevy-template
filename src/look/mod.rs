@@ -13,6 +13,7 @@
 
 pub mod apply;
 pub mod contract;
+pub mod hash;
 pub mod manifest;
 pub mod pack;
 #[cfg(not(target_arch = "wasm32"))]
@@ -22,6 +23,8 @@ pub mod select;
 pub mod shape;
 pub mod shapes_apply;
 pub mod sniff;
+pub mod split;
+pub mod swap;
 pub mod validate;
 
 use bevy::prelude::*;

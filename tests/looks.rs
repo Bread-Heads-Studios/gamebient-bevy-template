@@ -614,3 +614,127 @@ mod shapes {
         assert_eq!(data(mesh), data(&build_mesh(&shape)));
     }
 }
+
+/// The step native hot reload and the web fetch share: files in, checked,
+/// then `ActiveLook` replaced, `LookAssets` rebuilt and `LookChanged` sent.
+#[allow(clippy::result_large_err)] // Report is the full diagnosis
+mod swap {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use gamebient_game::look::swap::LookSwap;
+    use gamebient_game::look::validate::content_hash;
+    use gamebient_game::look::{Files, LookChanged, Report};
+
+    fn night_shift() -> Files {
+        look::pack::embedded_files("night-shift").unwrap()
+    }
+
+    fn swap(app: &mut App, files: Files, hash: Option<String>) -> Result<(), Report> {
+        app.world_mut()
+            .run_system_once(move |mut swap: LookSwap| {
+                swap.apply(
+                    files.clone(),
+                    Selection::Fetch("night-shift".into()),
+                    Some("night-shift"),
+                    hash.as_deref(),
+                )
+            })
+            .unwrap()
+    }
+
+    fn sent(app: &App) -> usize {
+        app.world().resource::<Messages<LookChanged>>().len()
+    }
+
+    #[test]
+    fn a_valid_pack_with_its_hash_is_applied_and_announced() {
+        let mut app = app_with(Selection::Default);
+        let files = night_shift();
+        let hash = content_hash(&files);
+        swap(&mut app, files, Some(hash.clone())).unwrap();
+        let look = app.world().resource::<ActiveLook>();
+        assert_eq!(look.id(), "night-shift");
+        assert_eq!(look.content_hash.as_deref(), Some(hash.as_str()));
+        assert_eq!(look.source, Selection::Fetch("night-shift".into()));
+        assert_eq!(look.string("pause"), "LIGHTS LOW");
+        assert_eq!(sent(&app), 1);
+    }
+
+    #[test]
+    fn no_expected_hash_skips_the_check() {
+        // Native hot reload: the folder is the author's, there is no hash.
+        let mut app = app_with(Selection::Default);
+        swap(&mut app, night_shift(), None).unwrap();
+        assert_eq!(app.world().resource::<ActiveLook>().id(), "night-shift");
+        assert_eq!(sent(&app), 1);
+    }
+
+    #[test]
+    fn a_hash_mismatch_is_refused_and_the_default_kept() {
+        let mut app = app_with(Selection::Default);
+        let mut files = night_shift();
+        let hash = content_hash(&files);
+        // Same names, one byte different: a tampered or stale download.
+        files.get_mut("look.json").unwrap().push(b' ');
+        let err = swap(&mut app, files, Some(hash)).unwrap_err();
+        assert!(!err.ok());
+        assert!(
+            err.errors().any(|p| p.message.contains("content hash")),
+            "{:#?}",
+            err.problems
+        );
+        assert_eq!(app.world().resource::<ActiveLook>().id(), "default");
+        assert_eq!(sent(&app), 0);
+    }
+
+    #[test]
+    fn a_pack_that_fails_validation_is_refused_and_the_default_kept() {
+        let mut app = app_with(Selection::Default);
+        let mut files = night_shift();
+        files.insert("look.json".into(), b"{\"v\":2,".to_vec());
+        // The hash matches: the bytes are what the build expected, but they
+        // are still not a valid pack, so they never reach the screen.
+        let hash = content_hash(&files);
+        assert!(swap(&mut app, files, Some(hash)).is_err());
+        assert_eq!(app.world().resource::<ActiveLook>().id(), "default");
+        assert_eq!(sent(&app), 0);
+    }
+
+    #[test]
+    fn a_pack_with_another_id_is_refused() {
+        let mut app = app_with(Selection::Default);
+        let files = night_shift();
+        let hash = content_hash(&files);
+        let result = app
+            .world_mut()
+            .run_system_once(move |mut swap: LookSwap| {
+                swap.apply(
+                    files.clone(),
+                    Selection::Fetch("other".into()),
+                    Some("other"),
+                    Some(&hash),
+                )
+            })
+            .unwrap();
+        assert!(result.is_err());
+        assert_eq!(app.world().resource::<ActiveLook>().id(), "default");
+        assert_eq!(sent(&app), 0);
+    }
+
+    #[test]
+    fn a_fetch_selection_boots_on_the_default_look() {
+        // The pack arrives later through the swap; startup never blocks.
+        let app = app_with(Selection::Fetch("night-shift".into()));
+        assert_eq!(app.world().resource::<ActiveLook>().id(), "default");
+        assert_eq!(
+            *app.world().resource::<Selection>(),
+            Selection::Fetch("night-shift".into())
+        );
+    }
+
+    #[test]
+    fn native_builds_fetch_nothing() {
+        assert_eq!(look::pack::fetchable_ids().count(), 0);
+        assert!(look::pack::fetchable("night-shift").is_none());
+    }
+}

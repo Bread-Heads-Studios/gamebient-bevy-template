@@ -122,6 +122,11 @@ serde_json = "1"
 # through Bevy's asset processor, so no new download.
 blake3 = "1"
 
+# build.rs hashes web-fetchable Look Packs with the crate's own
+# src/look/hash.rs (#[path] include). Same lockfile entry as above.
+[build-dependencies]
+blake3 = "1"
+
 # Native-only Bevy features: linux window backends and gilrs gamepad support.
 # Excluded from the wasm build so they don't add dead code paths.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
