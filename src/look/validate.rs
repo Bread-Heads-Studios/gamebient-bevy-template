@@ -141,10 +141,11 @@ fn is_file_name(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'_' | b'-'))
 }
 
-/// The largest absolute coordinate of any vertex `shape::build_mesh`
-/// produces: the half-width of the smallest centred cube holding the shape.
 const AXES: [&str; 3] = ["x", "y", "z"];
 
+/// The largest absolute coordinate of any vertex `shape::build_mesh`
+/// produces on each axis: the half-extents of the smallest centred box
+/// holding the shape. `[NAN; 3]` if any coordinate is NaN.
 fn shape_reach(prims: &[Primitive]) -> [f32; 3] {
     use bevy::mesh::{Mesh, VertexAttributeValues};
     let mut reach = [0.0_f32; 3];
@@ -176,7 +177,10 @@ impl Check<'_> {
     fn shape(&mut self, at: &str, prims: &[Primitive], limit: &ShapeSpec) -> Option<usize> {
         let before = self.problems.len();
         let ext = limit.extent;
-        let max_ext = ext.iter().copied().fold(0.0_f32, f32::max);
+        // Cheap prefilter only: sizes are full edges/lengths for most
+        // primitives (half-sizes for sphere/torus), so allow twice the
+        // largest half-extent. The built-mesh reach check is the real bound.
+        let max_size = 2.0 * ext.iter().copied().fold(0.0_f32, f32::max);
         if prims.len() > limit.max_prims {
             self.error(
                 format!("{at}.shape"),
@@ -194,11 +198,11 @@ impl Check<'_> {
             } else if !p
                 .size
                 .iter()
-                .all(|v| v.is_finite() && (0.001..=max_ext).contains(v))
+                .all(|v| v.is_finite() && (0.001..=max_size).contains(v))
             {
                 self.error(
                     pat.as_str(),
-                    format!("size components are 0.001..={max_ext}"),
+                    format!("size components are 0.001..={max_size}"),
                 );
             }
             if let Some(v) = p.at {
@@ -1067,12 +1071,19 @@ mod tests {
     #[test]
     fn shape_size_over_the_extent_is_an_error() {
         let e = shape_errors(
-            r#""shape":[{"prim":"sphere","size":[0.3]},{"prim":"sphere","size":[1.6]}]"#,
+            r#""shape":[{"prim":"sphere","size":[0.3]},{"prim":"sphere","size":[3.1]}]"#,
         );
         assert!(has(&e, "slots.player.shape[1]") && has(&e, "size"), "{e:?}");
         assert!(!has(&e, "shape[0]"), "{e:?}");
         let ok = shape_errors(r#""shape":[{"prim":"sphere","size":[1.5]}]"#);
         assert!(ok.is_empty(), "{ok:?}");
+    }
+
+    #[test]
+    fn shape_size_prefilter_is_twice_the_largest_extent() {
+        // 3.1 > 2 * 1.5.
+        let e = shape_errors(r#""shape":[{"prim":"cuboid","size":[3.1,0.1,0.1]}]"#);
+        assert!(has(&e, "size components are 0.001..=3"), "{e:?}");
     }
 
     #[test]
@@ -1092,24 +1103,31 @@ mod tests {
         // 15 wide, 1 tall, 0.5 deep: exactly the box.
         let ok = wall_errors(r#""shape":[{"prim":"cuboid","size":[7.5,0.5,0.25]}]"#);
         assert!(ok.is_empty(), "{ok:?}");
-        // Too tall on y: the scaled cuboid reaches 0.9 on y.
+        // Full-edge cuboid sizes: the default 14 x 1 x 0.3 wall fits.
+        let ok = wall_errors(r#""shape":[{"prim":"cuboid","size":[14,1,0.3]}]"#);
+        assert!(ok.is_empty(), "{ok:?}");
+        // Too long on x: 15 wide passes the size prefilter (<= 15) but
+        // scaled by 1.1 it reaches 8.25 > 7.5, caught by the reach check.
+        let e = wall_errors(r#""shape":[{"prim":"cuboid","size":[15,1,0.3],"scale":[1.1,1,1]}]"#);
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(e[0].contains(" on x; extent is 7.5"), "{e:?}");
+        // Too tall on y: the 0.4 edge scaled by 4 is 1.6 tall, reaching 0.8.
         let e = wall_errors(r#""shape":[{"prim":"cuboid","size":[7.0,0.4,0.2],"scale":[1,4,1]}]"#);
         assert_eq!(e.len(), 1, "{e:?}");
-        assert!(
-            e[0].starts_with("slots.wall.shape: reaches ")
-                && e[0].contains(" on y; ")
-                && e[0].ends_with("extent is 0.5"),
+        assert_eq!(
+            e[0], "slots.wall.shape: reaches 0.800 on y; extent is 0.5",
             "{e:?}"
         );
-        // Too deep on z.
+        // Too deep on z: the 0.4 edge scaled by 4 reaches 0.8.
         let e = wall_errors(r#""shape":[{"prim":"cuboid","size":[1.0,0.1,0.4],"scale":[1,1,4]}]"#);
-        assert!(
-            has(&e, " on z; extent is 0.25") && has(&e, "extent is 0.25"),
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(
+            e[0], "slots.wall.shape: reaches 0.800 on z; extent is 0.25",
             "{e:?}"
         );
-        // A size over the largest axis is still a size error.
-        let e = wall_errors(r#""shape":[{"prim":"sphere","size":[7.6]}]"#);
-        assert!(has(&e, "size components are 0.001..=7.5"), "{e:?}");
+        // A size over twice the largest extent is still a size error.
+        let e = wall_errors(r#""shape":[{"prim":"sphere","size":[15.1]}]"#);
+        assert!(has(&e, "size components are 0.001..=15"), "{e:?}");
     }
 
     #[test]
