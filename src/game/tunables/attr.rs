@@ -59,6 +59,10 @@ pub struct Tune {
     pub step: f64,
     pub unit: &'static str,
     pub applies: Applies,
+    /// Look-only (colours, sounds, sizes of art). Kept out of a run's start
+    /// values, its content hash and its checksum, so changing it never
+    /// makes a replay "a different game". See docs/look-packs.md.
+    pub cosmetic: bool,
 }
 
 impl Tune {
@@ -71,6 +75,7 @@ impl Tune {
             step,
             unit: "",
             applies: Applies::Tick,
+            cosmetic: false,
         }
     }
     pub const fn float(label: &'static str, min: f64, max: f64) -> Self {
@@ -112,6 +117,11 @@ impl Tune {
     }
     pub const fn next_run(mut self) -> Self {
         self.applies = Applies::NextRun;
+        self
+    }
+    /// Marks the field as look-only; see [`Tune::cosmetic`](Self::cosmetic) field.
+    pub const fn cosmetic(mut self) -> Self {
+        self.cosmetic = true;
         self
     }
 }

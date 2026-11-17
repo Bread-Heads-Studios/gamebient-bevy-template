@@ -11,6 +11,77 @@ pub struct Player;
 
 const PLAYER_SPEED: f32 = 8.0;
 
+/// The player's mesh: the active pack's `player` shape (schema v2) if it
+/// sets one, else a cuboid whose edge is the pack's `player` `cuboid`
+/// `size`, or 1.0 with no pack (or no `LookPlugin`, as in the `tests/`
+/// harnesses). The art child's `Transform` scales it by the Thing's `Size`.
+fn player_mesh(look: Option<&crate::look::ActiveLook>) -> Mesh {
+    if let Some(crate::look::Slot::Shape(s)) = look.and_then(|l| l.slot("player")) {
+        return crate::look::build_mesh(&s.shape);
+    }
+    let size = look
+        .and_then(|l| l.recipe_number("player", "cuboid", "size"))
+        .unwrap_or(1.0) as f32;
+    Cuboid::new(size, size, size).into()
+}
+
+/// Render half of the player: dresses the box art child `spawn_level` gives
+/// a [`Player`] Thing with the Look's mesh and a `LookColour`, and rebuilds
+/// the mesh on every `LookChanged` so a hot-reloaded pack can change the
+/// size or shape too. Registered by `assets::AssetsPlugin` in `Update`,
+/// outside `SimSet`; the headless verifier never adds that plugin. It writes
+/// only to the art child, never to the sim entity, so the Player's own
+/// archetype is the same with or without a pack (D1, docs/look-packs.md;
+/// `tests/archetype_order.rs`).
+///
+/// A child showing a sprite (`content/sprites/Player.png`) is the game's own
+/// art: the pack leaves it alone and its `LookColour` is taken off, so the
+/// retint never tints the sprite. The material is the kind's shared
+/// `ThingArt` material, which `look::apply::retint_material` recolours.
+///
+/// Same frame as the spawn: `spawn_level` runs in `StateTransition`, before
+/// `Update`, so the art child exists here on that frame, these inserts land
+/// at the end of `Update`, and `retint_material` (`PostUpdate`) colours the
+/// material before the frame renders.
+pub fn dress_player(
+    mut commands: Commands,
+    mut changed: MessageReader<crate::look::LookChanged>,
+    meshes: Option<ResMut<Assets<Mesh>>>,
+    look: Option<Res<crate::look::ActiveLook>>,
+    sprite_art: Option<Res<super::content::sprites::SpriteArt>>,
+    players: Query<&Children, With<Player>>,
+    art: Query<(&Mesh3d, Has<crate::look::LookColour>), With<super::content::sprites::ArtOf>>,
+) {
+    let redress = changed.read().count() > 0;
+    let Some(mut meshes) = meshes else {
+        return;
+    };
+    let quad = sprite_art.as_ref().map(|a| a.quad.id());
+    for children in &players {
+        for child in children.iter() {
+            let Ok((mesh, tagged)) = art.get(child) else {
+                continue;
+            };
+            if Some(mesh.0.id()) == quad {
+                if tagged {
+                    commands.entity(child).remove::<crate::look::LookColour>();
+                }
+                continue;
+            }
+            if !tagged {
+                commands.entity(child).insert((
+                    Mesh3d(meshes.add(player_mesh(look.as_deref()))),
+                    crate::look::LookColour::new("player"),
+                ));
+            } else if redress {
+                commands
+                    .entity(child)
+                    .insert(Mesh3d(meshes.add(player_mesh(look.as_deref()))));
+            }
+        }
+    }
+}
+
 /// Moves the player using the per-tick [`TickInput`](gamebient_input::TickInput)
 /// resource. This is the canonical "add a gameplay system" example: a plain
 /// `fn` reading a resource and a `Query`, run in `SimSet` (`FixedUpdate`) by

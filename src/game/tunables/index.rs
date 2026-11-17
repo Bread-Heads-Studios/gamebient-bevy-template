@@ -222,6 +222,18 @@ pub fn snapshot(world: &World) -> Vec<(u16, Value)> {
         .collect()
 }
 
+/// The start values a run records: every tunable except cosmetic ones
+/// (`Tune::cosmetic`), which must never reach a replay or its hash.
+/// `snapshot` stays the full set (the editor lists cosmetic values too).
+pub fn run_starts(world: &World) -> Vec<(u16, Value)> {
+    let idx = world.resource::<TunableIndex>().clone();
+    idx.entries
+        .iter()
+        .filter(|e| !e.tune.cosmetic)
+        .filter_map(|e| read(world, e).map(|v| (e.id, v)))
+        .collect()
+}
+
 /// For tests: a value of `entry`'s kind that differs from `v` and that
 /// [`write`] accepts. A number moves one `step` up, or down when that would
 /// pass `max` (so a saved value at the end of its range still bumps); a bool

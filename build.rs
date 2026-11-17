@@ -23,6 +23,7 @@ fn main() {
     println!("cargo:rerun-if-changed=.git/refs");
     println!("cargo:rerun-if-env-changed=VERCEL_GIT_COMMIT_SHA");
     embed_content();
+    look_embed::embed_looks();
 }
 
 /// Writes `$OUT_DIR/content_files.rs`: every file under `content/` except
@@ -77,3 +78,8 @@ fn embed_content() {
     std::fs::write(out, code).unwrap();
     println!("cargo:rerun-if-changed=content");
 }
+
+// Built-in Look Packs: `$OUT_DIR/looks_embedded.rs` (EMBEDDED + FETCHABLE).
+// The generator ships inside src/look/ so games copy it with the module.
+#[path = "src/look/embed.rs"]
+mod look_embed;

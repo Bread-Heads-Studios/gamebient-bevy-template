@@ -10,7 +10,7 @@
 //! ticks    u32                       total sim ticks
 //! score    u64                       claimed
 //! checksum u64                       claimed
-//! starts   u16 count, then [id u16, len u8, bytes]        every tunable's start value, index order
+//! starts   u16 count, then [id u16, len u8, bytes]        every non-cosmetic tunable's start value, index order
 //! tunes    u32 count, then [tick u32, id u16, len u8, bytes]  mid-run changes, in apply order
 //! runs     u32 count, then [held u16, latched u16, ax i8, ay i8, count u16]
 //! ```

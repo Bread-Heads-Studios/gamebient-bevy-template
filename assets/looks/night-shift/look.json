@@ -1,0 +1,18 @@
+{
+  "v": 1,
+  "id": "night-shift",
+  "name": "Night Shift",
+  "kind": "palette",
+  "creator": "Bread Heads Studios",
+  "palette": {
+    "ink": "#05070f",
+    "night": "#0d1430",
+    "dusk": "#1d3a5c",
+    "signal": "#ffd24a",
+    "coral": "#ff6fb1",
+    "paper": "#f4f1e8",
+    "muted": "#9aa6c2",
+    "player": "#ffd24a"
+  },
+  "strings": { "pause": "LIGHTS LOW" }
+}

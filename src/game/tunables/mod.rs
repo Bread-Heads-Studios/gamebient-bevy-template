@@ -28,7 +28,7 @@ pub use apply::{
 };
 pub use attr::{Applies, Button, Group, GroupKind, Kind, Tune};
 pub use checks::{Check, CheckList, Tunes, run_all, tune_value};
-pub use index::{Entry, GroupEntry, TunableIndex, read, register, snapshot, write};
+pub use index::{Entry, GroupEntry, TunableIndex, read, register, run_starts, snapshot, write};
 pub use value::Value;
 
 use crate::game::states::GameState;

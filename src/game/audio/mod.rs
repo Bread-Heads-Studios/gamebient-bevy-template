@@ -174,12 +174,17 @@ pub fn play_sfx(
     mut events: MessageReader<SfxEvent>,
     sfx: Res<SfxAssets>,
     mut duck: ResMut<Duck>,
+    look: Option<Res<crate::look::LookAssets>>,
 ) {
     for event in events.read() {
         let Some((handle, secs)) = sfx.get(*event) else {
             continue;
         };
-        commands.spawn((AudioPlayer(handle.clone()), PlaybackSettings::DESPAWN));
+        let handle = look
+            .as_ref()
+            .and_then(|l| l.audio(&format!("sfx.{}", event.name())))
+            .unwrap_or_else(|| handle.clone());
+        commands.spawn((AudioPlayer(handle), PlaybackSettings::DESPAWN));
         if event.is_sting() {
             duck.remaining = duck.remaining.max(secs);
         }
@@ -667,6 +672,16 @@ fn rate_for(secs: f32) -> f32 {
     }
 }
 
+/// The Look Pack cue name for a state's music: `music.<state, lower case>`.
+pub fn music_key(state: &GameState) -> String {
+    format!("music.{}", format!("{state:?}").to_lowercase())
+}
+
+/// The baked layers to spawn for a cue: none when a pack replaced its track.
+pub fn layers_for(cue: &Cue, pack_override: bool) -> &'static [Layer] {
+    if pack_override { &[] } else { cue.layers }
+}
+
 /// Crossfades to the wanted cue on every state change or `CueEvent`.
 pub fn music_director(
     mut commands: Commands,
@@ -678,6 +693,7 @@ pub fn music_director(
     asset_server: Res<AssetServer>,
     mut playing: Query<(Entity, &mut MusicVoice), With<MusicTrack>>,
     overrides: Option<Res<SongOverrides>>,
+    look: Option<Res<crate::look::LookAssets>>,
 ) {
     let restart = std::mem::take(&mut current.restart);
     let mut changed = restart;
@@ -724,7 +740,16 @@ pub fn music_director(
         PlaybackMode::Once
     };
     let overrides = overrides.as_deref();
-    let handle = cache.handle(&mut sources, &asset_server, cue.part(), overrides);
+    // A pack may replace a state's own music (not a mid-state switch). It
+    // wins over a `songs.json` song: the player picked the pack.
+    let pack_track = current
+        .switched
+        .is_none()
+        .then(|| look.as_ref().and_then(|l| l.audio(&music_key(state.get()))))
+        .flatten();
+    let pack_track_used = pack_track.is_some();
+    let handle = pack_track
+        .unwrap_or_else(|| cache.handle(&mut sources, &asset_server, cue.part(), overrides));
     commands.spawn((
         MusicTrack,
         AudioPlayer::new(handle),
@@ -744,7 +769,9 @@ pub fn music_director(
             layer: None,
         },
     ));
-    for i in 0..cue.layers.len() {
+    // A pack's track replaces the whole cue: the baked layers are in another
+    // key and tempo. A `LayerEvent` then finds no voice, which is harmless.
+    for i in 0..layers_for(cue, pack_track_used).len() {
         let Some(part) = cue.layer_part(i) else {
             continue;
         };
@@ -894,6 +921,19 @@ pub fn export_inventory() -> Vec<(String, AudioSource)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pack_track_drops_the_baked_layers() {
+        assert!(layers_for(&PLAY_CUE, true).is_empty());
+        assert_eq!(layers_for(&PLAY_CUE, false).len(), PLAY_CUE.layers.len());
+        assert!(!PLAY_CUE.layers.is_empty());
+    }
+
+    #[test]
+    fn music_keys_name_the_state_in_lower_case() {
+        assert_eq!(music_key(&GameState::GameOver), "music.gameover");
+        assert_eq!(music_key(&GameState::Menu), "music.menu");
+    }
 
     #[test]
     fn music_table_covers_every_state() {

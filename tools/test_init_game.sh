@@ -10,8 +10,9 @@ check() { # check <description> <command...>
     local d="$1"; shift
     if "$@"; then echo "ok: $d"; else echo "FAIL: $d" >&2; fail=1; fi
 }
+# shellcheck disable=SC2329 # invoked indirectly through check()
 no_tokens() { # no template token left outside .git
-    [ -z "$(grep -rIlE 'gamebient-game|gamebient_game|GAMEBIENT GAME|Gamebient Game|OWNER/REPO' "$1" --exclude-dir=.git)" ]
+    ! grep -rIqE 'gamebient-game|gamebient_game|GAMEBIENT GAME|Gamebient Game|OWNER/REPO' "$1" --exclude-dir=.git
 }
 run_case() { # run_case <label> <git|nogit>
     local label="$1" mode="$2" t

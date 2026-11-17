@@ -2206,9 +2206,9 @@ checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
 name = "email_address"
-version = "0.2.9"
+version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e079f19b08ca6239f47f8ba8509c11cf3ea30095831f7fed61441475edd8c449"
+checksum = "5ab6bbd053d3cdc62ba3de82aae11530a97bbd5b3a572fbdbcd0f0e545e3ff21"
 dependencies = [
  "serde",
 ]
@@ -2517,8 +2517,10 @@ name = "gamebient-game"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "blake3",
  "gamebient-input",
  "getrandom",
+ "js-sys",
  "jsonschema",
  "rand",
  "rand_xoshiro",
@@ -2526,6 +2528,7 @@ dependencies = [
  "serde_json",
  "ttf-parser",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 

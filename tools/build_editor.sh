@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 rustup target add wasm32-unknown-unknown 2>/dev/null || true
 command -v wasm-bindgen >/dev/null || { echo "wasm-bindgen-cli missing (see install.sh)" >&2; exit 1; }
 cargo build --locked --profile wasm-editor --target wasm32-unknown-unknown --features editor
-wasm=$(find target/wasm32-unknown-unknown/wasm-editor -maxdepth 1 -name '*.wasm' ! -name 'verify.wasm')
+wasm=$(find target/wasm32-unknown-unknown/wasm-editor -maxdepth 1 -name '*.wasm' ! -name 'verify.wasm' ! -name 'look-check.wasm')
 if [ "$(printf '%s\n' "$wasm" | wc -l | tr -d ' ')" -ne 1 ] || [ -z "$wasm" ]; then
     echo "ERROR: expected exactly one game .wasm in target/wasm32-unknown-unknown/wasm-editor (cargo clean?):" >&2
     printf '%s\n' "$wasm" >&2

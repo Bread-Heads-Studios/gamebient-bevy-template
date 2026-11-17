@@ -177,9 +177,11 @@ fn trace_order(
     }
 }
 
-/// Mimics a game's `attach_*_visuals`: decorates every sim entity that has
-/// not been decorated yet, from `Update`, with a branch (so more than one
-/// archetype results) and a child (so `Children` lands on the parent).
+/// Mimics a game's `attach_*_visuals` (on the template, `spawn_level`'s
+/// art child, which `player::dress_player` then dresses from the Look):
+/// decorates every sim entity that has not been decorated yet, from `Update`,
+/// with a branch (so more than one archetype results) and a child (so
+/// `Children` lands on the parent).
 fn decorate_things(
     mut commands: Commands,
     new: Query<Entity, (Or<(With<Player>, With<Coin>)>, Without<FakeMesh>)>,
