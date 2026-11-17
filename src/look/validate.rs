@@ -426,6 +426,25 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
         }
     }
 
+    for (role, glow) in &m.glow {
+        let at = format!("glow.{role}");
+        if m.v < 3 {
+            c.error(at.as_str(), r#"glow needs "v": 3"#);
+        }
+        if !contract.dims(role) {
+            c.error(
+                at.as_str(),
+                format!(
+                    "this game does not let a pack dim this role; it lets {:?}",
+                    contract.glow
+                ),
+            );
+        }
+        if !(glow.is_finite() && (0.0..=1.0).contains(glow)) {
+            c.error(at, "glow is 0.0..=1.0 (it can only dim)");
+        }
+    }
+
     for (key, text) in &m.strings {
         let at = format!("strings.{key}");
         match contract.string_spec(key) {
@@ -637,6 +656,7 @@ mod tests {
         ],
         audio: &["sfx.confirm", "music.menu"],
         fonts: &["Inter SemiBold"],
+        glow: &["ink"],
     };
 
     fn pack(json: &str) -> Files {
@@ -669,7 +689,7 @@ mod tests {
         assert!(!validate(&pack("{"), &TEST, None).ok());
         assert!(
             !validate(
-                &pack(r#"{"v":3,"id":"demo","name":"D","kind":"palette"}"#),
+                &pack(r#"{"v":4,"id":"demo","name":"D","kind":"palette"}"#),
                 &TEST,
                 None
             )
@@ -694,15 +714,15 @@ mod tests {
 
     #[test]
     fn a_newer_schema_is_refused_cleanly() {
-        // A real v3 pack: a top-level field and a primitive this build has
+        // A real v4 pack: a top-level field and a primitive this build has
         // never seen. The version gate must answer, not the strict parse.
-        let v3 = r#"{"v":3,"id":"demo","name":"D","kind":"skin","sparkle":true,
+        let v4 = r#"{"v":4,"id":"demo","name":"D","kind":"skin","sparkle":true,
             "slots":{"player":{"shape":[{"prim":"blob","size":[1],"wobble":2}]}}}"#;
-        let r = validate(&pack(v3), &TEST, Some("demo"));
+        let r = validate(&pack(v4), &TEST, Some("demo"));
         assert!(!r.ok() && r.manifest.is_none());
         assert_eq!(
             errors(&r),
-            vec!["v: made for a newer version of this game (v3)".to_string()]
+            vec!["v: made for a newer version of this game (v4)".to_string()]
         );
         let r = validate(&pack(&MIN.replace("\"v\":1", "\"v\":99")), &TEST, None);
         assert_eq!(
@@ -811,6 +831,40 @@ mod tests {
         assert!(!validate(&pack(MIN), &TEST, Some("other")).ok());
         let bad = r#"{"v":1,"id":"Demo Pack","name":"D","kind":"palette"}"#;
         assert!(!validate(&pack(bad), &TEST, None).ok());
+    }
+
+    #[test]
+    fn glow_dims_listed_roles_in_v3_packs_only() {
+        let glow = |v: u32, body: &str| {
+            pack(&format!(
+                r#"{{"v":{v},"id":"demo","name":"D","kind":"palette","glow":{{{body}}}}}"#
+            ))
+        };
+        for ok in [r#""ink":0.3"#, r#""ink":0"#, r#""ink":1"#] {
+            let r = validate(&glow(3, ok), &TEST, None);
+            assert!(r.ok(), "{ok}: {:?}", errors(&r));
+        }
+        assert_eq!(
+            errors(&validate(&glow(2, r#""ink":0.3"#), &TEST, None)),
+            vec![r#"glow.ink: glow needs "v": 3"#.to_string()]
+        );
+        // `signal` is a palette role, but not one this game lets dim.
+        let e = errors(&validate(&glow(3, r#""signal":0.3"#), &TEST, None));
+        assert!(
+            e.len() == 1 && e[0].starts_with("glow.signal: this game does not let"),
+            "{e:?}"
+        );
+        // Brighter than the game's own, or below dark: refused.
+        for bad in [r#""ink":1.01"#, r#""ink":-0.1"#, r#""ink":40"#] {
+            let e = errors(&validate(&glow(3, bad), &TEST, None));
+            assert_eq!(
+                e,
+                vec!["glow.ink: glow is 0.0..=1.0 (it can only dim)".to_string()],
+                "{bad}"
+            );
+        }
+        // A string is a parse error, not a silent 1.0.
+        assert!(!validate(&glow(3, r#""ink":"dim""#), &TEST, None).ok());
     }
 
     #[test]

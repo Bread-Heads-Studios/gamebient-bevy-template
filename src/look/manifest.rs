@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, de::Error as _};
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 pub const MANIFEST_FILE: &str = "look.json";
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -22,6 +22,11 @@ pub struct Manifest {
     /// Palette role -> `#rrggbb` or `#rrggbbaa`.
     #[serde(default)]
     pub palette: BTreeMap<String, String>,
+    /// Palette role -> glow, 0.0 (dark) to 1.0 (the game's own). Schema
+    /// v3; only roles the game lists in `Contract::glow`. Dims, never
+    /// brightens.
+    #[serde(default)]
+    pub glow: BTreeMap<String, f32>,
     /// String key -> printable ASCII text.
     #[serde(default)]
     pub strings: BTreeMap<String, String>,
@@ -370,8 +375,8 @@ mod tests {
     #[test]
     fn version_reads_v_leniently() {
         assert_eq!(
-            version(br#"{"v":3,"glitter":true,"slots":{"a":{"shape":[{"prim":"blob"}]}}}"#),
-            Some(3)
+            version(br#"{"v":4,"glitter":true,"slots":{"a":{"shape":[{"prim":"blob"}]}}}"#),
+            Some(4)
         );
         assert_eq!(version(br#"{"id":"x"}"#), None);
         assert_eq!(version(b"not json"), None);
