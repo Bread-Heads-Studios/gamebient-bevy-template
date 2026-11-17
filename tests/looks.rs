@@ -259,6 +259,7 @@ fn no_built_in_pack_changes_a_replay() {
 }
 
 use bevy::camera::primitives::MeshAabb;
+use gamebient_game::game::content::sprites::{ArtOf, SpriteArt};
 use gamebient_game::game::player::Player;
 use gamebient_game::game::states::GameState;
 
@@ -285,26 +286,51 @@ fn cuboid_edge(app: &App, entity: Entity) -> f32 {
     e.x
 }
 
+/// A Player Thing as `content::level::spawn_level` leaves it: the sim
+/// entity, and a box art child with the kind's unit cuboid and material.
+fn spawn_player_thing(app: &mut App) -> (Entity, Entity) {
+    let mesh = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Cuboid::new(1.0, 1.0, 1.0));
+    let material = app
+        .world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial::default());
+    let player = app.world_mut().spawn((Player, Transform::default())).id();
+    let child = app
+        .world_mut()
+        .spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
+            Transform::default(),
+            ArtOf(0),
+            ChildOf(player),
+        ))
+        .id();
+    (player, child)
+}
+
 /// The render half of the player (`player::dress_player`, registered by
-/// `AssetsPlugin`) sizes the mesh from the pack, on the spawn frame, and
-/// rebuilds it on `LookChanged`.
+/// `AssetsPlugin`) sizes the art child's mesh from the pack, on the spawn
+/// frame, and rebuilds it on `LookChanged`. The sim entity is never touched.
 #[test]
 fn the_player_is_dressed_from_the_pack_on_the_frame_it_spawns() {
     let mut app = app_with(Selection::Embedded("sample-sponsor".into()));
     app.init_resource::<Assets<Mesh>>();
     app.init_resource::<Assets<StandardMaterial>>();
     app.add_plugins(gamebient_game::assets::AssetsPlugin);
-    let player = app.world_mut().spawn((Player, Transform::default())).id();
+    let (player, art) = spawn_player_thing(&mut app);
     app.update();
-    assert!((cuboid_edge(&app, player) - 1.4).abs() < 1e-5);
-    assert!(
-        app.world()
-            .get::<MeshMaterial3d<StandardMaterial>>(player)
-            .is_some()
-    );
+    assert!((cuboid_edge(&app, art) - 1.4).abs() < 1e-5);
     assert_eq!(
-        app.world().get::<LookColour>(player).map(|c| c.role),
+        app.world().get::<LookColour>(art).map(|c| c.role),
         Some("player")
+    );
+    assert!(
+        app.world().get::<Mesh3d>(player).is_none()
+            && app.world().get::<LookColour>(player).is_none(),
+        "dress_player must write to the art child, never the sim entity"
     );
 
     // Hot reload: a new look with no recipe and a LookChanged rebuild the mesh.
@@ -312,15 +338,46 @@ fn the_player_is_dressed_from_the_pack_on_the_frame_it_spawns() {
     app.insert_resource(plain);
     app.world_mut().write_message(look::LookChanged);
     app.update();
-    assert!((cuboid_edge(&app, player) - 1.0).abs() < 1e-5);
+    assert!((cuboid_edge(&app, art) - 1.0).abs() < 1e-5);
 }
 
-/// D1: the sim's spawn is sim-only. With the asset stores present (so the
-/// old in-spawn dressing would have fired) the headless app still gives the
-/// player no mesh.
+/// A player drawn by a sprite (`content/sprites/Player.png`) keeps it: the
+/// pack does not swap the quad for its mesh, and the retint tag comes off.
 #[test]
-fn spawn_player_alone_inserts_no_mesh() {
-    let mut app = gamebient_game::game::replay::build_headless_app();
+fn a_player_sprite_is_left_to_the_game() {
+    let mut app = app_with(Selection::Embedded("sample-sponsor".into()));
+    app.init_resource::<Assets<Mesh>>();
+    app.init_resource::<Assets<StandardMaterial>>();
+    app.add_plugins(gamebient_game::assets::AssetsPlugin);
+    let (_, art) = spawn_player_thing(&mut app);
+    app.update();
+    assert!(app.world().get::<LookColour>(art).is_some());
+    let quad = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Rectangle::new(1.0, 1.0));
+    app.insert_resource(SpriteArt {
+        quad: quad.clone(),
+        materials: vec![None],
+    });
+    app.world_mut().entity_mut(art).insert(Mesh3d(quad.clone()));
+    app.update();
+    assert_eq!(app.world().get::<Mesh3d>(art).unwrap().0, quad);
+    assert!(app.world().get::<LookColour>(art).is_none());
+    app.world_mut().write_message(look::LookChanged);
+    app.update();
+    assert_eq!(
+        app.world().get::<Mesh3d>(art).unwrap().0,
+        quad,
+        "a LookChanged must not replace the sprite"
+    );
+}
+
+/// D1: the sim's spawn is sim-only. With the asset stores present the
+/// headless app's Player entity still carries no mesh (its art is a child).
+#[test]
+fn the_sim_player_carries_no_mesh() {
+    let mut app = gamebient_game::game::replay::build_builtin_app();
     app.init_resource::<Assets<Mesh>>();
     app.init_resource::<Assets<StandardMaterial>>();
     app.world_mut()
@@ -331,8 +388,11 @@ fn spawn_player_alone_inserts_no_mesh() {
     let w = app.world_mut();
     let players = w.query_filtered::<Entity, With<Player>>().iter(w).count();
     assert_eq!(players, 1, "the headless app entered Playing and spawned");
-    let meshed = w.query_filtered::<Entity, With<Mesh3d>>().iter(w).count();
-    assert_eq!(meshed, 0, "spawn_player must not dress the player");
+    let meshed = w
+        .query_filtered::<Entity, (With<Player>, With<Mesh3d>)>()
+        .iter(w)
+        .count();
+    assert_eq!(meshed, 0, "the Player sim entity must not be dressed");
 }
 
 /// `pack::read_dir` is the gate for every folder pack (`--look`, the CLI).
@@ -605,10 +665,10 @@ mod shapes {
         app.init_resource::<Assets<Mesh>>();
         app.init_resource::<Assets<StandardMaterial>>();
         app.add_plugins(gamebient_game::assets::AssetsPlugin);
-        let player = app.world_mut().spawn((Player, Transform::default())).id();
+        let (_, art) = spawn_player_thing(&mut app);
         app.update();
         let shape = pack_shape(app.world().resource::<ActiveLook>());
-        let h = app.world().get::<Mesh3d>(player).unwrap().0.clone();
+        let h = app.world().get::<Mesh3d>(art).unwrap().0.clone();
         let mesh = app.world().resource::<Assets<Mesh>>().get(&h).unwrap();
         assert_eq!(mesh.count_vertices(), vertex_count(&shape));
         assert_eq!(data(mesh), data(&build_mesh(&shape)));

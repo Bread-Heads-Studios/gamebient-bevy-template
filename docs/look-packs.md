@@ -283,9 +283,10 @@ Game code uses a look in two ways:
 **The one rule:** nothing in the sim (`SimSet`, `OnEnter(Playing)` spawns,
 anything the replay verifier runs) reads `ActiveLook` or `LookAssets`. Split
 an entity into a sim spawn and a render-side dresser instead: the template's
-`player::spawn_player` spawns the sim half and `player::dress_player`
-(registered by `AssetsPlugin`, which the verifier never adds) gives it its
-mesh from the pack. Art is sized to the sim's hitboxes, never the other way
+`content::level::spawn_level` spawns the Player Thing's sim half (art on a
+child) and `player::dress_player` (registered by `AssetsPlugin`, which the
+verifier never adds) gives that art child its mesh from the pack, leaving a
+`content/sprites/Player.png` sprite alone. Art is sized to the sim's hitboxes, never the other way
 round.
 
 What the test catches, exactly: `tests/looks.rs`

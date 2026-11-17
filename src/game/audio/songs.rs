@@ -236,7 +236,7 @@ pub const PLAY_LAYER: Song = Song {
 
 // --- Stings -------------------------------------------------------------------
 
-const GAME_OVER: Song = Song {
+pub const GAME_OVER: Song = Song {
     bpm: 100.0,
     beats_per_bar: 4,
     steps_per_beat: 4,
@@ -256,7 +256,7 @@ pub fn game_over_sting() -> AudioSource {
     render_sting(&GAME_OVER, 1.5).expect("GAME_OVER sting is well-formed")
 }
 
-const DEMO_END: Song = Song {
+pub const DEMO_END: Song = Song {
     bpm: 100.0,
     beats_per_bar: 4,
     steps_per_beat: 4,

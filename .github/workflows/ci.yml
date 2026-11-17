@@ -80,6 +80,12 @@ jobs:
         working-directory: tools
         run: python3 -m unittest test_cut_clips -v
 
+      # The content kit's promise: a data save to content/ (every tunable at
+      # its max, then its min; one Thing moved and one removed) never fails
+      # `cargo test`. Builds a scratch copy in target/extreme-content.
+      - name: Extreme content tests
+        run: tools/test_extreme_content.sh
+
       # Exercises the web fetch path: a 100-byte threshold pushes every
       # built-in Look Pack into FETCHABLE, so the generator's fetchable
       # branch and look::fetch compile for wasm. Type-check only, cheap.

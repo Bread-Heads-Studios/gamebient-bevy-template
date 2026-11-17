@@ -266,7 +266,7 @@ fi
 # `src/game/presentation.rs`, so excluding the sim's own directory would
 # print nothing for it. That means benign shapes are named too — a system
 # that spawns an entity and decorates it in the same breath (this template's
-# own `player::spawn_player`), or a decorator already inside `SimSet`. Hence
+# own `content::level::spawn_level`), or a decorator already inside `SimSet`. Hence
 # "advisory": it says which files to read, never which are wrong. The test
 # that answers the question is `tests/archetype_order.rs`.
 # Emits one `<path>:<Component>` line per (file, component) pair where that

@@ -127,11 +127,15 @@ pub fn embed_looks() {
             continue;
         }
         writeln!(code, "    ({id:?}, &[").unwrap();
-        for (name, abs) in &pack {
+        // Paths are relative to CARGO_MANIFEST_DIR, never absolute (as in
+        // build.rs's content embed): a copy of the game (the editor's gate
+        // export) builds into the same target dir, and an absolute path
+        // would let this crate embed the copy's files.
+        for (name, _) in &pack {
             writeln!(
                 code,
-                "        ({name:?}, include_bytes!({:?})),",
-                abs.display().to_string()
+                "        ({name:?}, include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), {:?}))),",
+                format!("/assets/looks/{id}/{name}")
             )
             .unwrap();
         }

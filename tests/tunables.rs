@@ -2,6 +2,8 @@
 //! it, and the same inputs under a different value do not verify.
 
 use bevy::prelude::*;
+use gamebient_game::game::content::level::LevelSource;
+use gamebient_game::game::content::saved::reset_to_defaults;
 use gamebient_game::game::replay::recorder::ReplayRecorder;
 use gamebient_game::game::replay::selftest::{SELFTEST_SEED, script};
 use gamebient_game::game::replay::{Replay, build_headless_app, verify};
@@ -12,10 +14,19 @@ use gamebient_game::game::tunables::{PendingTunes, TunableIndex, Value, read};
 const TICKS: u32 = 300;
 const CHANGE_AT: u32 = 120;
 
+/// The headless app on built-in content only: the test level and the Rust
+/// default tunables, so a save to `content/` never changes this probe.
+fn built_in_app() -> App {
+    let mut app = build_headless_app();
+    app.insert_resource(LevelSource::Test);
+    reset_to_defaults(app.world_mut());
+    app
+}
+
 /// Records the selftest script and, on tick `change_at`, queues `value`
 /// for the first tunable. `None` records a plain run.
 fn record(change_at: Option<u32>, value: Value) -> Replay {
-    let mut app = build_headless_app();
+    let mut app = built_in_app();
     app.add_systems(
         PreUpdate,
         script.before(gamebient_input::input::accumulate_input),
@@ -57,7 +68,7 @@ fn bumped(v: &Value) -> Value {
 }
 
 fn first_default() -> Value {
-    let app = build_headless_app();
+    let app = built_in_app();
     let e = app.world().resource::<TunableIndex>().entries[0].clone();
     read(app.world(), &e).unwrap()
 }
@@ -100,7 +111,7 @@ fn the_same_inputs_under_another_value_do_not_verify() {
 
 #[test]
 fn different_start_values_are_different_content() {
-    let mut app = build_headless_app();
+    let mut app = built_in_app();
     app.update();
     let e = app.world().resource::<TunableIndex>().entries[0].clone();
     let v = bumped(&read(app.world(), &e).unwrap());

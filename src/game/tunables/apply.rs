@@ -4,6 +4,7 @@
 
 use bevy::prelude::*;
 
+use crate::game::content::level::{LevelHash, LevelSource, test_level_hash};
 use crate::game::sim::{Checksum, SimTick};
 use crate::game::states::GameState;
 
@@ -22,9 +23,13 @@ pub struct TuneChange {
     pub value: Value,
 }
 
-/// Start values and mid-run changes of the current (or last) run.
+/// The level hash, start values and mid-run changes of the current (or
+/// last) run.
 #[derive(Resource, Default, Clone, Debug, PartialEq)]
 pub struct TuneLog {
+    /// The run's level (`content::level::LevelHash`, or the test level's
+    /// hash under `LevelSource::Test`); folded first by `hash::content`.
+    pub level: u64,
     pub starts: Vec<(u16, Value)>,
     pub changes: Vec<TuneChange>,
 }
@@ -84,12 +89,17 @@ pub fn apply_pending_tunes(world: &mut World) {
     }
 }
 
-/// `OnEnter(Playing)`, chained after `sim::begin_run`: the run's start
-/// values become the log's `starts`, and their hash is the first thing the
-/// fresh checksum folds.
+/// `OnEnter(Playing)`, chained after `sim::begin_run`: the run's level hash
+/// and start values become the log's `level` and `starts`, and their hash is
+/// the first thing the fresh checksum folds.
 pub fn begin_run_tunables(world: &mut World) {
     let starts = run_starts(world);
+    let level = match world.get_resource::<LevelSource>() {
+        Some(LevelSource::Test) => test_level_hash(),
+        _ => world.get_resource::<LevelHash>().map_or(0, |h| h.0),
+    };
     let log = TuneLog {
+        level,
         starts,
         changes: Vec::new(),
     };
@@ -101,12 +111,15 @@ pub fn begin_run_tunables(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::replay::build_headless_app;
+    use crate::game::replay::{build_builtin_app, build_headless_app};
     use crate::game::sim::{PendingSeed, seed_bytes};
+    use crate::game::tunables::index::bumped_in_range;
     use crate::game::tunables::read;
 
+    /// A run on built-in content: the saved values and level in
+    /// `content/` never reach these tests.
     fn playing() -> App {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         app.world_mut().resource_mut::<PendingSeed>().0 = Some(seed_bytes(1));
         app.update();
         app.world_mut()
@@ -125,21 +138,12 @@ mod tests {
             .expect("the template registers at least one tunable (RunTuning)")
     }
 
-    fn bump(v: &Value) -> Value {
-        match v {
-            Value::Float(f) => Value::Float(f + 1.0),
-            Value::Int(i) => Value::Int(i + 1),
-            Value::Bool(b) => Value::Bool(!b),
-            other => other.clone(),
-        }
-    }
-
     #[test]
     fn a_change_lands_on_the_next_tick_and_is_logged() {
         let mut app = playing();
         let entry = first(&app);
         let before = read(app.world(), &entry).unwrap();
-        let next = bump(&before);
+        let next = bumped_in_range(&entry, &before);
         app.world_mut()
             .resource_mut::<PendingTunes>()
             .0
@@ -172,7 +176,7 @@ mod tests {
         let mut a = playing();
         let mut b = playing();
         let entry = first(&a);
-        let v = bump(&read(a.world(), &entry).unwrap());
+        let v = bumped_in_range(&entry, &read(a.world(), &entry).unwrap());
         b.world_mut()
             .resource_mut::<PendingTunes>()
             .0
@@ -189,10 +193,10 @@ mod tests {
 
     #[test]
     fn outside_a_run_a_change_applies_at_once_and_becomes_a_start_value() {
-        let mut app = build_headless_app();
+        let mut app = build_builtin_app();
         app.update();
         let entry = first(&app);
-        let v = bump(&read(app.world(), &entry).unwrap());
+        let v = bumped_in_range(&entry, &read(app.world(), &entry).unwrap());
         app.world_mut()
             .resource_mut::<PendingTunes>()
             .0
@@ -206,5 +210,41 @@ mod tests {
         let log = app.world().resource::<TuneLog>();
         assert_eq!(log.starts[usize::from(entry.id)].1, v);
         assert!(log.changes.is_empty());
+    }
+
+    #[test]
+    fn begin_run_copies_the_level_hash_into_the_log() {
+        let mut app = build_headless_app();
+        app.insert_resource(LevelHash(42));
+        app.world_mut().resource_mut::<PendingSeed>().0 = Some(seed_bytes(1));
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        assert_eq!(app.world().resource::<TuneLog>().level, 42);
+    }
+
+    #[test]
+    fn begin_run_uses_zero_without_a_level_hash() {
+        let mut app = build_headless_app();
+        app.world_mut().remove_resource::<LevelHash>();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        assert_eq!(app.world().resource::<TuneLog>().level, 0);
+    }
+
+    #[test]
+    fn begin_run_uses_the_test_hash_under_the_test_source() {
+        let mut app = build_builtin_app();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        assert_eq!(app.world().resource::<TuneLog>().level, test_level_hash());
     }
 }

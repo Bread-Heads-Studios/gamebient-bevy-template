@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Saved settings",
+  "description": "Saved values for the game's tunables, keyed by tunable path. 64 KB.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "values"],
+  "properties": {
+    "v": { "const": 1 },
+    "values": {
+      "type": "object",
+      "propertyNames": { "minLength": 1, "maxLength": 128 },
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "number" },
+          { "type": "boolean" },
+          { "type": "string" },
+          { "type": "array", "items": { "type": "number" } }
+        ]
+      }
+    }
+  }
+}

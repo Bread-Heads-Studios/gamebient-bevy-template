@@ -53,14 +53,18 @@
 //!
 //! # Extending this for your game (do this during the port)
 //!
-//! On this template the sim queries exactly one entity (`Player`), so the
-//! probe is a smoke test: with one entity there is no order to get wrong.
-//! The template's one sim entity is `SpawnOrder(0)`, so the split mode's
-//! marker lands on it (even keys get the marker, as in Dough.io) and the
-//! insert path runs end to end — but with nothing to reorder against it, the
-//! mode is carried, compiled and run so that a port inherits working
-//! machinery, not because it is proving anything on the template. What this
-//! file really proves *here* is that the inserts and the child spawn are
+//! On this template the sim spawns its level through the content kit; this
+//! probe runs on the built-in `test_level()` (`LevelSource::Test`, as the
+//! selftest does): one `Player` and three `Coin`s, `SpawnOrder` 0..=3 in
+//! its order, and `scoring::collect_coins` visits the coins. Its sum is
+//! order-independent, so the probe is still mostly a smoke test here, but
+//! both modes now cover both kinds: the faithful mode branches across them
+//! and the split mode halves them on `SpawnOrder` parity (even keys get the
+//! marker, as in Dough.io), so the player and one coin share a marker and
+//! the other two coins do not. The kit's own art goes on a child of each
+//! thing (`content::level::spawn_level`), so the parent's archetype gains
+//! only `Children`, which this probe's child spawn reproduces. What this
+//! file proves *here* is that the inserts and the child spawn are
 //! value-safe and cadence-independent.
 //! **It only grows teeth once both modes reproduce your game's own
 //! decorators and your own sim entities**, so:
@@ -97,10 +101,13 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use gamebient_input::{Buttons, VirtualInput};
 
+use gamebient_game::game::content::level::LevelSource;
+use gamebient_game::game::content::saved::reset_to_defaults;
 use gamebient_game::game::player::Player;
 use gamebient_game::game::replay::recorder::ReplayRecorder;
 use gamebient_game::game::replay::selftest::SELFTEST_TICKS;
 use gamebient_game::game::replay::{Replay, build_headless_app, verify};
+use gamebient_game::game::scoring::Coin;
 use gamebient_game::game::sim::{self, PendingSeed, RunOver, SimTick, SpawnOrder};
 use gamebient_game::game::states::GameState;
 
@@ -152,11 +159,14 @@ impl Decoration {
 #[derive(Resource, Default)]
 struct OrderTrace(u64);
 
-fn trace_order(players: Query<Entity, With<Player>>, mut trace: ResMut<OrderTrace>) {
+fn trace_order(
+    things: Query<Entity, Or<(With<Player>, With<Coin>)>>,
+    mut trace: ResMut<OrderTrace>,
+) {
     // Position-sensitive but identity-insensitive: fold each entity's RANK
     // among the ids returned alongside it, so re-ordering the same set shows
     // up while a different allocation of the same order does not.
-    let ids: Vec<Entity> = players.iter().collect();
+    let ids: Vec<Entity> = things.iter().collect();
     let mut sorted: Vec<u64> = ids.iter().map(|e| e.to_bits()).collect();
     sorted.sort_unstable();
     for (i, e) in ids.iter().enumerate() {
@@ -167,12 +177,15 @@ fn trace_order(players: Query<Entity, With<Player>>, mut trace: ResMut<OrderTrac
     }
 }
 
-/// Mimics a game's `attach_*_visuals` (on the template, `player::dress_player`,
-/// which inserts a mesh, a material and a `LookColour` from `Update`):
-/// decorates every sim entity that has not been decorated yet, with a branch
-/// (so more than one archetype results) and a child (so `Children` lands on
-/// the parent).
-fn decorate_players(mut commands: Commands, new: Query<Entity, (With<Player>, Without<FakeMesh>)>) {
+/// Mimics a game's `attach_*_visuals` (on the template, `spawn_level`'s
+/// art child, which `player::dress_player` then dresses from the Look):
+/// decorates every sim entity that has not been decorated yet, from `Update`,
+/// with a branch (so more than one archetype results) and a child (so
+/// `Children` lands on the parent).
+fn decorate_things(
+    mut commands: Commands,
+    new: Query<Entity, (Or<(With<Player>, With<Coin>)>, Without<FakeMesh>)>,
+) {
     for (i, e) in new.iter().enumerate() {
         commands.entity(e).insert(FakeMesh);
         // The branch. On a game with many sim entities this is what splits
@@ -191,7 +204,7 @@ fn decorate_players(mut commands: Commands, new: Query<Entity, (With<Player>, Wi
 /// itself. A port points this at every kind of sim entity it has.
 fn split_sim_archetypes(
     mut commands: Commands,
-    new: Query<(Entity, &SpawnOrder), (With<Player>, Without<FakeSplit>)>,
+    new: Query<(Entity, &SpawnOrder), (Or<(With<Player>, With<Coin>)>, Without<FakeSplit>)>,
 ) {
     for (e, order) in &new {
         if order.0.is_multiple_of(2) {
@@ -219,6 +232,10 @@ fn script(tick: Res<SimTick>, mut virt: ResMut<VirtualInput>) {
 /// per `app.update()`.
 fn record(decorate: Decoration, seed: [u8; 32], ticks_per_frame: u32) -> (Replay, u64) {
     let mut app = build_headless_app();
+    // Built-in content only (the selftest's own level and Rust default
+    // tunables), so a save to `content/` never changes this probe.
+    app.insert_resource(LevelSource::Test);
+    reset_to_defaults(app.world_mut());
     if ticks_per_frame > 1 {
         app.insert_resource(TimeUpdateStrategy::ManualDuration(
             sim::tick_duration() * ticks_per_frame,
@@ -238,7 +255,7 @@ fn record(decorate: Decoration, seed: [u8; 32], ticks_per_frame: u32) -> (Replay
     // `attach_crumbs`/`attach_blobs` do) then needs no change to `record`.
     app.insert_resource(decorate);
     if decorate.on {
-        app.add_systems(Update, decorate_players);
+        app.add_systems(Update, decorate_things);
     }
     if decorate.split {
         app.add_systems(Update, split_sim_archetypes);

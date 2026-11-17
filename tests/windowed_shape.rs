@@ -132,6 +132,8 @@
 use bevy::prelude::*;
 use bevy::shader::Shader;
 
+use gamebient_game::game::content::level::LevelSource;
+use gamebient_game::game::content::saved::reset_to_defaults;
 use gamebient_game::game::replay::recorder::ReplayRecorder;
 use gamebient_game::game::replay::selftest::{SELFTEST_SEED, SELFTEST_TICKS, script};
 use gamebient_game::game::replay::{Replay, build_headless_app, verify};
@@ -399,6 +401,10 @@ fn record_windowed_after_menu(bot: Bot, menu_ticks: u32) -> Replay {
 /// run lives in [`play_one_run`].
 fn windowed_app(bot: Bot) -> App {
     let mut app = build_headless_app();
+    // Built-in content only (the selftest's own level and Rust default
+    // tunables), so a save to `content/` never changes this probe.
+    app.insert_resource(LevelSource::Test);
+    reset_to_defaults(app.world_mut());
     // The real `src/assets/` decorators, on hand-made asset stores.
     // `build_headless_app` is `MinimalPlugins`, so none of this exists by
     // default and `AssetsPlugin` cannot bake anything there; these four
@@ -535,14 +541,17 @@ fn play_one_run(app: &mut App, bot: Bot) -> Replay {
     app.world_mut().run_schedule(StateTransition);
     app.update();
     // The asset stores are live, proved rather than assumed: this
-    // template's `player::dress_player` (an `AssetsPlugin` `Update`
-    // decorator) inserts `Mesh3d`/`MeshMaterial3d` only when `Assets<Mesh>`
-    // and `Assets<StandardMaterial>` are both present, which is the same
+    // template's `content::level::spawn_level` gives each thing a child
+    // carrying `Mesh3d`/`MeshMaterial3d` only when the kit's `ThingArt`
+    // exists, which its `Startup` system builds only when `Assets<Mesh>` and
+    // `Assets<StandardMaterial>` are both present (and `player::dress_player`,
+    // an `AssetsPlugin` `Update` decorator, redresses the player's child from
+    // the Look under the same condition): the same
     // `Option<Res<...>>` fork every game's decorators hang off. If this count is zero the asset lines above did
     // nothing and the probe is back to covering resources only.
     //
     // The template's own `AssetsPlugin` only registers `player::dress_player`,
-    // so this is the strongest statement it can make about itself. **In a game it is not enough**:
+    // which writes only to the art child, so this is the strongest statement it can make about itself. **In a game it is not enough**:
     // assert there too that a decorator has actually written the component
     // *field* a sim system might read (a mirrored `scale.x`, a rotation),
     // under every bot in the table — see the module comment.

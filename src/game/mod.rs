@@ -4,6 +4,7 @@ use bevy::prelude::*;
 pub mod audio;
 #[cfg(feature = "autopilot")]
 pub mod autopilot;
+pub mod content;
 pub mod demo;
 pub mod host;
 pub mod input;
@@ -40,6 +41,9 @@ impl Plugin for GamePlugin {
             p
         };
         tunables_registration(app);
+        kinds_registration(app);
+        // After the kinds: the embedded level's kinds are checked against them.
+        app.add_plugins(content::ContentPlugin);
         app.init_state::<GameState>()
             // Canon input + web glue. StateEvents posts every GameState
             // transition to the embedding host (website analytics, cabinet).
@@ -91,7 +95,8 @@ impl Plugin for GamePlugin {
                     // into the fresh checksum before anything else.
                     tunables::begin_run_tunables,
                     replay::recorder::begin_recording,
-                    player::spawn_player,
+                    // The level's things, in file order (the player among them).
+                    content::level::spawn_level,
                 )
                     .chain(),
             )
@@ -115,6 +120,7 @@ impl Plugin for GamePlugin {
                     // Pending tunable changes land here, between ticks.
                     tunables::apply_pending_tunes,
                     player::move_player,
+                    scoring::collect_coins,
                     scoring::handle_score_events,
                     sim::checksum_tick,
                     player::checksum_player,
@@ -158,7 +164,14 @@ impl Plugin for GamePlugin {
             app.init_resource::<audio::MusicCache>()
                 .init_resource::<audio::CurrentCue>()
                 .init_resource::<audio::Duck>()
-                .add_systems(Startup, (setup_scene, audio::setup_sfx))
+                .add_systems(
+                    Startup,
+                    (
+                        setup_scene,
+                        // Bakes `sfx.json` programs, so after they load.
+                        audio::setup_sfx.after(content::audio::load_embedded_audio),
+                    ),
+                )
                 .add_systems(
                     Update,
                     (
@@ -210,6 +223,37 @@ impl Plugin for GamePlugin {
 fn tunables_registration(app: &mut App) {
     app.add_plugins(tunables::TunablesPlugin);
     tunables::register::<tuning::RunTuning>(app);
+}
+
+/// The game's kinds of Thing, in the order their indices are assigned
+/// (never reorder between releases). `content/level.json` places them.
+///
+/// TEMPLATE NOTE: replace these two with your game's own kinds: a size and
+/// a placeholder colour each, and an `on_spawn` that inserts the kind's
+/// markers and bodies (sim components only; art goes on children).
+fn kinds_registration(app: &mut App) {
+    use content::kit::{KindProps, KitAppExt};
+    app.thing_kind(
+        "Player",
+        KindProps {
+            size: Vec2::new(1.0, 1.0),
+            // The Look's `player` colour; `player::dress_player` retints it.
+            colour: crate::ui::theme::PLAYER,
+            on_spawn: Some(|e| {
+                e.insert(player::Player);
+            }),
+        },
+    )
+    .thing_kind(
+        "Coin",
+        KindProps {
+            size: Vec2::new(0.6, 0.6),
+            colour: Color::srgb(1.0, 0.85, 0.2),
+            on_spawn: Some(|e| {
+                e.insert(scoring::Coin);
+            }),
+        },
+    );
 }
 
 /// One-time scene setup: a camera and a directional light.
@@ -452,7 +496,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<NextState<GameState>>()
             .set(GameState::Playing);
-        app.update(); // transition applies; OnEnter(Playing) runs begin_run + spawn_player
+        app.update(); // transition applies; OnEnter(Playing) runs begin_run + spawn_level
         for _ in 0..10 {
             app.update();
         }

@@ -204,6 +204,7 @@ mod tests {
         let mut rec = ReplayRecorder::default();
         rec.begin(RunSeed::default());
         let log = TuneLog {
+            level: 0,
             starts: vec![(0, Value::Int(5))],
             changes: vec![TuneChange {
                 tick: 9,

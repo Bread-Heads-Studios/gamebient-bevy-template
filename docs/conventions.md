@@ -192,6 +192,7 @@ The short side is always 720, and `cargo test` fails on any other size.
   A system that takes `Res<GameViewport>` carries the marker on that
   parameter's line as well. The marker records a reviewed exception for
   presentation code; it is never the fix for a `SimSet` system.
+- **Sprites live on children.** A kind's picture or box is a child entity of its Thing, so the Thing's archetype is the same with or without art; `on_spawn` never branches on `ThingArt`. See `docs/content-kit.md`.
 - **Capture builds stay windowed.** On Linux the window is fullscreen
   unless the build has the `capture` cargo feature (`autopilot` implies it,
   and `record` implies `autopilot`), so screenshots are the game's own size.
@@ -561,10 +562,14 @@ env)` with `.with_release(frames)`, `.with_arp(&[0, 4, 7])` and
 `.with_vibrato(cents, hz)`; `env` is attenuation per 60 Hz frame, last value
 held. Every voice must tile to the song's length; `render_loop` names the
 voice that does not. Sound effects are `tracker::Fx` programs (`.hit`,
-`.slide`, `.tone`, `.noise`, `.then`, `.with`) baked in `audio::bake`.
+`.slide`, `.tone`, `.noise`, `.then`, `.with`) baked in `audio::bake`, the
+per-game hook (it may also return a `synth.rs` voice); `audio::program`
+returns an event's chip program when it is one, else `None`. `content/audio/sfx.json` may replace an
+event's program and `content/audio/songs.json` a named cue's song
+(`game::content::audio`); presentation only, never read by the sim.
 
 **Cues.** `MUSIC` in `src/game/audio/mod.rs` maps every `GameState` to a
-`Cue`: a `Source::Baked(fn)` or `Source::File("audio/music/x.ogg")`, looping
+`Cue` with a unique `name`: a `Source::Baked(fn)` or `Source::File("audio/music/x.ogg")`, looping
 or one-shot, its fades and volume, and `layers` of the same length that
 start with it at zero volume and fade in on `LayerEvent::Start(i)`. Gameplay
 changes the music within a state with `CueEvent::Switch(&CUE)` (a boss, a

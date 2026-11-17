@@ -57,11 +57,14 @@ in before the first gameplay code; the cover and metadata skills read it.
 - **An asset:** load/create it in `AssetsPlugin` (a `Startup` system inserting a
   resource of handles), then reference that resource where you spawn.
 - **A sound:** add an `SfxEvent` variant and its `bake` arm (a `tracker::Fx`
-  program on the house chip, in the game's key), list it in `SfxEvent::ALL`,
+  program on the house chip, in the game's key; also return it from
+  `program`, or `None` there for a non-chip sound), list it in `SfxEvent::ALL`,
   emit it from gameplay. Mark fanfares with `is_sting` so they duck the music.
 - **Music:** compose a `Song` in `src/game/audio/songs.rs` and point a `MUSIC`
-  row at it with `Cue::loop_baked` / `sting_baked` (or `loop_file` for an
-  authored `.ogg`); layers via `.with_layers`, boss/leg changes via
+  row at it with `Cue::loop_baked("name", f)` / `sting_baked` (or `loop_file`
+  for an authored `.ogg`); layers via `.with_layers(&[Layer::baked("name", f)])`.
+  Names are unique snake_case: they key `content/audio/songs.json` and the
+  editor's `sound.preview` (event names key `sfx.json`). Boss/leg changes via
   `CueEvent::Switch`. Then `GX_AUDIO_EXPORT=<dir> cargo test --test audio_export
   -- --nocapture` and listen. Rules: `docs/conventions.md` "Audio" and the
   game's `docs/audio-identity.md`.
@@ -215,6 +218,17 @@ Production checks after a release:
   lands on the verified leaderboard.
 - `/` plays and stops at the cut with the card.
 
+## Content kit
+
+Level layout, saved tunable values, sprites and audio live as files in
+`content/` (embedded at build, replaceable live by the editor). Full guide:
+`docs/content-kit.md`. An agent asked to move, add or remove Things edits
+`content/level.json`; asked to change how a kind behaves, edits Rust. A new
+kind goes through `thing_kind` in `kinds_registration`, above `ContentPlugin`;
+its `on_spawn` must not depend on art existing. The level and saved tunables
+are run content (in the replay hash); sprites and audio are not. The selftest
+and checks use `test_level()` and Rust-default tunables.
+
 ## Typography and cards
 
 Full rules: "Typography and cards" in `docs/conventions.md`.
@@ -253,7 +267,7 @@ Full rules: "Typography and cards" in `docs/conventions.md`.
 - The game's look contract is `theme::LOOK` in `src/ui/theme.rs`: palette roles, string keys with max lengths, slots, recipes, audio cues and fonts. Add a role or key there before a pack can use it.
 - Shapes: give a slot `shape: Some(ShapeSpec { … })` in `LOOK`, then either `ShapeTargets::register("slot", handle)` from render-side code (rewrites the mesh asset behind an existing handle; the target must keep `RenderAssetUsages::MAIN_WORLD`) or `look::build_mesh(&shape)` at spawn. It writes asset contents only, never entities or sim state. The default look stays bit-identical. Example pack: `assets/looks/sample-shapes`.
 - Tag spawned entities with `LookColour::new("role")` / `LookText("key")` instead of reading the pack in spawn code where you can.
-- **Never read `ActiveLook` or `LookAssets` from a sim system or a sim spawn** (`OnEnter(Playing)` included). `LookPlugin` goes in `main.rs`, never `GamePlugin`. Spawn the sim half bare and dress it from a render-side plugin, as `player::spawn_player` / `player::dress_player` (registered by `AssetsPlugin`) do.
+- **Never read `ActiveLook` or `LookAssets` from a sim system or a sim spawn** (`OnEnter(Playing)` included). `LookPlugin` goes in `main.rs`, never `GamePlugin`. Spawn the sim half bare and dress it from a render-side plugin, as `content::level::spawn_level` (sim entity, art on a child) / `player::dress_player` (registered by `AssetsPlugin`, dresses the art child) do.
 - `tests/looks.rs` (`no_built_in_pack_changes_a_replay`) replays the selftest under every built-in pack and must stay green, but it only catches a sim read whose result differs under some built-in pack's values, never a render-only branch (the verifier has no asset stores). A port adds a built-in pack that sets every palette role, string key and slot the game reads.
 - Packs are checked for limits and headers, not fully decoded (Bevy's Vorbis decoder can panic on a bad body), so take packs only from allowlisted creators until the decode probe lands (step 5).
 - Hot reload updates within half a second, except the menu title (fitted at spawn), which refreshes the next time the menu opens.

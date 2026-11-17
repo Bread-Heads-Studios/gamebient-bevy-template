@@ -1,41 +1,20 @@
 use bevy::prelude::*;
 
-use super::GameEntity;
-use super::scoring::GameData;
-use super::sim::{Checksum, SpawnCounter};
+use super::scoring::{Coin, GameData};
+use super::sim::Checksum;
 
-/// The player-controlled entity.
+/// The player-controlled entity. Spawned by the level (`content/level.json`)
+/// as the `Player` kind, whose `on_spawn` inserts this marker; see
+/// `kinds_registration` in `game/mod.rs`.
 #[derive(Component)]
 pub struct Player;
 
 const PLAYER_SPEED: f32 = 8.0;
 
-/// Spawns the player's sim half when entering `Playing`: the marker, the
-/// run-scoped `GameEntity`, the spawn stamp and the `Transform`. Nothing
-/// render-side and no look read: this runs in the headless verifier too, and
-/// a Look Pack never reaches the sim (D1, docs/look-packs.md). The mesh and
-/// material come from [`dress_player`], which `AssetsPlugin` registers.
-///
-/// Every sim entity is stamped with a [`SpawnOrder`](super::sim::SpawnOrder)
-/// as it is spawned — the stable key determinism rule 1's sorting clause asks
-/// order-sensitive sim systems to sort by. This template has exactly one sim
-/// entity, so nothing here has an order to get wrong yet; the stamp is here
-/// because a game grows its second sim entity long before anyone remembers
-/// to add the key, and `tests/archetype_order.rs` needs a key the sim owns to
-/// split archetypes on.
-pub fn spawn_player(mut commands: Commands, mut spawn: ResMut<SpawnCounter>) {
-    commands.spawn((
-        Player,
-        GameEntity,
-        spawn.stamp(),
-        Transform::from_xyz(0.0, 0.0, 0.0),
-    ));
-}
-
 /// The player's mesh: the active pack's `player` shape (schema v2) if it
 /// sets one, else a cuboid whose edge is the pack's `player` `cuboid`
 /// `size`, or 1.0 with no pack (or no `LookPlugin`, as in the `tests/`
-/// harnesses).
+/// harnesses). The art child's `Transform` scales it by the Thing's `Size`.
 fn player_mesh(look: Option<&crate::look::ActiveLook>) -> Mesh {
     if let Some(crate::look::Slot::Shape(s)) = look.and_then(|l| l.slot("player")) {
         return crate::look::build_mesh(&s.shape);
@@ -46,44 +25,59 @@ fn player_mesh(look: Option<&crate::look::ActiveLook>) -> Mesh {
     Cuboid::new(size, size, size).into()
 }
 
-/// Render half of the player: gives a newly spawned [`Player`] its mesh,
-/// material and `LookColour`, and rebuilds the mesh on every `LookChanged`
-/// so a hot-reloaded pack can change the size or shape too. Registered by
-/// `assets::AssetsPlugin` in `Update`, outside `SimSet`; the headless
-/// verifier never adds that plugin, and this writes nothing the sim reads
-/// (`tests/archetype_order.rs` mirrors it as its faithful decorator).
+/// Render half of the player: dresses the box art child `spawn_level` gives
+/// a [`Player`] Thing with the Look's mesh and a `LookColour`, and rebuilds
+/// the mesh on every `LookChanged` so a hot-reloaded pack can change the
+/// size or shape too. Registered by `assets::AssetsPlugin` in `Update`,
+/// outside `SimSet`; the headless verifier never adds that plugin. It writes
+/// only to the art child, never to the sim entity, so the Player's own
+/// archetype is the same with or without a pack (D1, docs/look-packs.md;
+/// `tests/archetype_order.rs`).
 ///
-/// Same frame as the spawn: `spawn_player` runs in `StateTransition`, before
-/// `Update`, so this sees `Added<Player>` on that frame, its inserts land at
-/// the end of `Update`, and `look::apply::retint_material` (`PostUpdate`)
-/// colours the material before the frame renders. No frame shows the player
-/// without a mesh.
+/// A child showing a sprite (`content/sprites/Player.png`) is the game's own
+/// art: the pack leaves it alone and its `LookColour` is taken off, so the
+/// retint never tints the sprite. The material is the kind's shared
+/// `ThingArt` material, which `look::apply::retint_material` recolours.
+///
+/// Same frame as the spawn: `spawn_level` runs in `StateTransition`, before
+/// `Update`, so the art child exists here on that frame, these inserts land
+/// at the end of `Update`, and `retint_material` (`PostUpdate`) colours the
+/// material before the frame renders.
 pub fn dress_player(
     mut commands: Commands,
     mut changed: MessageReader<crate::look::LookChanged>,
     meshes: Option<ResMut<Assets<Mesh>>>,
-    materials: Option<ResMut<Assets<StandardMaterial>>>,
     look: Option<Res<crate::look::ActiveLook>>,
-    players: Query<(Entity, Ref<Player>)>,
+    sprite_art: Option<Res<super::content::sprites::SpriteArt>>,
+    players: Query<&Children, With<Player>>,
+    art: Query<(&Mesh3d, Has<crate::look::LookColour>), With<super::content::sprites::ArtOf>>,
 ) {
     let redress = changed.read().count() > 0;
-    let (Some(mut meshes), Some(mut materials)) = (meshes, materials) else {
+    let Some(mut meshes) = meshes else {
         return;
     };
-    for (entity, player) in &players {
-        if player.is_added() {
-            commands.entity(entity).insert((
-                Mesh3d(meshes.add(player_mesh(look.as_deref()))),
-                MeshMaterial3d(materials.add(StandardMaterial {
-                    base_color: crate::ui::theme::PLAYER,
-                    ..default()
-                })),
-                crate::look::LookColour::new("player"),
-            ));
-        } else if redress {
-            commands
-                .entity(entity)
-                .insert(Mesh3d(meshes.add(player_mesh(look.as_deref()))));
+    let quad = sprite_art.as_ref().map(|a| a.quad.id());
+    for children in &players {
+        for child in children.iter() {
+            let Ok((mesh, tagged)) = art.get(child) else {
+                continue;
+            };
+            if Some(mesh.0.id()) == quad {
+                if tagged {
+                    commands.entity(child).remove::<crate::look::LookColour>();
+                }
+                continue;
+            }
+            if !tagged {
+                commands.entity(child).insert((
+                    Mesh3d(meshes.add(player_mesh(look.as_deref()))),
+                    crate::look::LookColour::new("player"),
+                ));
+            } else if redress {
+                commands
+                    .entity(child)
+                    .insert(Mesh3d(meshes.add(player_mesh(look.as_deref()))));
+            }
         }
     }
 }
@@ -110,11 +104,13 @@ pub fn move_player(
 /// module doc calls for: registered right after `sim::checksum_tick` in the
 /// `SimSet` chain, folding the key run state `checksum_tick` itself doesn't
 /// know about (see docs/replay-verification.md, determinism rule 6). Folds
-/// `lives` then the player transform bit-exactly, in that order, so the
-/// checksum is sensitive to both game-over state and movement.
+/// `lives`, the player transform bit-exactly, then the number of coins left,
+/// in that order, so the checksum is sensitive to game-over state, movement
+/// and which coins were taken.
 pub fn checksum_player(
     data: Res<GameData>,
     player: Query<&Transform, With<Player>>,
+    coins: Query<(), With<Coin>>,
     mut sum: ResMut<Checksum>,
 ) {
     sum.fold(u64::from(data.lives));
@@ -122,4 +118,5 @@ pub fn checksum_player(
         sum.fold(u64::from(tf.translation.x.to_bits()));
         sum.fold(u64::from(tf.translation.y.to_bits()));
     }
+    sum.fold(coins.iter().count() as u64);
 }
