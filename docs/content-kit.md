@@ -99,10 +99,13 @@ Run content is the **level** and the **tunables**; presentation is not.
 - Sprites, `sprites.json`, songs and sfx never enter the sim or the hash.
   No sim system reads them.
 
-A leaderboard must accept a run only when `content` equals the release's
-default hash (so test-level runs and runs on edited content stay off it);
-the website does not check that yet: its verifier reports `content`, but
-nothing compares it with the release default. Editing the level or a saved
+A leaderboard must accept a run only when it was played on the release's
+default content (so test-level runs and runs on edited content stay off it).
+The verifier reports both halves: `default_content`, the hash its own
+embedded `content/` gives a run that edits nothing, and
+`is_default_content`, the run's level, start values and changes compared
+with those defaults exactly. The website refuses a run unless both say it
+is the default. Editing the level or a saved
 tunable changes the default for the next release; it does not invalidate old
 releases' verifiers.
 

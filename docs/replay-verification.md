@@ -375,10 +375,15 @@ review.
     values cannot verify against another, and a header stripped of its
     changes fails too. The registration order is the index: never reorder
     `tunables::register` calls between releases. A leaderboard must
-    accept a run only when `content` equals the release's default hash,
-    which would also reject test-level runs and runs that changed a value
-    mid-way; the website's verifier does not check that yet (it reports
-    `content` but nothing compares it with the release default). `tests/tunables.rs` is the
+    accept a run only when it was played on the release's default content,
+    which also rejects test-level runs and runs that changed a value
+    mid-way. The verdict says so itself: `default_content` is the hash this
+    build's own embedded content gives (`replay::ReleaseDefault`, captured
+    by `build_verify_app` before the replay's starts are staged), and
+    `is_default_content` compares the run's level hash, start values and
+    changes with those defaults exactly, so a forged log that collides on
+    the 64-bit hash is still caught. The website refuses a GXR2 run unless
+    both agree. `tests/tunables.rs` is the
     probe.
 ## Keeping a ported game current
 
@@ -486,9 +491,9 @@ const json = verify(new Uint8Array(bytes));
 ```
 
 `json` parses to
-`{score, checksum, content, ticks, ended: "gameover"|"input_exhausted"|"cap", matches}`
+`{score, checksum, content, default_content, is_default_content, ticks, ended: "gameover"|"input_exhausted"|"cap", matches}`
 or `{"error": "..."}` if the bytes don't decode as `GXR2`. `score` and
-`ticks` are numbers; **`checksum` and `content` are decimal strings**
+`ticks` are numbers; **`checksum`, `content` and `default_content` are decimal strings**
 (`"checksum":"15390901594743611022"`) because it is a u64 and JSON numbers
 are doubles in JavaScript — parsing it as a number would round it. Compare
 it verbatim, or as a `BigInt`. Cache the required module at module scope —
