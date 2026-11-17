@@ -20,10 +20,12 @@
 //! on its tick, and `content` says which game was played: it folds in the
 //! level hash too (`replay::level_source_for` picks the content level or the
 //! selftest's `LevelSource::Test`; the selftest and checks start from Rust
-//! default tunables). A leaderboard must accept a run only when `content`
-//! equals the release's default hash; the website does not check that yet
-//! (its verifier reports `content` but nothing compares it with the
-//! release default).
+//! default tunables). A leaderboard must accept a run only when it was
+//! played on the release's default content: the verdict reports
+//! `default_content` (the hash this build's own embedded content gives) and
+//! `is_default_content` (the run's level, start values and changes compared
+//! exactly with those defaults, not by hash), and the website refuses a
+//! ranked run unless both say so.
 
 pub mod feeder;
 pub mod recorder;
@@ -257,7 +259,7 @@ use super::content::level::{LevelHash, LevelSource, test_level_hash};
 use super::scoring::{GameData, LeaderboardScore};
 use super::sim::{Checksum, PendingSeed, RunSeed, SimTick, tick_duration};
 use super::states::GameState;
-use super::tunables::{PendingTunes, TunableIndex, TuneLog, Value, hash};
+use super::tunables::{PendingTunes, TunableIndex, TuneLog, Value, hash, run_starts};
 use feeder::{ReplayFeeder, feed_tick};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,6 +275,15 @@ pub struct Verdict {
     pub checksum: u64,
     /// The content hash the re-simulation produced (see `tunables::hash`).
     pub content: u64,
+    /// The content hash of this build's own release default: the embedded
+    /// `content/level.json` and the start values `ContentPlugin` leaves in
+    /// place (Rust defaults plus `content/tunables.json`), no changes. A
+    /// run that edited nothing records exactly this.
+    pub default_content: u64,
+    /// The run was played on the release default, compared exactly (the
+    /// level hash, every start value's bytes, and no mid-run change), so a
+    /// forged log whose 64-bit hash happens to collide is still refused.
+    pub is_default_content: bool,
     pub ticks: u32,
     pub ended: Ended,
     pub matches: bool,
@@ -291,8 +302,14 @@ impl Verdict {
         // caller compares it verbatim or parses it as a BigInt. `score` and
         // `ticks` stay numeric — both are well inside the safe range.
         format!(
-            "{{\"score\":{},\"checksum\":\"{}\",\"content\":\"{}\",\"ticks\":{},\"ended\":\"{ended}\",\"matches\":{}}}",
-            self.score, self.checksum, self.content, self.ticks, self.matches
+            "{{\"score\":{},\"checksum\":\"{}\",\"content\":\"{}\",\"default_content\":\"{}\",\"is_default_content\":{},\"ticks\":{},\"ended\":\"{ended}\",\"matches\":{}}}",
+            self.score,
+            self.checksum,
+            self.content,
+            self.default_content,
+            self.is_default_content,
+            self.ticks,
+            self.matches
         )
     }
 }
@@ -331,13 +348,62 @@ pub fn use_builtin_content(app: &mut App) {
     super::content::saved::reset_to_defaults(app.world_mut());
 }
 
+/// This build's release default content, captured by [`build_verify_app`]
+/// before the replay's own start values are staged: the embedded level's
+/// hash and every non-cosmetic tunable's start value as `ContentPlugin`
+/// left it. It comes from the verifier itself (the module the site loads
+/// for the replay's `build`), never from the replay.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseDefault {
+    pub level: u64,
+    pub starts: Vec<(u16, Vec<u8>)>,
+}
+
+impl ReleaseDefault {
+    /// Reads the defaults from an app built by [`build_headless_app`],
+    /// before anything has changed a tunable or the level.
+    pub fn capture(world: &World) -> Self {
+        Self {
+            level: world.get_resource::<LevelHash>().map_or(0, |h| h.0),
+            starts: run_starts(world)
+                .into_iter()
+                .map(|(id, v)| (id, v.to_bytes()))
+                .collect(),
+        }
+    }
+
+    /// The content hash a run on these defaults records.
+    pub fn content(&self) -> u64 {
+        hash::content_of_bytes(
+            self.level,
+            self.starts.iter().map(|(id, b)| (*id, b.as_slice())),
+            [],
+        )
+    }
+
+    /// Whether `log` (a finished run's) is exactly these defaults: the same
+    /// level, the same start values byte for byte, and no mid-run change.
+    pub fn matches(&self, log: &TuneLog) -> bool {
+        log.level == self.level
+            && log.changes.is_empty()
+            && log.starts.len() == self.starts.len()
+            && log
+                .starts
+                .iter()
+                .zip(&self.starts)
+                .all(|((id, v), (did, db))| id == did && v.to_bytes() == *db)
+    }
+}
+
 /// The headless sim wired to replay `replay`: the feeder in
 /// `TickInputSet::Feed` and the run's seed staged in `PendingSeed`. Split
 /// out of [`verify`] so a test can add its own observer systems to the very
 /// app the verifier runs; drive it with [`run_verify_app`].
 pub fn build_verify_app(replay: &Replay) -> App {
     let mut app = build_headless_app();
-    let content_level = app.world().get_resource::<LevelHash>().map_or(0, |h| h.0);
+    let defaults = ReleaseDefault::capture(app.world());
+    let content_level = defaults.level;
+    app.insert_resource(defaults);
     app.insert_resource(level_source_for(replay, content_level));
     app.insert_resource(ReplayFeeder::new(replay))
         .add_systems(FixedPreUpdate, feed_tick.in_set(TickInputSet::Feed));
@@ -367,8 +433,8 @@ pub fn build_verify_app(replay: &Replay) -> App {
 /// content level gives, is replayed on the test level: the selftest
 /// fixtures, recorded under `LevelSource::Test` so a level edit never
 /// invalidates them. Such a run's content hash is never a release's
-/// default, so the website must refuse it for a leaderboard (any run whose
-/// `content` is not the release default); that check does not exist yet.
+/// default, so the website refuses it for a leaderboard, as it does any run
+/// whose verdict says `is_default_content: false`.
 /// `content_level` is the app's `LevelHash`.
 pub fn level_source_for(replay: &Replay, content_level: u64) -> LevelSource {
     let with_level = |level: u64| {
@@ -455,12 +521,21 @@ pub fn run_verify_app(app: &mut App, replay: &Replay) -> Verdict {
     };
     let score = u64::from(app.world().resource::<GameData>().leaderboard_score());
     let checksum = app.world().resource::<Checksum>().0;
-    let content = hash::content(app.world().resource::<TuneLog>());
+    let log = app.world().resource::<TuneLog>();
+    let content = hash::content(log);
+    let defaults = app
+        .world()
+        .get_resource::<ReleaseDefault>()
+        .expect("run_verify_app needs an app from build_verify_app (ReleaseDefault)");
+    let default_content = defaults.content();
+    let is_default_content = defaults.matches(log);
     let ticks = app.world().resource::<SimTick>().0;
     Verdict {
         score,
         checksum,
         content,
+        default_content,
+        is_default_content,
         ticks,
         ended,
         matches: score == replay.score && checksum == replay.checksum && content == replay.content,
@@ -589,11 +664,18 @@ mod tests {
             score: 1,
             checksum: 2,
             content: u64::MAX,
+            default_content: u64::MAX - 1,
+            is_default_content: false,
             ticks: 3,
             ended: Ended::Cap,
             matches: false,
         };
-        assert!(v.to_json().contains("\"content\":\"18446744073709551615\""));
+        let j = v.to_json();
+        assert!(j.contains("\"content\":\"18446744073709551615\""));
+        assert!(j.contains("\"default_content\":\"18446744073709551614\""));
+        assert!(j.contains("\"is_default_content\":false"));
+        let parsed: serde_json::Value = serde_json::from_str(&j).expect("verdict is JSON");
+        assert_eq!(parsed["is_default_content"], false);
     }
 
     #[test]
@@ -1123,13 +1205,15 @@ mod tests {
             score: 1,
             checksum: 2,
             content: 4,
+            default_content: 5,
+            is_default_content: true,
             ticks: 3,
             ended: Ended::Cap,
             matches: false,
         };
         assert_eq!(
             v.to_json(),
-            r#"{"score":1,"checksum":"2","content":"4","ticks":3,"ended":"cap","matches":false}"#
+            r#"{"score":1,"checksum":"2","content":"4","default_content":"5","is_default_content":true,"ticks":3,"ended":"cap","matches":false}"#
         );
     }
 
@@ -1141,6 +1225,8 @@ mod tests {
             score: 0,
             checksum: 15_390_901_594_743_611_022,
             content: 0,
+            default_content: 0,
+            is_default_content: false,
             ticks: 0,
             ended: Ended::GameOver,
             matches: true,
@@ -1183,5 +1269,154 @@ mod tests {
             Err(DecodeError::BadTickRate(30))
         );
         assert_eq!(crate::game::sim::TICK_HZ as u16, sample().tick_hz);
+    }
+
+    /// Records the selftest script on the shipped content (`content/`, the
+    /// stuff a release default is made of), queuing `edit` before the run
+    /// (a start value, as the editor saves one) or at tick `CHANGE_AT`.
+    /// Stops early if the game ends the run itself; asserts nothing about
+    /// the score, so a save to `content/` cannot fail it.
+    fn record_on_shipped_content(edit: Option<(bool, u16, Value)>) -> Replay {
+        use crate::game::sim::{PendingSeed, RunOver};
+        const TICKS: u32 = 240;
+        const CHANGE_AT: u32 = 90;
+        let mut app = build_headless_app();
+        app.add_systems(
+            PreUpdate,
+            selftest::script.before(gamebient_input::input::accumulate_input),
+        );
+        app.world_mut().resource_mut::<PendingSeed>().0 = Some(selftest::SELFTEST_SEED);
+        if let Some((false, id, v)) = &edit {
+            app.world_mut()
+                .resource_mut::<PendingTunes>()
+                .0
+                .push((*id, v.clone()));
+        }
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        while app.world().resource::<SimTick>().0 < TICKS
+            && !app.world().resource::<RunOver>().0
+            && *app.world().resource::<State<GameState>>().get() == GameState::Playing
+        {
+            if let Some((true, id, v)) = &edit
+                && app.world().resource::<SimTick>().0 == CHANGE_AT
+            {
+                app.world_mut()
+                    .resource_mut::<PendingTunes>()
+                    .0
+                    .push((*id, v.clone()));
+            }
+            app.update();
+        }
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::GameOver);
+        app.update();
+        app.world()
+            .resource::<recorder::ReplayRecorder>()
+            .last_run()
+            .cloned()
+            .expect("run sealed on OnExit(Playing)")
+    }
+
+    /// A non-cosmetic tunable and a value its range accepts that differs
+    /// from what the shipped content starts it at.
+    fn an_edit() -> (u16, Value) {
+        use crate::game::tunables::index::bumped_in_range;
+        use crate::game::tunables::read;
+        let app = build_headless_app();
+        let idx = app.world().resource::<TunableIndex>().clone();
+        idx.entries
+            .iter()
+            .filter(|e| !e.tune.cosmetic)
+            .find_map(|e| {
+                let now = read(app.world(), e)?;
+                let next = bumped_in_range(e, &now);
+                (next != now).then_some((e.id, next))
+            })
+            .expect("the template registers at least one non-cosmetic tunable")
+    }
+
+    #[test]
+    fn a_run_on_the_shipped_content_is_the_release_default() {
+        let replay = record_on_shipped_content(None);
+        let v = verify(&replay);
+        assert!(v.matches, "{v:?}");
+        assert!(v.is_default_content, "{v:?}");
+        assert_eq!(v.content, v.default_content);
+        assert_eq!(replay.content, v.default_content);
+    }
+
+    #[test]
+    fn an_edited_start_value_verifies_but_is_not_the_release_default() {
+        // The editor case: a player saves a faster speed, then plays.
+        let (id, value) = an_edit();
+        let replay = record_on_shipped_content(Some((false, id, value)));
+        let v = verify(&replay);
+        assert!(
+            v.matches,
+            "it re-simulates fine under its own content: {v:?}"
+        );
+        assert!(!v.is_default_content, "{v:?}");
+        assert_ne!(v.content, v.default_content);
+    }
+
+    #[test]
+    fn a_mid_run_change_verifies_but_is_not_the_release_default() {
+        let (id, value) = an_edit();
+        let replay = record_on_shipped_content(Some((true, id, value)));
+        assert_eq!(replay.tunes.len(), 1, "one change recorded");
+        let v = verify(&replay);
+        assert!(v.matches, "{v:?}");
+        assert!(!v.is_default_content, "{v:?}");
+        assert_ne!(v.content, v.default_content);
+    }
+
+    #[test]
+    fn the_selftest_is_never_the_release_default() {
+        // Test level and Rust defaults: never a release's default content.
+        let v = verify(&selftest::record_scripted_run());
+        assert!(v.matches, "{v:?}");
+        assert!(!v.is_default_content, "{v:?}");
+    }
+
+    #[test]
+    fn release_default_is_compared_exactly_not_by_hash() {
+        let d = ReleaseDefault {
+            level: 7,
+            starts: vec![
+                (0, Value::Int(3).to_bytes()),
+                (1, Value::Float(1.5).to_bytes()),
+            ],
+        };
+        let exact = TuneLog {
+            level: 7,
+            starts: vec![(0, Value::Int(3)), (1, Value::Float(1.5))],
+            changes: vec![],
+        };
+        assert!(d.matches(&exact));
+        assert_eq!(hash::content(&exact), d.content());
+        let mut other_level = exact.clone();
+        other_level.level = 8;
+        assert!(!d.matches(&other_level));
+        let mut other_value = exact.clone();
+        other_value.starts[1].1 = Value::Float(2.0);
+        assert!(!d.matches(&other_value));
+        let mut missing = exact.clone();
+        missing.starts.pop();
+        assert!(!d.matches(&missing));
+        let mut changed = exact.clone();
+        changed.changes.push(crate::game::tunables::TuneChange {
+            tick: 1,
+            id: 0,
+            value: Value::Int(3),
+        });
+        assert!(
+            !d.matches(&changed),
+            "a change back to the default still counts"
+        );
     }
 }
