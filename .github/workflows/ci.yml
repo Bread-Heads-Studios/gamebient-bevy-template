@@ -63,6 +63,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
 
@@ -78,6 +79,12 @@ jobs:
       - name: Cutter tests
         working-directory: tools
         run: python3 -m unittest test_cut_clips -v
+
+      # Exercises the web fetch path: a 100-byte threshold pushes every
+      # built-in Look Pack into FETCHABLE, so the generator's fetchable
+      # branch and look::fetch compile for wasm. Type-check only, cheap.
+      - name: Check web Look Pack fetch path
+        run: GX_WEB_EMBED_MAX=100 cargo check --target wasm32-unknown-unknown
 
       - name: Entitlement middleware tests
         run: node --test tools/test_entitlement.mjs

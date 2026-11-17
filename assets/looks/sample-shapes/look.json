@@ -1,0 +1,19 @@
+{
+  "v": 2,
+  "id": "sample-shapes",
+  "name": "Rocket Run",
+  "kind": "skin",
+  "creator": "Bread Heads Studios",
+  "palette": { "player": "#e8eef7" },
+  "slots": {
+    "player": {
+      "shape": [
+        { "prim": "capsule", "size": [0.3, 0.6] },
+        { "prim": "cone", "size": [0.3, 0.4], "at": [0, 0.75, 0] },
+        { "prim": "cuboid", "size": [0.24, 0.3, 0.06], "at": [0.36, -0.45, 0] },
+        { "prim": "cuboid", "size": [0.24, 0.3, 0.06], "at": [-0.36, -0.45, 0] },
+        { "prim": "sphere", "size": [0.1], "at": [0, 0.15, 0.26], "detail": 8 }
+      ]
+    }
+  }
+}

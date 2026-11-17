@@ -32,16 +32,23 @@ pub fn spawn_player(mut commands: Commands, mut spawn: ResMut<SpawnCounter>) {
     ));
 }
 
-/// The player's cuboid edge: the active pack's `player` `cuboid` `size`, or
-/// 1.0 with no pack (or no `LookPlugin`, as in the `tests/` harnesses).
-fn player_size(look: Option<&crate::look::ActiveLook>) -> f32 {
-    look.and_then(|l| l.recipe_number("player", "cuboid", "size"))
-        .unwrap_or(1.0) as f32
+/// The player's mesh: the active pack's `player` shape (schema v2) if it
+/// sets one, else a cuboid whose edge is the pack's `player` `cuboid`
+/// `size`, or 1.0 with no pack (or no `LookPlugin`, as in the `tests/`
+/// harnesses).
+fn player_mesh(look: Option<&crate::look::ActiveLook>) -> Mesh {
+    if let Some(crate::look::Slot::Shape(s)) = look.and_then(|l| l.slot("player")) {
+        return crate::look::build_mesh(&s.shape);
+    }
+    let size = look
+        .and_then(|l| l.recipe_number("player", "cuboid", "size"))
+        .unwrap_or(1.0) as f32;
+    Cuboid::new(size, size, size).into()
 }
 
 /// Render half of the player: gives a newly spawned [`Player`] its mesh,
 /// material and `LookColour`, and rebuilds the mesh on every `LookChanged`
-/// so a hot-reloaded pack can change the size too. Registered by
+/// so a hot-reloaded pack can change the size or shape too. Registered by
 /// `assets::AssetsPlugin` in `Update`, outside `SimSet`; the headless
 /// verifier never adds that plugin, and this writes nothing the sim reads
 /// (`tests/archetype_order.rs` mirrors it as its faithful decorator).
@@ -63,11 +70,10 @@ pub fn dress_player(
     let (Some(mut meshes), Some(mut materials)) = (meshes, materials) else {
         return;
     };
-    let size = player_size(look.as_deref());
     for (entity, player) in &players {
         if player.is_added() {
             commands.entity(entity).insert((
-                Mesh3d(meshes.add(Cuboid::new(size, size, size))),
+                Mesh3d(meshes.add(player_mesh(look.as_deref()))),
                 MeshMaterial3d(materials.add(StandardMaterial {
                     base_color: crate::ui::theme::PLAYER,
                     ..default()
@@ -77,7 +83,7 @@ pub fn dress_player(
         } else if redress {
             commands
                 .entity(entity)
-                .insert(Mesh3d(meshes.add(Cuboid::new(size, size, size))));
+                .insert(Mesh3d(meshes.add(player_mesh(look.as_deref()))));
         }
     }
 }

@@ -1,5 +1,11 @@
 //! Where pack bytes come from: built into the binary at compile time
-//! (`build.rs` embeds `assets/looks/*/`), or, natively, a folder on disk.
+//! (`embed.rs`, run by `build.rs`, embeds `assets/looks/*/`), or, natively,
+//! a folder on disk.
+//!
+//! On wasm, `embed.rs` embeds only packs `split::web_embeds_within` allows
+//! (64 KiB, or the `GX_WEB_EMBED_MAX` test override); each larger one is
+//! listed in `FETCHABLE` (id, file names, build-time content hash) and
+//! fetched on demand. Natively `FETCHABLE` is empty.
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
@@ -16,6 +22,32 @@ pub fn embedded_ids() -> impl Iterator<Item = &'static str> {
     generated::EMBEDDED.iter().map(|(id, _)| *id)
 }
 
+/// A built-in pack left out of this (web) build, to fetch on demand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fetchable {
+    pub id: &'static str,
+    /// Exactly the files to fetch, from `assets/looks/<id>/<file>`.
+    pub files: &'static [&'static str],
+    /// `validate::content_hash` of those files at build time. A fetched set
+    /// that hashes differently is never applied.
+    pub content_hash: &'static str,
+}
+
+pub fn fetchable_ids() -> impl Iterator<Item = &'static str> {
+    generated::FETCHABLE.iter().map(|(id, _, _)| *id)
+}
+
+pub fn fetchable(id: &str) -> Option<Fetchable> {
+    generated::FETCHABLE
+        .iter()
+        .find(|(i, _, _)| *i == id)
+        .map(|&(id, files, content_hash)| Fetchable {
+            id,
+            files,
+            content_hash,
+        })
+}
+
 pub fn embedded_files(id: &str) -> Option<Files> {
     generated::EMBEDDED
         .iter()
@@ -26,6 +58,14 @@ pub fn embedded_files(id: &str) -> Option<Files> {
                 .map(|(name, bytes)| (name.to_string(), bytes.to_vec()))
                 .collect()
         })
+}
+
+/// The pack id a folder implies: its name.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn dir_id(path: &Path) -> Option<String> {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_string)
 }
 
 /// Reads a flat pack folder. Refuses subfolders and symlinks (an entry's

@@ -3,3 +3,5 @@
 Each folder here is a Look Pack built into the game (`build.rs` embeds them).
 Pick one with `?look=<folder>` on web or `GX_LOOK=<folder>` / `--look <folder>` natively.
 How to write one: `docs/look-packs.md`. Check one: `cargo run --features look-check --bin look-check -- assets/looks/<folder>`.
+
+Built-in packs: `night-shift` (palette and strings), `sample-sponsor` (a sponsor skin), and `sample-shapes` (schema v2: the `player` is a rocket built from primitives; its `look-check` output includes the shape's vertex count against the budget).

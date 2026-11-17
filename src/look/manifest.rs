@@ -1,11 +1,11 @@
-//! `look.json`, schema v1. Pure data: parsing never touches Bevy, and
+//! `look.json`, schema v2 (v1 packs still load). Pure data: parsing never touches Bevy, and
 //! unknown fields are rejected so a typo fails instead of being ignored.
 
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, de::Error as _};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 pub const MANIFEST_FILE: &str = "look.json";
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -53,13 +53,54 @@ pub enum LookKind {
     Genre,
 }
 
-/// What fills a slot: an image (sprite games, logos) or a recipe the game
-/// draws procedurally (most of the fleet: meshes plus materials).
-#[derive(Deserialize, Debug, Clone, PartialEq)]
-#[serde(untagged)]
+/// What fills a slot: an image (sprite games, logos), a recipe the game
+/// draws procedurally (most of the fleet: meshes plus materials), or, from
+/// schema v2, a shape: a list of primitives merged into one mesh.
+///
+/// Deserialized by hand, not `untagged`: the slot object must carry exactly
+/// one of `image`, `recipe` or `shape`, and that struct's own error (an
+/// unknown field, a bad primitive and its index) is what the creator sees.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Slot {
     Image(ImageSlot),
     Recipe(RecipeSlot),
+    Shape(ShapeSlot),
+}
+
+const SLOT_KINDS: [&str; 3] = ["image", "recipe", "shape"];
+
+impl<'de> Deserialize<'de> for Slot {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let map = serde_json::Map::<String, serde_json::Value>::deserialize(d)?;
+        let kinds: Vec<&str> = SLOT_KINDS
+            .into_iter()
+            .filter(|k| map.contains_key(*k))
+            .collect();
+        let value = serde_json::Value::Object(map);
+        let fail = |kind: &str, e: serde_json::Error| D::Error::custom(format!("{kind} slot: {e}"));
+        match kinds.as_slice() {
+            ["image"] => ImageSlot::deserialize(value)
+                .map(Slot::Image)
+                .map_err(|e| fail("image", e)),
+            ["recipe"] => RecipeSlot::deserialize(value)
+                .map(Slot::Recipe)
+                .map_err(|e| fail("recipe", e)),
+            ["shape"] => ShapeSlot::deserialize(value)
+                .map(Slot::Shape)
+                .map_err(|e| fail("shape", e)),
+            [] => Err(D::Error::custom(
+                "a slot needs one of `image`, `recipe` or `shape`",
+            )),
+            several => Err(D::Error::custom(format!(
+                "a slot takes exactly one of `image`, `recipe` or `shape`, not {}",
+                several
+                    .iter()
+                    .map(|k| format!("`{k}`"))
+                    .collect::<Vec<_>>()
+                    .join(" and ")
+            ))),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -87,6 +128,53 @@ pub struct RecipeSlot {
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ShapeSlot {
+    #[serde(deserialize_with = "primitives")]
+    pub shape: Vec<Primitive>,
+}
+
+/// Each primitive on its own, so an error names its index: `shape[2]: ...`.
+fn primitives<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Primitive>, D::Error> {
+    Vec::<serde_json::Value>::deserialize(d)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| {
+            Primitive::deserialize(v).map_err(|e| D::Error::custom(format!("shape[{i}]: {e}")))
+        })
+        .collect()
+}
+
+/// One primitive of a shape. `size` arity depends on `prim`; the validator
+/// checks it. `rot` is Euler degrees, XYZ.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Primitive {
+    pub prim: Prim,
+    pub size: Vec<f32>,
+    #[serde(default)]
+    pub at: Option<[f32; 3]>,
+    #[serde(default)]
+    pub rot: Option<[f32; 3]>,
+    #[serde(default)]
+    pub scale: Option<[f32; 3]>,
+    #[serde(default)]
+    pub detail: Option<u32>,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Prim {
+    Sphere,
+    Cuboid,
+    Cylinder,
+    Cone,
+    Torus,
+    Capsule,
+    Quad,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum Param {
     Bool(bool),
@@ -106,8 +194,34 @@ pub struct EndCard {
     pub image: Option<String>,
 }
 
+/// Strict parse: unknown fields anywhere are an error. Gate on
+/// [`version`] first, or a newer pack fails here with a serde error
+/// instead of saying it is newer.
 pub fn parse(bytes: &[u8]) -> Result<Manifest, String> {
     serde_json::from_slice(bytes).map_err(|e| e.to_string())
+}
+
+/// The bare `v`, read leniently (every other field ignored), so a pack from
+/// a newer schema, full of fields and primitives this build has never
+/// heard of, can still be told apart. `None` when `look.json` is not JSON
+/// or has no integer `v`; the strict parse reports that.
+pub fn version(bytes: &[u8]) -> Option<u32> {
+    #[derive(Deserialize)]
+    struct Head {
+        v: u32,
+    }
+    serde_json::from_slice::<Head>(bytes).ok().map(|h| h.v)
+}
+
+/// The schema gate: `Err` for a version this build cannot read.
+pub fn check_version(v: u32) -> Result<(), String> {
+    if v == 0 {
+        Err("unknown schema version (0)".into())
+    } else if v > SCHEMA_VERSION {
+        Err(format!("made for a newer version of this game (v{v})"))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +289,101 @@ mod tests {
             parse(br#"{"v":1,"id":"x","name":"X","kind":"skin","protagonist":{"avatar":"later"}}"#)
                 .unwrap();
         assert!(m.protagonist.is_some());
+    }
+
+    #[test]
+    fn slots_resolve_unambiguously_to_image_recipe_or_shape() {
+        let m = parse(
+            br#"{"v":2,"id":"x","name":"X","kind":"skin","slots":{
+                "a":{"image":"a.png"},
+                "b":{"recipe":"cuboid"},
+                "c":{"shape":[{"prim":"capsule","size":[0.1,0.4],"at":[0,1,0],"rot":[0,90,0],"scale":[1,2,1],"detail":6},{"prim":"quad","size":[1,1]}]},
+                "d":{"shape":[]}
+            }}"#,
+        )
+        .unwrap();
+        assert!(matches!(m.slots["a"], Slot::Image(_)));
+        assert!(matches!(m.slots["b"], Slot::Recipe(_)));
+        let Slot::Shape(c) = &m.slots["c"] else {
+            panic!("c is a shape")
+        };
+        assert_eq!(c.shape[0].prim, Prim::Capsule);
+        assert_eq!(c.shape[0].size, vec![0.1, 0.4]);
+        assert_eq!(c.shape[0].at, Some([0.0, 1.0, 0.0]));
+        assert_eq!(c.shape[0].detail, Some(6));
+        assert_eq!(c.shape[1].prim, Prim::Quad);
+        assert_eq!(c.shape[1].at, None);
+        assert!(matches!(&m.slots["d"], Slot::Shape(s) if s.shape.is_empty()));
+    }
+
+    #[test]
+    fn shape_structs_reject_unknown_fields_and_kinds() {
+        let slot = |body: &str| {
+            format!(r#"{{"v":2,"id":"x","name":"X","kind":"skin","slots":{{"a":{body}}}}}"#)
+        };
+        let err = |body: &str| parse(slot(body).as_bytes()).unwrap_err();
+        let e =
+            err(r#"{"shape":[{"prim":"sphere","size":[1]},{"prim":"sphere","size":[1],"hue":1}]}"#);
+        assert!(
+            e.contains("shape[1]") && e.contains("unknown field `hue`"),
+            "{e}"
+        );
+        let e = err(r#"{"shape":[{"prim":"cube","size":[1]}]}"#);
+        assert!(
+            e.contains("shape[0]") && e.contains("unknown variant `cube`"),
+            "{e}"
+        );
+        let e = err(r#"{"shape":[],"image":"a.png"}"#);
+        assert!(
+            e.contains("exactly one of") && e.contains("`image` and `shape`"),
+            "{e}"
+        );
+        let e = err(r#"{"shape":[],"zoom":2}"#);
+        assert!(
+            e.contains("shape slot") && e.contains("unknown field `zoom`"),
+            "{e}"
+        );
+        let e = err(r#"{"frames":2}"#);
+        assert!(
+            e.contains("needs one of `image`, `recipe` or `shape`"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn image_and_recipe_errors_name_the_field() {
+        let e = parse(br#"{"v":1,"id":"x","name":"X","kind":"skin","slots":{"a":{"image":"a.png","zoom":2}}}"#).unwrap_err();
+        assert!(
+            e.contains("image slot") && e.contains("unknown field `zoom`"),
+            "{e}"
+        );
+        let e = parse(
+            br#"{"v":1,"id":"x","name":"X","kind":"skin","slots":{"a":{"recipe":"c","parms":{}}}}"#,
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("recipe slot") && e.contains("unknown field `parms`"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn version_reads_v_leniently() {
+        assert_eq!(
+            version(br#"{"v":3,"glitter":true,"slots":{"a":{"shape":[{"prim":"blob"}]}}}"#),
+            Some(3)
+        );
+        assert_eq!(version(br#"{"id":"x"}"#), None);
+        assert_eq!(version(b"not json"), None);
+        assert!(check_version(1).is_ok() && check_version(SCHEMA_VERSION).is_ok());
+        assert_eq!(check_version(0).unwrap_err(), "unknown schema version (0)");
+        assert_eq!(
+            check_version(SCHEMA_VERSION + 1).unwrap_err(),
+            format!(
+                "made for a newer version of this game (v{})",
+                SCHEMA_VERSION + 1
+            )
+        );
     }
 
     #[test]

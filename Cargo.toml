@@ -122,6 +122,12 @@ serde_json = "1"
 # through Bevy's asset processor, so no new download.
 blake3 = "1"
 
+# build.rs runs src/look/embed.rs (#[path] include), which hashes
+# web-fetchable Look Packs with the crate's own src/look/hash.rs. Same
+# lockfile entry as above.
+[build-dependencies]
+blake3 = "1"
+
 # Native-only Bevy features: linux window backends and gilrs gamepad support.
 # Excluded from the wasm build so they don't add dead code paths.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -133,7 +139,12 @@ bevy = { version = "0.18", features = ["bevy_gilrs", "wayland", "x11"] }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 # Reads `?mute=1` from the page URL (game::host::LocalMute). Already in the
 # lockfile through Bevy's web backend.
-web-sys = { version = "0.3", features = ["Location", "Window"] }
+# Response: the on-demand fetch of large built-in Look Packs (look::fetch).
+web-sys = { version = "0.3", features = ["Location", "Response", "Window"] }
+# The Look Pack fetch's async glue. Both already in Cargo.lock through
+# Bevy's web backend; pinned to those versions so they add nothing.
+js-sys = "=0.3.85"
+wasm-bindgen-futures = "=0.4.58"
 # Pinned EXACTLY (`=`), not as a caret range: install.sh and both workflows
 # install wasm-bindgen-cli@0.2.108, and a CLI/lib skew produces a bundle that
 # fails to load at runtime with nothing in CI to catch it. A `cargo update`

@@ -6,8 +6,11 @@ use std::collections::BTreeMap;
 
 use bevy::color::{Color, Srgba};
 
-use super::contract::{Contract, ParamKind};
-use super::manifest::{self, MANIFEST_FILE, Manifest, Param, SCHEMA_VERSION, Slot};
+use super::contract::{Contract, ParamKind, ShapeSpec};
+use super::manifest::{self, MANIFEST_FILE, Manifest, Param, Primitive, Slot};
+// The id and file-name rules, shared with the build-time generator.
+use super::names::{is_file_name, is_id};
+use super::shape;
 use super::sniff;
 
 /// A pack's files by name, `look.json` included.
@@ -27,9 +30,9 @@ pub mod limits {
     pub const STRING_MAX: usize = 64;
     pub const NAME_MAX: usize = 32;
     pub const CREATOR_MAX: usize = 48;
-    pub const ID_MAX: usize = 32;
+    pub const ID_MAX: usize = super::super::names::ID_MAX;
     pub const KEY_MAX: usize = 48;
-    pub const FILE_STEM_MAX: usize = 48;
+    pub const FILE_STEM_MAX: usize = super::super::names::FILE_STEM_MAX;
     pub const FRAMES_MAX: u32 = 64;
     pub const FPS_MAX: f32 = 60.0;
     pub const URL_MAX: usize = 200;
@@ -54,6 +57,8 @@ pub struct Report {
     pub manifest: Option<Manifest>,
     pub problems: Vec<Problem>,
     pub content_hash: String,
+    /// `(slot, vertices)` for every shape slot that passed its checks.
+    pub shapes: Vec<(String, usize)>,
 }
 
 impl Report {
@@ -65,7 +70,8 @@ impl Report {
             .iter()
             .filter(|p| p.severity == Severity::Error)
     }
-    /// A pack that could not even be read (missing folder, too large).
+    /// A pack refused before validation: unreadable, too large, or not the
+    /// bytes the build expected (content hash mismatch).
     pub fn read_error(message: String) -> Self {
         Self {
             manifest: None,
@@ -75,23 +81,13 @@ impl Report {
                 message,
             }],
             content_hash: String::new(),
+            shapes: Vec::new(),
         }
     }
 }
 
-/// BLAKE3 over every file, in name order: name length, name, byte length,
-/// bytes. Domain-separated so it can never collide with another use.
-pub fn content_hash(files: &Files) -> String {
-    let mut h = blake3::Hasher::new();
-    h.update(b"gx-look-v1\0");
-    for (name, bytes) in files {
-        h.update(&(name.len() as u64).to_le_bytes());
-        h.update(name.as_bytes());
-        h.update(&(bytes.len() as u64).to_le_bytes());
-        h.update(bytes);
-    }
-    h.finalize().to_hex().to_string()
-}
+/// Lives in `hash.rs` so `src/look/embed.rs` hashes fetchable packs with the same code.
+pub use super::hash::content_hash;
 
 /// `#rrggbb` or `#rrggbbaa`, nothing looser.
 pub fn parse_colour(s: &str) -> Option<Color> {
@@ -108,13 +104,6 @@ fn is_text(s: &str, max: usize) -> bool {
     s.len() <= max && s.bytes().all(|c| (0x20..=0x7e).contains(&c))
 }
 
-fn is_id(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= limits::ID_MAX
-        && s.bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
-}
-
 fn is_key(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= limits::KEY_MAX
@@ -123,18 +112,28 @@ fn is_key(s: &str) -> bool {
         })
 }
 
-/// `[a-z0-9_-]{1,48}.png|.ogg`: no dots in the stem, so no `..`, no
-/// hidden files, no second extension.
-fn is_file_name(s: &str) -> bool {
-    let Some((stem, ext)) = s.rsplit_once('.') else {
-        return false;
-    };
-    matches!(ext, "png" | "ogg")
-        && !stem.is_empty()
-        && stem.len() <= limits::FILE_STEM_MAX
-        && stem
-            .bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'_' | b'-'))
+const AXES: [&str; 3] = ["x", "y", "z"];
+
+/// The largest absolute coordinate of any vertex `shape::build_mesh`
+/// produces on each axis: the half-extents of the smallest centred box
+/// holding the shape. `[NAN; 3]` if any coordinate is NaN.
+fn shape_reach(prims: &[Primitive]) -> [f32; 3] {
+    use bevy::mesh::{Mesh, VertexAttributeValues};
+    let mut reach = [0.0_f32; 3];
+    if let Some(VertexAttributeValues::Float32x3(pos)) =
+        shape::build_mesh(prims).attribute(Mesh::ATTRIBUTE_POSITION)
+    {
+        for v in pos {
+            for (r, c) in reach.iter_mut().zip(v) {
+                *r = r.max(c.abs());
+            }
+        }
+        // `f32::max` drops NaN, so check for it explicitly.
+        if pos.iter().flatten().any(|c| c.is_nan()) {
+            return [f32::NAN; 3];
+        }
+    }
+    reach
 }
 
 struct Check<'a> {
@@ -144,6 +143,102 @@ struct Check<'a> {
 }
 
 impl Check<'_> {
+    /// Numeric rules for one shape slot. Returns the vertex count when the
+    /// shape is valid (and so counted); `None` after any error.
+    fn shape(&mut self, at: &str, prims: &[Primitive], limit: &ShapeSpec) -> Option<usize> {
+        let before = self.problems.len();
+        let ext = limit.extent;
+        // Cheap prefilter only: sizes are full edges/lengths for most
+        // primitives (half-sizes for sphere/torus), so allow twice the
+        // largest half-extent. The built-mesh reach check is the real bound.
+        let max_size = 2.0 * ext.iter().copied().fold(0.0_f32, f32::max);
+        if prims.len() > limit.max_prims {
+            self.error(
+                format!("{at}.shape"),
+                format!("{} primitives; at most {}", prims.len(), limit.max_prims),
+            );
+        }
+        for (i, p) in prims.iter().enumerate() {
+            let pat = format!("{at}.shape[{i}]");
+            let want = shape::arity(p.prim);
+            if p.size.len() != want {
+                self.error(
+                    pat.as_str(),
+                    format!("size needs {want} number(s), got {}", p.size.len()),
+                );
+            } else if !p
+                .size
+                .iter()
+                .all(|v| v.is_finite() && (0.001..=max_size).contains(v))
+            {
+                self.error(
+                    pat.as_str(),
+                    format!("size components are 0.001..={max_size}"),
+                );
+            }
+            if let Some(v) = p.at {
+                for (i, c) in v.iter().enumerate() {
+                    let e = ext[i];
+                    if !(c.is_finite() && (-e..=e).contains(c)) {
+                        self.error(
+                            pat.as_str(),
+                            format!("at {} is {c}; must be -{e}..={e}", AXES[i]),
+                        );
+                    }
+                }
+            }
+            if let Some(v) = p.rot
+                && !v.iter().all(|c| c.is_finite())
+            {
+                self.error(pat.as_str(), "rot components must be finite numbers");
+            }
+            if let Some(v) = p.scale
+                && !v.iter().all(|c| c.is_finite() && (0.01..=4.0).contains(c))
+            {
+                self.error(pat.as_str(), "scale components are 0.01..=4");
+            }
+            if let Some(d) = p.detail
+                && !shape::DETAIL_RANGE.contains(&d)
+            {
+                self.error(
+                    pat.as_str(),
+                    format!(
+                        "detail is {}..={}",
+                        shape::DETAIL_RANGE.start(),
+                        shape::DETAIL_RANGE.end()
+                    ),
+                );
+            }
+        }
+        if self.problems.len() != before {
+            return None;
+        }
+        let n = shape::vertex_count(prims);
+        if n > limit.max_vertices {
+            self.error(
+                format!("{at}.shape"),
+                format!("{n} vertices; budget {}", limit.max_vertices),
+            );
+            return None;
+        }
+        // Last, and only now that every rule above bounds the work: the
+        // built geometry itself must sit inside the extent cube.
+        let reach = shape_reach(prims);
+        for i in 0..3 {
+            if !(reach[i].is_finite() && reach[i] <= ext[i] * (1.0 + 1e-5)) {
+                self.error(
+                    format!("{at}.shape"),
+                    format!(
+                        "reaches {:.3} on {}; extent is {}",
+                        reach[i], AXES[i], ext[i]
+                    ),
+                );
+                return None;
+            }
+        }
+        Some(n)
+    }
+
     fn error(&mut self, at: impl Into<String>, message: impl Into<String>) {
         self.problems.push(Problem {
             severity: Severity::Error,
@@ -273,8 +368,22 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
             manifest: None,
             problems: c.problems,
             content_hash,
+            shapes: Vec::new(),
         };
     };
+    // The version gate runs before the strict parse: a newer pack carries
+    // fields and primitives this build rejects, and must say it is newer.
+    if let Some(v) = manifest::version(raw)
+        && let Err(e) = manifest::check_version(v)
+    {
+        c.error("v", e);
+        return Report {
+            manifest: None,
+            problems: c.problems,
+            content_hash,
+            shapes: Vec::new(),
+        };
+    }
     let m = match manifest::parse(raw) {
         Ok(m) => m,
         Err(e) => {
@@ -283,18 +392,10 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
                 manifest: None,
                 problems: c.problems,
                 content_hash,
+                shapes: Vec::new(),
             };
         }
     };
-    if m.v != SCHEMA_VERSION {
-        c.error(
-            "v",
-            format!(
-                "this game reads schema {SCHEMA_VERSION}, the pack is {}",
-                m.v
-            ),
-        );
-    }
     if !is_id(&m.id) {
         c.error("id", "lowercase letters, digits and -, at most 32");
     }
@@ -336,6 +437,7 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
         }
     }
 
+    let mut shapes = Vec::new();
     for (name, slot) in &m.slots {
         let at = format!("slots.{name}");
         let Some(spec) = contract.slot(name) else {
@@ -354,6 +456,19 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
                 }
                 if !(i.fps.is_finite() && (0.0..=limits::FPS_MAX).contains(&i.fps)) {
                     c.error(at.as_str(), format!("fps is 0..={}", limits::FPS_MAX));
+                }
+            }
+            Slot::Shape(sh) => {
+                if m.v < 2 {
+                    c.error(at.as_str(), r#"shape slots need "v": 2"#);
+                }
+                if spec.shape.is_none() {
+                    c.error(at.as_str(), "this slot does not take a shape");
+                }
+                if let Some(limit) = &spec.shape
+                    && let Some(n) = c.shape(&at, &sh.shape, limit)
+                {
+                    shapes.push((name.clone(), n));
                 }
             }
             Slot::Recipe(r) => {
@@ -461,12 +576,13 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
         manifest: Some(m),
         problems: c.problems,
         content_hash,
+        shapes,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::contract::{ParamSpec, RecipeSpec, SlotSpec, StringSpec};
+    use super::super::contract::{ParamSpec, RecipeSpec, ShapeSpec, SlotSpec, StringSpec};
     use super::super::sniff::fixtures::{ogg, png};
     use super::*;
 
@@ -480,26 +596,45 @@ mod tests {
             default: "TAKE FIVE",
             max_chars: 12,
         }],
-        slots: &[SlotSpec {
-            name: "player",
-            image: true,
-            recipes: &[RecipeSpec {
-                name: "cuboid",
-                params: &[
-                    ParamSpec {
-                        name: "size",
-                        kind: ParamKind::Number {
-                            min: 0.25,
-                            max: 3.0,
+        slots: &[
+            SlotSpec {
+                name: "prop",
+                image: false,
+                recipes: &[],
+                shape: None,
+            },
+            SlotSpec {
+                name: "wall",
+                image: false,
+                recipes: &[],
+                shape: Some(ShapeSpec {
+                    max_prims: 4,
+                    max_vertices: 3000,
+                    extent: [7.5, 0.5, 0.25],
+                }),
+            },
+            SlotSpec {
+                name: "player",
+                image: true,
+                shape: Some(ShapeSpec::cube(12, 3000, 1.5)),
+                recipes: &[RecipeSpec {
+                    name: "cuboid",
+                    params: &[
+                        ParamSpec {
+                            name: "size",
+                            kind: ParamKind::Number {
+                                min: 0.25,
+                                max: 3.0,
+                            },
                         },
-                    },
-                    ParamSpec {
-                        name: "tint",
-                        kind: ParamKind::Colour,
-                    },
-                ],
-            }],
-        }],
+                        ParamSpec {
+                            name: "tint",
+                            kind: ParamKind::Colour,
+                        },
+                    ],
+                }],
+            },
+        ],
         audio: &["sfx.confirm", "music.menu"],
         fonts: &["Inter SemiBold"],
     };
@@ -534,12 +669,141 @@ mod tests {
         assert!(!validate(&pack("{"), &TEST, None).ok());
         assert!(
             !validate(
-                &pack(r#"{"v":2,"id":"demo","name":"D","kind":"palette"}"#),
+                &pack(r#"{"v":3,"id":"demo","name":"D","kind":"palette"}"#),
                 &TEST,
                 None
             )
             .ok()
         );
+    }
+
+    const SHAPE: &str = r#""shape":[{"prim":"sphere","size":[0.3]},{"prim":"cone","size":[0.1,0.3],"at":[0,0.4,0],"rot":[0,0,15],"scale":[1,1,1],"detail":8}]"#;
+
+    fn shape_pack(v: u32, slot: &str, body: &str) -> Files {
+        pack(&format!(
+            r#"{{"v":{v},"id":"demo","name":"D","kind":"skin","slots":{{"{slot}":{{{body}}}}}}}"#
+        ))
+    }
+
+    #[test]
+    fn a_v1_pack_still_validates_and_v2_is_accepted() {
+        assert!(validate(&pack(MIN), &TEST, Some("demo")).ok());
+        let v2 = MIN.replace("\"v\":1", "\"v\":2");
+        assert!(validate(&pack(&v2), &TEST, Some("demo")).ok());
+    }
+
+    #[test]
+    fn a_newer_schema_is_refused_cleanly() {
+        // A real v3 pack: a top-level field and a primitive this build has
+        // never seen. The version gate must answer, not the strict parse.
+        let v3 = r#"{"v":3,"id":"demo","name":"D","kind":"skin","sparkle":true,
+            "slots":{"player":{"shape":[{"prim":"blob","size":[1],"wobble":2}]}}}"#;
+        let r = validate(&pack(v3), &TEST, Some("demo"));
+        assert!(!r.ok() && r.manifest.is_none());
+        assert_eq!(
+            errors(&r),
+            vec!["v: made for a newer version of this game (v3)".to_string()]
+        );
+        let r = validate(&pack(&MIN.replace("\"v\":1", "\"v\":99")), &TEST, None);
+        assert_eq!(
+            errors(&r),
+            vec!["v: made for a newer version of this game (v99)".to_string()]
+        );
+    }
+
+    #[test]
+    fn schema_zero_is_unknown() {
+        let r = validate(
+            &pack(r#"{"v":0,"junk":[1,2],"slots":{"x":{"what":1}}}"#),
+            &TEST,
+            None,
+        );
+        assert!(!r.ok());
+        assert_eq!(
+            errors(&r),
+            vec!["v: unknown schema version (0)".to_string()]
+        );
+        let r = validate(&pack(&MIN.replace("\"v\":1", "\"v\":0")), &TEST, None);
+        assert_eq!(
+            errors(&r),
+            vec!["v: unknown schema version (0)".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_current_schema_with_an_unknown_field_is_a_parse_error() {
+        let r = validate(
+            &pack(r#"{"v":2,"id":"demo","name":"D","kind":"skin","sparkle":true}"#),
+            &TEST,
+            None,
+        );
+        assert!(!r.ok());
+        let e = errors(&r);
+        assert!(
+            e.len() == 1 && e[0].starts_with("look.json: unknown field `sparkle`"),
+            "{e:?}"
+        );
+    }
+
+    #[test]
+    fn a_v2_pack_with_a_shape_validates() {
+        let r = validate(&shape_pack(2, "player", SHAPE), &TEST, Some("demo"));
+        assert!(r.ok(), "{:?}", errors(&r));
+        let m = r.manifest.unwrap();
+        let Slot::Shape(s) = &m.slots["player"] else {
+            panic!("a shape slot")
+        };
+        assert_eq!(s.shape.len(), 2);
+    }
+
+    #[test]
+    fn a_shape_needs_schema_2() {
+        let r = validate(&shape_pack(1, "player", SHAPE), &TEST, None);
+        assert!(
+            errors(&r)
+                .iter()
+                .any(|e| e.contains(r#"shape slots need "v": 2"#)),
+            "{:?}",
+            errors(&r)
+        );
+    }
+
+    #[test]
+    fn a_shape_in_a_slot_that_takes_none_is_an_error() {
+        let r = validate(&shape_pack(2, "prop", SHAPE), &TEST, None);
+        assert!(
+            errors(&r)
+                .iter()
+                .any(|e| e.contains("this slot does not take a shape")),
+            "{:?}",
+            errors(&r)
+        );
+    }
+
+    #[test]
+    fn unknown_primitive_fields_and_kinds_are_refused() {
+        let bad = r#""shape":[{"prim":"sphere","size":[1],"colour":"red"}]"#;
+        let r = validate(&shape_pack(2, "player", bad), &TEST, None);
+        assert!(!r.ok());
+        let e = errors(&r);
+        assert!(
+            has(&e, "shape[0]: unknown field `colour`"),
+            "names the primitive and field: {e:?}"
+        );
+        let bad = r#""shape":[{"prim":"sphere","size":[1]},{"prim":"pyramid","size":[1]}]"#;
+        let r = validate(&shape_pack(2, "player", bad), &TEST, None);
+        assert!(!r.ok());
+        let e = errors(&r);
+        assert!(
+            has(&e, "shape[1]: unknown variant `pyramid`"),
+            "names the primitive and variant: {e:?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_shape_is_valid() {
+        let r = validate(&shape_pack(2, "player", r#""shape":[]"#), &TEST, None);
+        assert!(r.ok(), "{:?}", errors(&r));
     }
 
     #[test]
@@ -744,5 +1008,201 @@ mod tests {
         assert_eq!(content_hash(&a), content_hash(&a.clone()));
         assert_ne!(content_hash(&a), content_hash(&b));
         assert_ne!(content_hash(&a), content_hash(&c));
+    }
+
+    fn shape_errors(body: &str) -> Vec<String> {
+        let r = validate(&shape_pack(2, "player", body), &TEST, None);
+        errors(&r)
+    }
+
+    fn has(errs: &[String], needle: &str) -> bool {
+        errs.iter().any(|e| e.contains(needle))
+    }
+
+    #[test]
+    fn shape_size_arity_is_checked() {
+        let e = shape_errors(
+            r#""shape":[{"prim":"sphere","size":[0.3]},{"prim":"cuboid","size":[0.3,0.3]}]"#,
+        );
+        assert!(has(&e, "slots.player.shape[1]"), "{e:?}");
+        assert!(has(&e, "size needs 3"), "{e:?}");
+    }
+
+    #[test]
+    fn shape_numbers_out_of_range_are_errors() {
+        // Stand-ins for NaN: JSON cannot encode it, so use out-of-range values.
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[0.0]}]"#);
+        assert!(has(&e, "slots.player.shape[0]") && has(&e, "size"), "{e:?}");
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[-1]}]"#);
+        assert!(has(&e, "slots.player.shape[0]"), "{e:?}");
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[1e39]}]"#);
+        assert!(has(&e, "slots.player.shape[0]"), "{e:?}");
+    }
+
+    #[test]
+    fn shape_size_over_the_extent_is_an_error() {
+        let e = shape_errors(
+            r#""shape":[{"prim":"sphere","size":[0.3]},{"prim":"sphere","size":[3.1]}]"#,
+        );
+        assert!(has(&e, "slots.player.shape[1]") && has(&e, "size"), "{e:?}");
+        assert!(!has(&e, "shape[0]"), "{e:?}");
+        let ok = shape_errors(r#""shape":[{"prim":"sphere","size":[1.5]}]"#);
+        assert!(ok.is_empty(), "{ok:?}");
+    }
+
+    #[test]
+    fn shape_size_prefilter_is_twice_the_largest_extent() {
+        // 3.1 > 2 * 1.5.
+        let e = shape_errors(r#""shape":[{"prim":"cuboid","size":[3.1,0.1,0.1]}]"#);
+        assert!(has(&e, "size components are 0.001..=3"), "{e:?}");
+    }
+
+    #[test]
+    fn shape_at_outside_the_extent_is_an_error() {
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[0.3],"at":[0,1.6,0]}]"#);
+        assert!(has(&e, "slots.player.shape[0]") && has(&e, "at"), "{e:?}");
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[0.3],"at":[0,-1.6,0]}]"#);
+        assert!(has(&e, "at"), "{e:?}");
+    }
+
+    fn wall_errors(body: &str) -> Vec<String> {
+        errors(&validate(&shape_pack(2, "wall", body), &TEST, None))
+    }
+
+    #[test]
+    fn non_cubic_extent_accepts_wide_flat_and_rejects_tall_or_deep() {
+        // 15 wide, 1 tall, 0.5 deep: exactly the box.
+        let ok = wall_errors(r#""shape":[{"prim":"cuboid","size":[7.5,0.5,0.25]}]"#);
+        assert!(ok.is_empty(), "{ok:?}");
+        // Full-edge cuboid sizes: the default 14 x 1 x 0.3 wall fits.
+        let ok = wall_errors(r#""shape":[{"prim":"cuboid","size":[14,1,0.3]}]"#);
+        assert!(ok.is_empty(), "{ok:?}");
+        // Too long on x: 15 wide passes the size prefilter (<= 15) but
+        // scaled by 1.1 it reaches 8.25 > 7.5, caught by the reach check.
+        let e = wall_errors(r#""shape":[{"prim":"cuboid","size":[15,1,0.3],"scale":[1.1,1,1]}]"#);
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(e[0].contains(" on x; extent is 7.5"), "{e:?}");
+        // Too tall on y: the 0.4 edge scaled by 4 is 1.6 tall, reaching 0.8.
+        let e = wall_errors(r#""shape":[{"prim":"cuboid","size":[7.0,0.4,0.2],"scale":[1,4,1]}]"#);
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(
+            e[0], "slots.wall.shape: reaches 0.800 on y; extent is 0.5",
+            "{e:?}"
+        );
+        // Too deep on z: the 0.4 edge scaled by 4 reaches 0.8.
+        let e = wall_errors(r#""shape":[{"prim":"cuboid","size":[1.0,0.1,0.4],"scale":[1,1,4]}]"#);
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(
+            e[0], "slots.wall.shape: reaches 0.800 on z; extent is 0.25",
+            "{e:?}"
+        );
+        // A size over twice the largest extent is still a size error.
+        let e = wall_errors(r#""shape":[{"prim":"sphere","size":[15.1]}]"#);
+        assert!(has(&e, "size components are 0.001..=15"), "{e:?}");
+    }
+
+    #[test]
+    fn shape_at_is_bounded_per_axis() {
+        let ok = wall_errors(r#""shape":[{"prim":"sphere","size":[0.1],"at":[7.0,0.3,0.1]}]"#);
+        assert!(ok.is_empty(), "{ok:?}");
+        let e = wall_errors(r#""shape":[{"prim":"sphere","size":[0.1],"at":[0,0.6,0]}]"#);
+        assert!(has(&e, "at y is 0.6"), "{e:?}");
+        let e = wall_errors(r#""shape":[{"prim":"sphere","size":[0.1],"at":[0,0,0.3]}]"#);
+        assert!(has(&e, "at z is 0.3"), "{e:?}");
+        assert!(!has(&e, "at x"), "{e:?}");
+    }
+
+    #[test]
+    fn built_geometry_past_the_extent_is_an_error() {
+        // Every number passes on its own (at 1.4, size 0.5, scale 3) but the
+        // sphere reaches 1.4 + 0.5 * 3 = 2.9 from the centre.
+        let body = r#""shape":[{"prim":"sphere","size":[0.5],"at":[1.4,0,0],"scale":[3,1,1]}]"#;
+        let e = shape_errors(body);
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(
+            e[0].starts_with("slots.player.shape: reaches 2.9")
+                && e[0].ends_with("on x; extent is 1.5"),
+            "{e:?}"
+        );
+        // A rotated cuboid's corner, not its size, is what reaches out.
+        let e = shape_errors(
+            r#""shape":[{"prim":"cuboid","size":[1.5,1.5,1.5],"at":[0.5,0,0],"rot":[0,45,0]}]"#,
+        );
+        assert!(has(&e, "slots.player.shape: reaches"), "{e:?}");
+        let r = validate(&shape_pack(2, "player", body), &TEST, None);
+        assert!(r.shapes.is_empty());
+        let ok = shape_errors(r#""shape":[{"prim":"sphere","size":[0.5],"at":[1.0,0,0]}]"#);
+        assert!(ok.is_empty(), "{ok:?}");
+    }
+
+    #[test]
+    fn shape_scale_bounds_are_checked() {
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[0.3],"scale":[1,0.005,1]}]"#);
+        assert!(
+            has(&e, "slots.player.shape[0]") && has(&e, "scale"),
+            "{e:?}"
+        );
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[0.3],"scale":[4.5,1,1]}]"#);
+        assert!(has(&e, "scale"), "{e:?}");
+        let ok = shape_errors(r#""shape":[{"prim":"sphere","size":[0.3],"scale":[0.01,4,1]}]"#);
+        assert!(ok.is_empty(), "{ok:?}");
+    }
+
+    #[test]
+    fn too_many_primitives_is_an_error() {
+        let one = r#"{"prim":"cuboid","size":[0.1,0.1,0.1]}"#;
+        let body = format!(r#""shape":[{}]"#, [one; 13].join(","));
+        let e = shape_errors(&body);
+        assert!(
+            has(&e, "slots.player.shape") && has(&e, "13 primitives; at most 12"),
+            "{e:?}"
+        );
+        let body = format!(r#""shape":[{}]"#, [one; 12].join(","));
+        assert!(shape_errors(&body).is_empty());
+    }
+
+    #[test]
+    fn the_vertex_budget_is_enforced() {
+        // A detail-32 sphere is 33 * 17 = 561 vertices; six of them is 3366.
+        let one = r#"{"prim":"sphere","size":[0.3],"detail":32}"#;
+        let body = format!(r#""shape":[{}]"#, [one; 6].join(","));
+        let e = shape_errors(&body);
+        assert!(
+            has(&e, "slots.player.shape") && has(&e, "3366 vertices; budget 3000"),
+            "{e:?}"
+        );
+        let body = format!(r#""shape":[{}]"#, [one; 5].join(","));
+        assert!(shape_errors(&body).is_empty());
+    }
+
+    #[test]
+    fn detail_out_of_range_is_an_error_not_a_clamp() {
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[0.3],"detail":2}]"#);
+        assert!(
+            has(&e, "slots.player.shape[0]") && has(&e, "detail is 3..=32"),
+            "{e:?}"
+        );
+        let e = shape_errors(r#""shape":[{"prim":"sphere","size":[0.3],"detail":33}]"#);
+        assert!(has(&e, "detail is 3..=32"), "{e:?}");
+    }
+
+    #[test]
+    fn a_valid_shape_reports_its_vertex_count() {
+        let r = validate(&shape_pack(2, "player", SHAPE), &TEST, Some("demo"));
+        assert!(r.ok(), "{:?}", errors(&r));
+        // sphere d12: 13 * 7 = 91; cone d8: 17.
+        assert_eq!(r.shapes, vec![("player".to_string(), 108)]);
+        let r = validate(&shape_pack(2, "player", r#""shape":[]"#), &TEST, None);
+        assert_eq!(r.shapes, vec![("player".to_string(), 0)]);
+    }
+
+    #[test]
+    fn an_invalid_shape_reports_no_vertex_count() {
+        let r = validate(
+            &shape_pack(2, "player", r#""shape":[{"prim":"sphere","size":[9]}]"#),
+            &TEST,
+            None,
+        );
+        assert!(r.shapes.is_empty());
     }
 }
