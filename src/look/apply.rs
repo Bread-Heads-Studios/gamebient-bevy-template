@@ -22,7 +22,8 @@ pub struct LookChanged;
 pub struct LookColour {
     pub role: &'static str,
     pub alpha: Option<f32>,
-    /// For a `StandardMaterial`: emissive = the colour times this.
+    /// For a `StandardMaterial`: emissive = the colour times this (times
+    /// the pack's `glow` for the role, which can only dim it).
     pub emissive: Option<f32>,
 }
 
@@ -185,7 +186,7 @@ pub fn retint_material(
             let c = tag.resolve(&look);
             m.base_color = c;
             if let Some(s) = tag.emissive {
-                m.emissive = LinearRgba::from(c) * s;
+                m.emissive = LinearRgba::from(c) * s * look.glow(tag.role);
             }
         }
     }

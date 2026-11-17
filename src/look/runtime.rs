@@ -132,6 +132,18 @@ impl ActiveLook {
         })
     }
 
+    /// How brightly `role` glows, as a share of the game's own: 1.0 unless
+    /// the pack dims it (`glow`, schema v3). Always in `0.0..=1.0`, so a
+    /// caller multiplies its own intensity by it and can only get darker.
+    pub fn glow(&self, role: &str) -> f32 {
+        self.manifest
+            .as_ref()
+            .and_then(|m| m.glow.get(role))
+            .copied()
+            .filter(|g| g.is_finite())
+            .map_or(1.0, |g| g.clamp(0.0, 1.0))
+    }
+
     pub fn string<'a>(&'a self, key: &'a str) -> &'a str {
         self.manifest
             .as_ref()
@@ -161,5 +173,42 @@ impl ActiveLook {
 
     pub fn file(&self, name: &str) -> Option<&[u8]> {
         self.files.get(name).map(Vec::as_slice)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    static C: Contract = Contract {
+        palette: &[
+            ("ink", Color::srgb(0.0, 0.0, 0.0)),
+            ("glow", Color::srgb(0.0, 1.0, 1.0)),
+        ],
+        strings: &[],
+        slots: &[],
+        audio: &[],
+        fonts: &[],
+        glow: &["glow"],
+    };
+
+    fn look(json: &str) -> ActiveLook {
+        let files = BTreeMap::from([(
+            super::super::manifest::MANIFEST_FILE.to_string(),
+            json.as_bytes().to_vec(),
+        )]);
+        ActiveLook::from_files(&C, files, Selection::Default, None).expect("valid pack")
+    }
+
+    #[test]
+    fn glow_is_full_unless_a_pack_dims_it() {
+        assert_eq!(ActiveLook::default_for(&C).glow("glow"), 1.0);
+        let plain = look(r#"{"v":1,"id":"p","name":"P","kind":"palette"}"#);
+        assert_eq!(plain.glow("glow"), 1.0);
+        let dim = look(r#"{"v":3,"id":"p","name":"P","kind":"palette","glow":{"glow":0.25}}"#);
+        assert_eq!(dim.glow("glow"), 0.25);
+        // A role the pack leaves alone keeps its glow.
+        assert_eq!(dim.glow("ink"), 1.0);
     }
 }

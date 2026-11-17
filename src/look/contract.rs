@@ -14,6 +14,10 @@ pub struct Contract {
     pub audio: &'static [&'static str],
     /// Names of fonts the game bundles; packs pick from these only.
     pub fonts: &'static [&'static str],
+    /// Palette roles whose glow a pack may dim (schema v3 `glow`): the
+    /// emissive parts the game lets get darker. A pack can never make one
+    /// brighter than the game's own, so the list is safe to grow.
+    pub glow: &'static [&'static str],
 }
 
 #[derive(Debug)]
@@ -99,6 +103,9 @@ impl Contract {
     pub fn default_string(&self, key: &str) -> Option<&'static str> {
         self.string_spec(key).map(|s| s.default)
     }
+    pub fn dims(&self, role: &str) -> bool {
+        self.glow.contains(&role)
+    }
     pub fn slot(&self, name: &str) -> Option<&SlotSpec> {
         self.slots.iter().find(|s| s.name == name)
     }
@@ -132,6 +139,7 @@ mod tests {
         }],
         audio: &["sfx.confirm"],
         fonts: &["Inter SemiBold"],
+        glow: &[],
     };
 
     #[test]

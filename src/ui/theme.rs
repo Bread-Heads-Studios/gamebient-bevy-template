@@ -173,6 +173,9 @@ pub const LOOK: Contract = Contract {
     slots: SLOTS,
     audio: AUDIO_CUES,
     fonts: FONTS,
+    // No part of the template's own art glows; a game with emissive roles
+    // lists the ones a pack may dim.
+    glow: &[],
 };
 
 #[cfg(test)]

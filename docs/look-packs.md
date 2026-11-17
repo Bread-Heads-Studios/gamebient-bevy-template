@@ -60,7 +60,7 @@ console says `look: fetching <id>`, then `look: now wearing <id>`.
 | Web | `…/?look=night-shift` (built-in packs only) |
 | Check | `cargo run --features look-check --bin look-check -- ./my-packs/acme` |
 
-## look.json (schema v1 and v2)
+## look.json (schemas v1 to v3)
 
 ```json
 {
@@ -81,10 +81,11 @@ console says `look: fetching <id>`, then `look: now wearing <id>`.
 
 | Field | Meaning |
 |---|---|
-| `v` | `1` or `2`. Use `2` only if the pack has a shape slot; see "Versions". |
+| `v` | `1`, `2` or `3`. Use the lowest that has every field the pack uses: `2` for a shape slot, `3` for `glow`; see "Versions". |
 | `id`, `name`, `creator` | Identity. `name` ≤ 32 chars, `creator` ≤ 48. |
 | `kind` | `palette`, `skin`, `sponsor` or `genre`. A label only; any kind may use any field. |
 | `palette` | Role → `#rrggbb` / `#rrggbbaa`. Roles are the game's (see its contract). Unset roles keep the game's colour. |
+| `glow` | (v3) Role → `0.0`–`1.0`: how brightly a glowing part shines, as a share of the game's own (`1.0`). It only dims: a palette colour sets a glowing part's hue, never its brightness, so this is how a pack makes one darker. Only roles the game lists in its contract's `glow` are accepted. |
 | `strings` | Key → printable ASCII, no longer than the game allows for that key. |
 | `slots` | Slot → `{ "image": "x.png", "frames": 1, "fps": 0 }`, `{ "recipe": "<name>", "params": { … } }` or (v2) `{ "shape": [ … ] }`. The game lists which slots take images, which recipes (with which params) it can draw, and which take a shape. A slot has exactly one of the three forms. |
 | `audio` | Cue → `.ogg`. Cues are `sfx.<sound>` and `music.<screen>`; the game lists them. A `music.<state>` track replaces that screen's music, including the template's baked layers. `music.howtoplay` only applies when HowToPlay has its own cue, because the template's Menu and HowToPlay share one. |
@@ -94,17 +95,19 @@ console says `look: fetching <id>`, then `look: now wearing <id>`.
 
 ## Versions
 
-`SCHEMA_VERSION` is 2. The rules, enforced by the validator:
+`SCHEMA_VERSION` is 3. v2 added `shape` slots; v3 added `glow`. The rules,
+enforced by the validator:
 
 - **v1 packs still load**, unchanged.
-- **A newer `v` is refused**: `v: 3` on this game fails with `made for a newer
-  version of this game (v3)`, and `v: 0` with `unknown schema version (0)`.
+- **A newer `v` is refused**: `v: 4` on this game fails with `made for a newer
+  version of this game (v4)`, and `v: 0` with `unknown schema version (0)`.
   A refused pack resolves to the game's own look, like any invalid pack.
   The version is read on its own before anything else, so a newer pack full
   of fields and primitives this game has never heard of still gets that one
   message, not a parse error.
 - **Fields only arrive with a version bump.** A `shape` slot in a `v: 1` pack
-  is an error (`shape slots need "v": 2`). Every manifest struct denies
+  is an error (`shape slots need "v": 2`), and so is `glow` below `v: 3`
+  (`glow needs "v": 3`). Every manifest struct denies
   unknown fields, so a field this game does not know fails instead of being
   ignored.
 
@@ -264,8 +267,15 @@ prints; on-chain looks will record it.
 Each game declares what a pack may change in `src/ui/theme.rs` as `LOOK`:
 palette roles with their default colours, string keys with defaults and
 maximum lengths, slots with their recipes and parameter ranges, audio cues,
-bundled fonts. The validator rejects anything not in it, so a typo fails
-loudly. `look-check` prints the valid names in each error.
+bundled fonts, and `glow`: the palette roles whose glow a pack may dim. The
+validator rejects anything not in it, so a typo fails loudly. `look-check`
+prints the valid names in each error.
+
+List a role in `glow` only where the game multiplies the part's emissive by
+`look.glow(role)` (always `0.0..=1.0`); a `LookColour::new(role).emissive(s)`
+tag already does. Emissive roles usually set the hue only, so a dark hex
+does not dim them; `glow` is how a pack turns a bright part down without
+ever turning one up.
 
 Game code uses a look in two ways:
 
@@ -277,7 +287,7 @@ Game code uses a look in two ways:
   `BackgroundColor`, `Sprite` or material is present.
   The look module fills them in on the frame they spawn and on every reload.
 - **Ask it**: `Option<Res<ActiveLook>>` and `colour(role)`, `string(key)`,
-  `slot(name)`, `recipe_number(slot, recipe, param)`; `Res<LookAssets>` for a
+  `slot(name)`, `glow(role)`, `recipe_number(slot, recipe, param)`; `Res<LookAssets>` for a
   pack's decoded images and audio overrides.
 
 **The one rule:** nothing in the sim (`SimSet`, `OnEnter(Playing)` spawns,
