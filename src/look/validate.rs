@@ -269,6 +269,13 @@ impl Check<'_> {
                 format!("must be printable ASCII, at most {max} characters"),
             );
         }
+        self.no_todo(at, s);
+    }
+    /// A starter pack marks every field `TODO: ...`; none may ship.
+    fn no_todo(&mut self, at: &str, s: &str) {
+        if s.contains("TODO:") {
+            self.error(at, "still a TODO: placeholder; fill it in");
+        }
     }
 }
 
@@ -565,13 +572,14 @@ pub fn validate(files: &Files, contract: &Contract, expected_id: Option<&str>) -
         if let Some(body) = &card.body {
             c.text("end_card.body", body, limits::STRING_MAX * 2);
         }
-        if let Some(url) = &card.url
-            && (!url.starts_with("https://") || !is_text(url, limits::URL_MAX))
-        {
-            c.error(
-                "end_card.url",
-                format!("an https:// URL, at most {} characters", limits::URL_MAX),
-            );
+        if let Some(url) = &card.url {
+            if !url.starts_with("https://") || !is_text(url, limits::URL_MAX) {
+                c.error(
+                    "end_card.url",
+                    format!("an https:// URL, at most {} characters", limits::URL_MAX),
+                );
+            }
+            c.no_todo("end_card.url", url);
         }
         if let Some(image) = &card.image {
             c.file_ref("end_card.image", image, "png");
@@ -1029,6 +1037,45 @@ mod tests {
         assert!(validate(&pack(ok), &TEST, None).ok());
         let bad = r#"{"v":1,"id":"demo","name":"D","kind":"sponsor","end_card":{"headline":"THANKS","url":"javascript:alert(1)"}}"#;
         assert!(!validate(&pack(bad), &TEST, None).ok());
+    }
+
+    #[test]
+    fn todo_placeholders_are_errors_everywhere_text_goes() {
+        let cases = [
+            r#"{"v":1,"id":"demo","name":"TODO: name","kind":"sponsor"}"#,
+            r#"{"v":1,"id":"demo","name":"D","creator":"TODO: you","kind":"sponsor"}"#,
+            r#"{"v":1,"id":"demo","name":"D","kind":"sponsor","end_card":{"headline":"TODO: headline"}}"#,
+            r#"{"v":1,"id":"demo","name":"D","kind":"sponsor","end_card":{"headline":"H","body":"TODO: body"}}"#,
+            r#"{"v":1,"id":"demo","name":"D","kind":"sponsor","end_card":{"headline":"H","url":"https://example.com/TODO:"}}"#,
+        ];
+        for json in cases {
+            let r = validate(&pack(json), &TEST, None);
+            assert!(!r.ok(), "{json} should fail");
+            assert!(
+                r.problems.iter().any(|p| p.message.contains("TODO:")),
+                "{json}: {:#?}",
+                r.problems
+            );
+        }
+    }
+
+    #[test]
+    fn todo_in_a_string_slot_is_an_error() {
+        // TEST declares only the "pause" string key.
+        let json =
+            r#"{"v":1,"id":"demo","name":"D","kind":"sponsor","strings":{"pause":"TODO: x"}}"#;
+        let r = validate(&pack(json), &TEST, None);
+        assert!(
+            r.problems
+                .iter()
+                .any(|p| p.at.contains("pause") && p.message.contains("TODO:"))
+        );
+    }
+
+    #[test]
+    fn the_word_todo_without_a_colon_is_fine() {
+        let json = r#"{"v":1,"id":"demo","name":"TODO LIST","kind":"sponsor"}"#;
+        assert!(validate(&pack(json), &TEST, None).ok());
     }
 
     #[test]

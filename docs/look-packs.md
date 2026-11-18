@@ -257,6 +257,8 @@ and skips shapes entirely.
 | Text | Printable ASCII; per-key length from the game |
 | End-card URL | `https://`, ≤ 200 chars |
 
+Any text containing `TODO:` is an error, so an unfinished copy of the sponsor-kit starter cannot load.
+
 The game checks every pack against these before using a byte of it. A pack with
 an error does not load (the game keeps its own look); warnings load and log.
 Each pack has a `content_hash` (BLAKE3 over every file) that `look-check`
