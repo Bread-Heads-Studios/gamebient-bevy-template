@@ -90,8 +90,16 @@ console says `look: fetching <id>`, then `look: now wearing <id>`.
 | `slots` | Slot → `{ "image": "x.png", "frames": 1, "fps": 0 }`, `{ "recipe": "<name>", "params": { … } }` or (v2) `{ "shape": [ … ] }`. The game lists which slots take images, which recipes (with which params) it can draw, and which take a shape. A slot has exactly one of the three forms. |
 | `audio` | Cue → `.ogg`. Cues are `sfx.<sound>` and `music.<screen>`; the game lists them. A `music.<state>` track replaces that screen's music, including the template's baked layers. `music.howtoplay` only applies when HowToPlay has its own cue, because the template's Menu and HowToPlay share one. |
 | `fonts` | `display` / `body` → one of the faces the game already ships. |
-| `frame`, `end_card` | Cabinet marquee/bezel art and a sponsor end card. Checked now; shown by games from a later release. |
+| `frame`, `end_card` | `frame`: cabinet marquee/bezel art (checked now; shown from a later release). `end_card`: a sponsor card shown on the game-over screen where the game places an `EndCardSlot`: image (112 px tall, at most 224 px wide, 2:1; a wider image is scaled down) beside headline, body and URL (plain text, never a link). Colours from the roles `endcard`, `endcardhead`, `endcardbody`, `endcardurl`. |
 | `protagonist` | Reserved for bring-your-own characters. Ignored, with a warning. |
+
+## End card
+
+```json
+"end_card": { "headline": "REFUEL WITH ACME", "body": "Use code ARCADE", "url": "https://example.com", "image": "qr.png" }
+```
+
+Only `headline` is required. The URL is shown as text; the game never opens it. Set the `endcard` palette role to give the card its own plate (transparent by default). See `docs/sponsor-kit/` for the sponsor kit.
 
 ## Versions
 
@@ -256,6 +264,8 @@ and skips shapes entirely.
 | OGG | Vorbis, 4 MiB, 180 s, mono or stereo, ≤ 48 kHz |
 | Text | Printable ASCII; per-key length from the game |
 | End-card URL | `https://`, ≤ 200 chars |
+
+Any text containing `TODO:` is an error, so an unfinished copy of the sponsor-kit starter cannot load.
 
 The game checks every pack against these before using a byte of it. A pack with
 an error does not load (the game keeps its own look); warnings load and log.

@@ -104,6 +104,11 @@ pub const PALETTE: &[(&str, Color)] = &[
     ("paper", PAPER),
     ("muted", MUTED),
     ("player", PLAYER),
+    // Sponsor end card (`look::end_card`), on the game-over card.
+    ("endcard", Color::srgba(0.035, 0.043, 0.094, 0.0)),
+    ("endcardhead", PAPER),
+    ("endcardbody", MUTED),
+    ("endcardurl", SIGNAL),
 ];
 
 pub const STRINGS: &[StringSpec] = &[
@@ -178,10 +183,56 @@ pub const LOOK: Contract = Contract {
     glow: &[],
 };
 
+/// Width of the end card's text column at a view `view_w` wide: what is
+/// left of 90% of the view beside the widest image, the gap and the padding.
+pub fn end_card_text_width(view_w: f32) -> f32 {
+    (view_w * 0.9 - crate::look::end_card::IMAGE_MAX_WIDTH - 16.0 - 32.0).min(480.0)
+}
+
+/// The end card's fonts and sizes (`look::end_card`).
+pub fn end_card_style() -> crate::look::EndCardStyle {
+    let width = crate::ui::fit::ui_width();
+    crate::look::EndCardStyle {
+        display: fonts::DISPLAY.font(28.0),
+        body: fonts::BODY.font(18.0),
+        display_advance_em: fonts::DISPLAY.advance_em,
+        body_advance_em: fonts::BODY.advance_em,
+        text_width: end_card_text_width(width),
+        headline_size: 28.0,
+        body_size: 18.0,
+        url_size: 16.0,
+    }
+}
+
 #[cfg(test)]
 mod look_contract_tests {
     use super::*;
     use crate::game::audio::{MUSIC, SfxEvent};
+
+    #[test]
+    fn the_contract_declares_every_end_card_role() {
+        for role in crate::look::end_card::ROLES {
+            assert!(
+                PALETTE.iter().any(|(r, _)| *r == role),
+                "{role} missing from PALETTE"
+            );
+        }
+    }
+
+    #[test]
+    fn the_end_card_column_fits_beside_its_image() {
+        for view_w in [720.0, 960.0] {
+            let text = end_card_text_width(view_w);
+            let row = crate::look::end_card::IMAGE_MAX_WIDTH + 16.0 + text + 2.0 * 16.0;
+            assert!(row <= view_w * 0.9 + 0.001, "{view_w}: {row}");
+            assert!(text >= 200.0, "{view_w}: {text}");
+        }
+        let s = end_card_style();
+        assert_eq!(
+            s.text_width,
+            end_card_text_width(crate::ui::fit::ui_width())
+        );
+    }
 
     #[test]
     fn every_sound_the_game_plays_is_a_cue_a_pack_can_override() {

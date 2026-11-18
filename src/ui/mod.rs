@@ -23,6 +23,7 @@ impl Plugin for UiPlugin {
         app
             // Cross-state fade overlay + shared prompt pulse
             .insert_resource(transition::ScreenFade::boot())
+            .insert_resource(theme::end_card_style())
             .add_systems(Startup, transition::spawn_fade_overlay)
             .add_systems(Update, (transition::update_fade, transition::pulse_text))
             // Card entrances and the title backdrop's drift (presentation).
