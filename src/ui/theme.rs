@@ -104,6 +104,11 @@ pub const PALETTE: &[(&str, Color)] = &[
     ("paper", PAPER),
     ("muted", MUTED),
     ("player", PLAYER),
+    // Sponsor end card (`look::end_card`), on the game-over card.
+    ("endcard", Color::srgba(0.035, 0.043, 0.094, 0.0)),
+    ("endcardhead", PAPER),
+    ("endcardbody", MUTED),
+    ("endcardurl", SIGNAL),
 ];
 
 pub const STRINGS: &[StringSpec] = &[

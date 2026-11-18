@@ -15,6 +15,7 @@
 
 pub mod apply;
 pub mod contract;
+pub mod end_card;
 pub mod fetch;
 pub mod hash;
 pub mod manifest;
@@ -35,6 +36,7 @@ use bevy::prelude::*;
 
 pub use apply::{LookAssets, LookChanged, LookColour, LookText};
 pub use contract::{Contract, ParamKind, ParamSpec, RecipeSpec, ShapeSpec, SlotSpec, StringSpec};
+pub use end_card::{EndCardPart, EndCardSlot, EndCardStyle, Part};
 pub use manifest::{
     EndCard, ImageSlot, LookKind, Manifest, Param, Prim, Primitive, RecipeSlot, ShapeSlot, Slot,
 };
@@ -94,6 +96,12 @@ impl Plugin for LookPlugin {
             )
             // Before asset events, so a reshaped mesh's `Aabb` is recomputed
             // on the frame it changes.
+            .add_systems(
+                PostUpdate,
+                end_card::fill_slots
+                    .before(LookSet)
+                    .run_if(resource_exists::<end_card::EndCardStyle>),
+            )
             .add_systems(
                 PostUpdate,
                 shapes_apply::apply_shapes
