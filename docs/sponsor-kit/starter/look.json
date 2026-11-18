@@ -1,0 +1,24 @@
+{
+  "v": 3,
+  "id": "starter",
+  "name": "TODO: brand name",
+  "kind": "sponsor",
+  "creator": "TODO: who made this pack",
+  "palette": {
+    "ink": "#101010",
+    "signal": "#ffffff",
+    "endcard": "#101010",
+    "endcardhead": "#ffffff",
+    "endcardbody": "#cccccc",
+    "endcardurl": "#ffffff"
+  },
+  "strings": {
+    "title": "TODO: TITLE"
+  },
+  "end_card": {
+    "headline": "TODO: HEADLINE",
+    "body": "TODO: one line offer or thanks",
+    "url": "https://example.com/TODO:",
+    "image": "logo.png"
+  }
+}
