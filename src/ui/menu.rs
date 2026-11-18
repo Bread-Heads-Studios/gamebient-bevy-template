@@ -234,6 +234,8 @@ pub fn spawn_game_over(mut commands: Commands, data: Res<GameData>) {
                             TextColor(SIGNAL),
                         ));
                     }
+                    // A sponsor pack's end card (`look::end_card`); empty otherwise.
+                    card.spawn((Node::default(), crate::look::EndCardSlot));
                     if demo::DEMO {
                         card.spawn(card_with(&CHIP, chip_node())).with_child((
                             Text::new(crate::ui::demo_end::FULL_GAME_LINE),

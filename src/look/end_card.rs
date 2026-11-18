@@ -19,7 +19,9 @@ pub const ROLES: [&str; 4] = ["endcard", "endcardhead", "endcardbody", "endcardu
 const GAP: f32 = 16.0;
 const PAD: f32 = 16.0;
 
-/// Put on an empty UI node; it is filled with the end card.
+/// Put on an empty UI node; it is filled with the end card. The system
+/// replaces the slot's `Node` on every rebuild, so games spawn
+/// `(Node::default(), EndCardSlot)` and put any margins on a wrapper node.
 #[derive(Component, Debug, Default, Clone, Copy)]
 pub struct EndCardSlot;
 

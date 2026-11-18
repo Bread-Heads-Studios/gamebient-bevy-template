@@ -183,9 +183,42 @@ pub const LOOK: Contract = Contract {
     glow: &[],
 };
 
+/// The end card's fonts and sizes (`look::end_card`): the column takes what
+/// is left of the card beside a square image.
+pub fn end_card_style() -> crate::look::EndCardStyle {
+    let width = crate::ui::fit::ui_width();
+    crate::look::EndCardStyle {
+        display: fonts::DISPLAY.font(28.0),
+        body: fonts::BODY.font(18.0),
+        display_advance_em: fonts::DISPLAY.advance_em,
+        body_advance_em: fonts::BODY.advance_em,
+        text_width: (width * 0.9 - crate::look::end_card::IMAGE_HEIGHT - 16.0 - 32.0).min(480.0),
+        headline_size: 28.0,
+        body_size: 18.0,
+        url_size: 16.0,
+    }
+}
+
 #[cfg(test)]
 mod look_contract_tests {
     use super::*;
+
+    #[test]
+    fn the_contract_declares_every_end_card_role() {
+        for role in crate::look::end_card::ROLES {
+            assert!(
+                PALETTE.iter().any(|(r, _)| *r == role),
+                "{role} missing from PALETTE"
+            );
+        }
+    }
+
+    #[test]
+    fn the_end_card_column_fits_beside_its_image() {
+        let s = end_card_style();
+        let row = crate::look::end_card::IMAGE_HEIGHT + 16.0 + s.text_width + 2.0 * 16.0;
+        assert!(row <= crate::ui::fit::ui_width() * 0.9, "{row}");
+    }
     use crate::game::audio::{MUSIC, SfxEvent};
 
     #[test]
