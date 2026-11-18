@@ -11,8 +11,12 @@ use super::apply::{LookAssets, LookChanged};
 use super::manifest::EndCard;
 use super::runtime::ActiveLook;
 
-/// Height of the card's image, in UI pixels. Width follows the image.
+/// Height of the card's image, in UI pixels. Width follows the image's
+/// aspect, up to `IMAGE_MAX_WIDTH`.
 pub const IMAGE_HEIGHT: f32 = 112.0;
+/// Widest the image may draw. A wider image is scaled down to fit, aspect
+/// kept; games budget the text column against this, not the height.
+pub const IMAGE_MAX_WIDTH: f32 = 2.0 * IMAGE_HEIGHT;
 /// Panel fill, headline, body and URL colours. Each game declares these
 /// palette roles in its contract.
 pub const ROLES: [&str; 4] = ["endcard", "endcardhead", "endcardbody", "endcardurl"];
@@ -68,6 +72,18 @@ pub fn parts(card: &EndCard, has_image: bool) -> Vec<Part> {
     v
 }
 
+/// The drawn size of an image of `w` x `h` pixels: `IMAGE_HEIGHT` tall, at
+/// most `IMAGE_MAX_WIDTH` wide, aspect kept (a wider image is scaled down
+/// as a whole, never squashed). Bevy clamps each axis of a node
+/// independently, so the size is resolved here and both axes are explicit.
+pub fn image_box(w: f32, h: f32) -> (f32, f32) {
+    if w <= 0.0 || h <= 0.0 {
+        return (IMAGE_HEIGHT, IMAGE_HEIGHT);
+    }
+    let scale = (IMAGE_HEIGHT / h).min(IMAGE_MAX_WIDTH / w);
+    (w * scale, h * scale)
+}
+
 /// Largest whole size up to `max_size` at which `text` fits `lines` lines
 /// of `width` (the same arithmetic as `ui::fit`, which this folder may not
 /// name).
@@ -112,6 +128,7 @@ pub fn fill_slots(
     look: Res<ActiveLook>,
     assets: Res<LookAssets>,
     style: Res<EndCardStyle>,
+    images: Option<Res<Assets<Image>>>,
     mut changed: MessageReader<LookChanged>,
     slots: Query<(Entity, Ref<EndCardSlot>)>,
 ) {
@@ -147,14 +164,23 @@ pub fn fill_slots(
         ));
         e.with_children(|row| {
             if let Some(handle) = image.filter(|_| shown.contains(&Part::Image)) {
-                row.spawn((
-                    EndCardPart(Part::Image),
-                    ImageNode::new(handle),
-                    Node {
+                let node = match images.as_ref().and_then(|a| a.get(&handle)) {
+                    Some(img) => {
+                        let (w, h) = image_box(img.width() as f32, img.height() as f32);
+                        Node {
+                            width: Val::Px(w),
+                            height: Val::Px(h),
+                            ..default()
+                        }
+                    }
+                    // Size unknown: height fixed, width follows the image, capped.
+                    None => Node {
                         height: Val::Px(IMAGE_HEIGHT),
+                        max_width: Val::Px(IMAGE_MAX_WIDTH),
                         ..default()
                     },
-                ));
+                };
+                row.spawn((EndCardPart(Part::Image), ImageNode::new(handle), node));
             }
             row.spawn(Node {
                 flex_direction: FlexDirection::Column,
@@ -223,6 +249,17 @@ mod tests {
             url: url.then(|| "https://example.com".into()),
             image: image.then(|| "qr.png".into()),
         }
+    }
+
+    #[test]
+    fn image_box_keeps_aspect_within_the_height_and_max_width() {
+        assert_eq!(image_box(128.0, 64.0), (224.0, 112.0));
+        assert_eq!(image_box(100.0, 100.0), (112.0, 112.0));
+        // Wider than 2:1: scaled down as a whole, aspect kept.
+        let (w, h) = image_box(400.0, 100.0);
+        assert_eq!(w, IMAGE_MAX_WIDTH);
+        assert!((w / h - 4.0).abs() < 1e-4 && h < IMAGE_HEIGHT);
+        assert_eq!(image_box(0.0, 0.0), (IMAGE_HEIGHT, IMAGE_HEIGHT));
     }
 
     #[test]

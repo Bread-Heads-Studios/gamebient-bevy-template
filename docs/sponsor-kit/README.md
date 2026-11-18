@@ -8,7 +8,7 @@ A pitch pack shows a brand inside a game before any deal is signed. It is a Look
 - Strings, such as the title.
 - Logo art in the game's image slots.
 - Glow, dimmed only.
-- The end card: a headline, a line of text, a URL and an image, shown on the game-over screen.
+- The end card: a headline, a line of text, a URL and an image, shown on the game-over screen. The image draws 112 px tall and at most 224 px wide (2:1); a wider image is scaled down.
 - Shapes in the slots the game's contract lists.
 
 A pack cannot change gameplay, hitboxes, scores or timing. The replay test proves this: a run replays to the same score with or without a pack.
@@ -23,6 +23,8 @@ A pack cannot change gameplay, hitboxes, scores or timing. The replay test prove
    `tools/render_logo.sh logo.svg assets/looks/<id>/logo.png 128`
    This needs `rsvg-convert` (librsvg).
 6. If you want a QR code, make one. It needs Python and the packages in `tools/requirements-kit.txt`. Install them in a virtual environment:
+   `pip install -r tools/requirements-kit.txt`
+   Then make the code:
    `tools/make_qr.py https://example.com/offer assets/looks/<id>/qr.png`
    Then set `end_card.image` to `qr.png`.
 7. Run `cargo test --test looks`.
