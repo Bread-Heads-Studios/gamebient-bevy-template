@@ -132,7 +132,11 @@ import json, os
 p = "assets/info.json"
 d = json.load(open(p))
 props = d.setdefault("properties", {})
-base = (props.get("game_url") or props.get("demo_url") or "").rstrip("/")
+# The public host root. game_url is <host>/full/, which middleware.ts gates
+# behind an entitlement token: an asset URL under it is a 403 for the store.
+base = (props.get("demo_url") or props.get("game_url") or "").rstrip("/")
+if base.endswith("/full"):
+    base = base[: -len("/full")]
 if not base:
     raise SystemExit("store-assets: info.json has no game_url/demo_url to build asset URLs from")
 props["screenshots"] = [f"{base}/assets/screenshots/{n}" for n in os.environ["SCREENSHOTS"].split()]
