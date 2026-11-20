@@ -23,6 +23,8 @@
 #   (n) a good marquee.png and no bezel.png -> marquee written with the game's
 #       host, bezel absent.
 #   (l) a game size that is not a sanctioned ratio -> non-zero exit.
+#   (o) info.json with no demo_url, only game_url <host>/full/ -> asset URLs are
+#       still on the public host root, never under the entitlement-gated /full/.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 TOOL="$HERE/tools/store-assets.sh"
@@ -158,5 +160,20 @@ mk "$T/n"; ffmpeg -v error -y -f lavfi -i "color=c=navy:s=1080x360:d=0.1" -frame
 ( cd "$T/n" && "$TOOL" ) >/dev/null
 [ "$(json "$T/n/assets/info.json" "d['properties']['marquee']")" = "https://gamebient-game.vercel.app/assets/marquee.png" ] || { echo "FAIL n: marquee url"; exit 1; }
 [ "$(json "$T/n/assets/info.json" "'bezel' in d['properties']")" = "False" ] || { echo "FAIL n: bezel written with no PNG"; exit 1; }
+
+# (o)
+mk "$T/o"
+python3 - "$T/o/assets/info.json" <<'PY'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+assert d["properties"]["game_url"].rstrip("/").endswith("/full"), "fixture game_url is no longer <host>/full/"
+del d["properties"]["demo_url"]
+json.dump(d, open(p, "w"), indent=4)
+PY
+ffmpeg -v error -y -f lavfi -i "color=c=navy:s=1080x360:d=0.1" -frames:v 1 "$T/o/assets/marquee.png"
+( cd "$T/o" && "$TOOL" ) >/dev/null
+[ "$(json "$T/o/assets/info.json" "d['properties']['screenshots'][0]")" = "https://gamebient-game.vercel.app/assets/screenshots/01.png" ] || { echo "FAIL o: screenshot url under /full/"; exit 1; }
+[ "$(json "$T/o/assets/info.json" "d['properties']['trailer_url']")" = "https://gamebient-game.vercel.app/assets/trailer.mp4" ] || { echo "FAIL o: trailer url under /full/"; exit 1; }
+[ "$(json "$T/o/assets/info.json" "d['properties']['marquee']")" = "https://gamebient-game.vercel.app/assets/marquee.png" ] || { echo "FAIL o: marquee url under /full/"; exit 1; }
 
 echo "test_store_assets: OK"
