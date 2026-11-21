@@ -12,7 +12,7 @@
 use bevy::prelude::*;
 
 use super::files::fnv1a64;
-use super::kit::{Kinds, Size, Thing, ThingArt, ThingId};
+use super::kit::{KindProps, Kinds, Size, Thing, ThingArt, ThingId};
 use super::model::{ContentError, LevelFile, PlacedThing};
 use super::sprites::{ArtOf, SpriteArt, SpriteImages, sprite_for};
 use crate::game::GameEntity;
@@ -113,7 +113,7 @@ pub fn spawn_level(
             continue;
         };
         let props = kinds.props(kind).expect("index came from kinds");
-        let size = placed.size.map_or(props.size, Vec2::from);
+        let size = placed_size(placed, props);
         let mut e = commands.spawn((
             Thing { kind },
             ThingId(placed.id.clone()),
@@ -126,30 +126,60 @@ pub fn spawn_level(
         if let Some(on_spawn) = props.on_spawn {
             on_spawn(&mut e);
         }
-        // Art goes on a child: the sprite when the kind has one, else the box.
-        if let Some((quad, material, transform)) = sprite_for(
-            sprite_art.as_deref(),
-            sprite_images.as_deref(),
-            &kinds,
-            kind,
-            size,
-        ) {
-            e.with_child((
-                Mesh3d(quad),
-                MeshMaterial3d(material),
-                transform,
-                ArtOf(kind),
-            ));
-        } else if let Some(art) = art.as_deref()
-            && let Some(material) = art.materials.get(usize::from(kind))
-        {
-            e.with_child((
-                Mesh3d(art.mesh.clone()),
-                MeshMaterial3d(material.clone()),
-                Transform::from_scale(size.extend(1.0)),
-                ArtOf(kind),
-            ));
-        }
+        let sources = ArtSources {
+            art: art.as_deref(),
+            sprite_art: sprite_art.as_deref(),
+            sprite_images: sprite_images.as_deref(),
+        };
+        spawn_art_child(&mut e, &sources, &kinds, kind, size, ());
+    }
+}
+
+/// A placed Thing's size: its own `size`, else its kind's default.
+pub fn placed_size(placed: &PlacedThing, props: &KindProps) -> Vec2 {
+    placed.size.map_or(props.size, Vec2::from)
+}
+
+/// The art a Thing's child can draw from. Every field is optional: the
+/// headless sim has none of them and spawns no art.
+pub struct ArtSources<'a> {
+    pub art: Option<&'a ThingArt>,
+    pub sprite_art: Option<&'a SpriteArt>,
+    pub sprite_images: Option<&'a SpriteImages>,
+}
+
+/// Puts a Thing's art on a child of `parent`: the kind's sprite when it has
+/// one, else its box. `extra` goes on the child too (`()` for a run, the
+/// level editor's `EditArt` for a shown Thing). Shared by [`spawn_level`]
+/// and `edit::spawn_edit_level`, so edit mode draws exactly what a run does.
+pub fn spawn_art_child(
+    parent: &mut EntityCommands,
+    sources: &ArtSources,
+    kinds: &Kinds,
+    kind: u16,
+    size: Vec2,
+    extra: impl Bundle,
+) {
+    if let Some((quad, material, transform)) =
+        sprite_for(sources.sprite_art, sources.sprite_images, kinds, kind, size)
+    {
+        parent.with_child((
+            Mesh3d(quad),
+            MeshMaterial3d(material),
+            transform,
+            ArtOf(kind),
+            extra,
+        ));
+    } else if let Some(art) = sources.art
+        && let Some(material) = art.materials.get(usize::from(kind))
+    {
+        parent.with_child((
+            Mesh3d(art.mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_scale(size.extend(1.0)),
+            ArtOf(kind),
+            extra,
+        ));
     }
 }
 

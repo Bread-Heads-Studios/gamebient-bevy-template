@@ -15,9 +15,9 @@ use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 
 use super::kit::{Kinds, LevelGrid, Size, Thing, ThingArt, ThingId};
-use super::level::Level;
+use super::level::{ArtSources, Level, placed_size, spawn_art_child};
 use super::model::LevelFile;
-use super::sprites::{ArtOf, SpriteArt, SpriteImages, sprite_for};
+use super::sprites::{SpriteArt, SpriteImages};
 use crate::display::{GAME_HEIGHT, GAME_WIDTH}; // allow-display: the edit camera's default canvas, presentation only
 use crate::game::GameEntity;
 use crate::game::states::GameState;
@@ -43,6 +43,12 @@ pub struct EditArt;
 /// The camera that draws the level while Editing.
 #[derive(Component)]
 pub struct EditCamera;
+
+/// On a game camera that `spawn_edit_camera` switched off, so leaving
+/// Editing switches back on only those (a camera that was already off
+/// stays off).
+#[derive(Component)]
+struct DisabledForEdit;
 
 /// The edit camera and the canvas it draws into, as `level.view` reports them.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
@@ -99,10 +105,7 @@ pub fn level_bounds(level: &LevelFile, kinds: &Kinds) -> Option<Rect> {
         let Some(kind) = kinds.index(&t.kind) else {
             continue;
         };
-        let size = t.size.map_or(
-            kinds.props(kind).expect("index came from kinds").size,
-            Vec2::from,
-        );
+        let size = placed_size(t, kinds.props(kind).expect("index came from kinds"));
         let r = Rect::from_center_size(Vec2::from(t.at), size);
         out = Some(out.map_or(r, |o| o.union(r)));
     }
@@ -121,7 +124,8 @@ pub fn fit_view(bounds: Option<Rect>, grid: f32, canvas: Vec2) -> (Vec2, f32) {
 }
 
 /// `OnEnter(Editing)`, after the run is despawned: shows the level's Things
-/// in file order, art on a child exactly as `spawn_level` draws it.
+/// in file order, art on a child exactly as `spawn_level` draws it (the same
+/// `level::spawn_art_child`, plus [`EditArt`]).
 pub fn spawn_edit_level(
     mut commands: Commands,
     level: Res<Level>,
@@ -135,7 +139,7 @@ pub fn spawn_edit_level(
             continue;
         };
         let props = kinds.props(kind).expect("index came from kinds");
-        let size = placed.size.map_or(props.size, Vec2::from);
+        let size = placed_size(placed, props);
         let mut e = commands.spawn((
             EditThing,
             GameEntity,
@@ -145,31 +149,12 @@ pub fn spawn_edit_level(
             Transform::from_xyz(placed.at[0], placed.at[1], 0.0),
             Visibility::default(),
         ));
-        if let Some((quad, material, transform)) = sprite_for(
-            sprite_art.as_deref(),
-            sprite_images.as_deref(),
-            &kinds,
-            kind,
-            size,
-        ) {
-            e.with_child((
-                Mesh3d(quad),
-                MeshMaterial3d(material),
-                transform,
-                ArtOf(kind),
-                EditArt,
-            ));
-        } else if let Some(art) = art.as_deref()
-            && let Some(material) = art.materials.get(usize::from(kind))
-        {
-            e.with_child((
-                Mesh3d(art.mesh.clone()),
-                MeshMaterial3d(material.clone()),
-                Transform::from_scale(size.extend(1.0)),
-                ArtOf(kind),
-                EditArt,
-            ));
-        }
+        let sources = ArtSources {
+            art: art.as_deref(),
+            sprite_art: sprite_art.as_deref(),
+            sprite_images: sprite_images.as_deref(),
+        };
+        spawn_art_child(&mut e, &sources, &kinds, kind, size, EditArt);
     }
 }
 
@@ -244,7 +229,7 @@ fn spawn_edit_camera(
     mut commands: Commands,
     view: Res<EditView>,
     mut game_cameras: Query<
-        &mut Camera,
+        (Entity, &mut Camera),
         (
             With<Camera3d>,
             Without<EditCamera>,
@@ -252,8 +237,11 @@ fn spawn_edit_camera(
         ),
     >,
 ) {
-    for mut camera in &mut game_cameras {
-        camera.is_active = false;
+    for (e, mut camera) in &mut game_cameras {
+        if camera.is_active {
+            camera.is_active = false;
+            commands.entity(e).insert(DisabledForEdit);
+        }
     }
     commands.spawn((
         EditCamera,
@@ -266,20 +254,17 @@ fn spawn_edit_camera(
 fn remove_edit_camera(
     mut commands: Commands,
     edit: Query<Entity, With<EditCamera>>,
-    mut game_cameras: Query<
-        &mut Camera,
-        (
-            With<Camera3d>,
-            Without<EditCamera>,
-            Without<crate::frame::FrameCamera>,
-        ),
+    mut disabled: Query<
+        (Entity, &mut Camera),
+        (With<DisabledForEdit>, Without<crate::frame::FrameCamera>),
     >,
 ) {
     for e in &edit {
         commands.entity(e).despawn();
     }
-    for mut camera in &mut game_cameras {
+    for (e, mut camera) in &mut disabled {
         camera.is_active = true;
+        commands.entity(e).remove::<DisabledForEdit>();
     }
 }
 
@@ -347,6 +332,13 @@ mod tests {
     fn shown(app: &mut App) -> usize {
         app.world_mut()
             .query_filtered::<(), With<EditThing>>()
+            .iter(app.world())
+            .count()
+    }
+
+    fn edit_art(app: &mut App) -> usize {
+        app.world_mut()
+            .query_filtered::<(), With<EditArt>>()
             .iter(app.world())
             .count()
     }
@@ -471,14 +463,20 @@ mod tests {
     #[test]
     fn respawn_shows_the_new_level_and_keeps_the_camera() {
         let mut app = build_headless_app();
+        // Asset stores, so `setup_thing_art` builds `ThingArt` at Startup
+        // and the shown Things get art children.
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
         set_level(app.world_mut(), LEVEL).unwrap();
         app.update();
         go(&mut app, GameState::Editing);
         assert_eq!(shown(&mut app), 2);
+        assert_eq!(edit_art(&mut app), 2, "each shown Thing has an art child");
         app.world_mut().resource_mut::<EditView>().at = Vec2::new(7.0, 7.0);
         set_level(app.world_mut(), ONE).unwrap();
         respawn_edit_level(app.world_mut());
         assert_eq!(shown(&mut app), 1);
+        assert_eq!(edit_art(&mut app), 1, "the old art children are gone");
         assert_eq!(app.world().resource::<EditView>().at, Vec2::new(7.0, 7.0));
     }
 }

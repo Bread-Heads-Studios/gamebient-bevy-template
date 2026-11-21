@@ -140,6 +140,8 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 # Reads `?mute=1` from the page URL (game::host::LocalMute). Already in the
 # lockfile through Bevy's web backend.
 # Response: the on-demand fetch of large built-in Look Packs (look::fetch).
+# Document, DomRect, Element: the level editor reads the `#game` canvas's
+# on-screen rectangle (game::content::edit::track_canvas_rect).
 web-sys = { version = "0.3", features = ["Document", "DomRect", "Element", "Location", "Response", "Window"] }
 # The Look Pack fetch's async glue. Both already in Cargo.lock through
 # Bevy's web backend; pinned to those versions so they add nothing.
