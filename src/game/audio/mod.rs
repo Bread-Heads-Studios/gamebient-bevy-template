@@ -353,6 +353,7 @@ pub const MUSIC: &[(GameState, Option<&Cue>)] = &[
     (GameState::Playing, Some(&PLAY_CUE)),
     (GameState::GameOver, Some(&GAME_OVER_CUE)),
     (GameState::DemoEnd, Some(&DEMO_END_CUE)),
+    (GameState::Editing, None),
 ];
 
 /// Gameplay's handle on the music within a state.
@@ -944,6 +945,7 @@ mod tests {
             GameState::Playing,
             GameState::GameOver,
             GameState::DemoEnd,
+            GameState::Editing,
         ] {
             assert!(MUSIC.iter().any(|(st, _)| *st == s), "{s:?} has no row");
         }

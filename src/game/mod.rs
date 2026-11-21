@@ -65,6 +65,8 @@ impl Plugin for GamePlugin {
             .init_resource::<sim::RunOver>()
             .init_resource::<sim::SpawnCounter>()
             .init_resource::<replay::recorder::ReplayRecorder>()
+            .init_resource::<content::edit::EditView>()
+            .init_resource::<content::edit::CanvasProbe>()
             .add_message::<scoring::ScoreEvent>()
             .add_message::<audio::SfxEvent>()
             // Music control from gameplay (switches, layers). Registered in
@@ -158,9 +160,25 @@ impl Plugin for GamePlugin {
             .add_systems(
                 OnExit(GameState::Playing),
                 (replay::recorder::seal_run, cleanup_game_entities).chain(),
-            );
+            )
+            // The level editor: the run is despawned, the level shown,
+            // the camera fitted to it. No SimSet system runs in Editing.
+            .add_systems(
+                OnEnter(GameState::Editing),
+                (
+                    cleanup_game_entities,
+                    content::edit::spawn_edit_level,
+                    // The real canvas before the fit (the default is the
+                    // game's own size, wider than a hosted editor's frame).
+                    content::edit::track_canvas_rect,
+                    content::edit::fit_edit_view,
+                )
+                    .chain(),
+            )
+            .add_systems(OnExit(GameState::Editing), cleanup_game_entities);
 
         if !self.headless {
+            app.add_plugins(content::edit::EditCameraPlugin);
             app.init_resource::<audio::MusicCache>()
                 .init_resource::<audio::CurrentCue>()
                 .init_resource::<audio::Duck>()
@@ -232,7 +250,7 @@ fn tunables_registration(app: &mut App) {
 /// a placeholder colour each, and an `on_spawn` that inserts the kind's
 /// markers and bodies (sim components only; art goes on children).
 fn kinds_registration(app: &mut App) {
-    use content::kit::{KindProps, KitAppExt};
+    use content::kit::{EditRules, KindProps, KitAppExt, LevelGrid};
     app.thing_kind(
         "Player",
         KindProps {
@@ -242,6 +260,11 @@ fn kinds_registration(app: &mut App) {
             on_spawn: Some(|e| {
                 e.insert(player::Player);
             }),
+            edit: EditRules {
+                resizable: false,
+                max: Some(1),
+                placeable: true,
+            },
         },
     )
     .thing_kind(
@@ -252,8 +275,12 @@ fn kinds_registration(app: &mut App) {
             on_spawn: Some(|e| {
                 e.insert(scoring::Coin);
             }),
+            edit: EditRules::default(),
         },
     );
+    // The template's world is about 22 units wide: a 20-unit grid would
+    // snap everything to the middle.
+    app.insert_resource(LevelGrid(1.0));
 }
 
 /// One-time scene setup: a camera and a directional light.
@@ -509,5 +536,25 @@ mod tests {
             app.world().resource::<sim::Checksum>().0,
             sim::Checksum::default().0
         );
+    }
+
+    /// The template's kinds: one Player per level, Coins without limit;
+    /// nothing resizes. The grid suits the template's small world units.
+    #[test]
+    fn the_template_kinds_carry_their_edit_rules() {
+        use content::kit::{EditRules, Kinds, LevelGrid};
+        let app = replay::build_headless_app();
+        let kinds = app.world().resource::<Kinds>();
+        let rules = |name: &str| kinds.props(kinds.index(name).unwrap()).unwrap().edit;
+        assert_eq!(
+            rules("Player"),
+            EditRules {
+                resizable: false,
+                max: Some(1),
+                placeable: true,
+            }
+        );
+        assert_eq!(rules("Coin"), EditRules::default());
+        assert_eq!(*app.world().resource::<LevelGrid>(), LevelGrid(1.0));
     }
 }

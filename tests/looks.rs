@@ -873,3 +873,58 @@ mod fetch_arrival {
         assert_eq!(app.world().resource::<Announced>().0, 0);
     }
 }
+
+/// Editing shows the level dressed like the game: the shown Player (no
+/// `Player` marker, no sim components) has its art child dressed from the
+/// pack, through the presentation-only `EditArt` marker.
+#[test]
+fn the_shown_player_is_dressed_while_editing() {
+    use bevy::ecs::system::RunSystemOnce;
+    use gamebient_game::game::content::edit::{EditArt, EditThing};
+    use gamebient_game::game::content::kit::{Kinds, Thing, ThingArt, setup_thing_art};
+    use gamebient_game::game::content::level::set_level;
+    // `app_with` has no `GameState`; the headless game app has the state,
+    // `GamePlugin`'s `OnEnter(Editing)` and the kinds, and takes the pack the
+    // same way.
+    let mut app = gamebient_game::game::replay::build_headless_app();
+    app.insert_resource(Selection::Embedded("sample-sponsor".into()));
+    app.add_plugins(LookPlugin {
+        contract: &theme::LOOK,
+    });
+    app.init_resource::<Assets<Mesh>>();
+    app.init_resource::<Assets<StandardMaterial>>();
+    app.add_plugins(gamebient_game::assets::AssetsPlugin);
+    if !app.world().contains_resource::<ThingArt>() {
+        app.world_mut().run_system_once(setup_thing_art).unwrap();
+    }
+    set_level(
+        app.world_mut(),
+        br#"{"v":1,"things":[{"id":"player","kind":"Player","at":[0,0]}]}"#,
+    )
+    .unwrap();
+    app.update();
+    app.world_mut()
+        .resource_mut::<NextState<GameState>>()
+        .set(GameState::Editing);
+    app.update(); // OnEnter(Editing) shows the level; dress_player runs in Update
+    app.update(); // its inserts have landed
+    let player_kind = app.world().resource::<Kinds>().index("Player").unwrap();
+    let mut q = app
+        .world_mut()
+        .query_filtered::<(Entity, &ArtOf, &ChildOf), With<EditArt>>();
+    let (art, _, parent) = q
+        .iter(app.world())
+        .find(|(_, a, _)| a.0 == player_kind)
+        .map(|(e, a, c)| (e, *a, c.parent()))
+        .expect("the shown Player has an art child");
+    assert_eq!(
+        app.world().get::<LookColour>(art).map(|c| c.role),
+        Some("player")
+    );
+    assert!((cuboid_edge(&app, art) - 1.4).abs() < 1e-5);
+    // The shown Thing itself stays a picture: no sim marker, nothing written.
+    assert!(app.world().get::<EditThing>(parent).is_some());
+    assert!(app.world().get::<Thing>(parent).is_some());
+    assert!(app.world().get::<Player>(parent).is_none());
+    assert!(app.world().get::<LookColour>(parent).is_none());
+}

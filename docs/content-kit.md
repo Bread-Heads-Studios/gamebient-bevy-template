@@ -38,8 +38,16 @@ to change how a kind behaves, it edits Rust.
 ## Adding a kind
 
 Register it in `kinds_registration` (`src/game/mod.rs`) with
-`thing_kind(name, KindProps { size, colour, on_spawn })`. Then `level.json`
-can place it by name.
+`thing_kind(name, KindProps { size, colour, on_spawn, edit })`. Then
+`level.json` can place it by name. `edit` is the kind's `EditRules`: whether
+the level editor may resize it (`resizable`, its `size` is then written),
+the most a level may hold (`max`, `None` for no limit) and whether the editor
+may add it at all (`placeable`; set it to `false` for kinds spawned only at
+runtime, such as bullets, which the catalog then leaves out). The template's Player
+is `max: Some(1)`; a goal is usually one of a kind too, and a platform
+resizable. The editor's grid step is the `LevelGrid` resource (default 20
+world units); insert your own above `ContentPlugin` when your world units are
+not pixels.
 
 - Registration order is the kind's index (`Thing { kind }`). Never reorder
   between releases, exactly like tunables.
@@ -124,6 +132,32 @@ In the editor build (`--features editor`) the host sends `content.set` with
 (send `run.restart`); `tunables.json` goes through `PendingTunes`; sprites and
 audio apply in place. The protocol table is the module doc of
 `src/game/tunables/protocol.rs`; `sound.preview` takes an event or cue name.
+
+## The level editor
+
+The editor build lets a creator move, add, remove, duplicate and resize the
+Things in `content/level.json` on the running game.
+
+- `GameState::Editing` (`src/game/content/edit.rs`) despawns the run and
+  shows the current level for display only: `EditThing` entities with the
+  kit's art and no `on_spawn` components or `SpawnOrder`. Presentation
+  dressing still runs, so it looks like the game: the art children carry the
+  `EditArt` marker and `player::dress_player` dresses the shown Player's. **No `SimSet`
+  system runs in Editing**, so replays, `RunClock`, the selftest and the
+  checks never see it. Never give a sim system a run condition that lets it
+  run in Editing.
+- A separate orthographic `EditCamera` shows the level, fitted to its bounds
+  on entry; the game's own cameras are switched off while Editing.
+- Each kind's `EditRules` (`resizable`, `max`) and the `LevelGrid` resource
+  reach the editor through the catalog's `level`.
+- Host messages (`gx:custom`): `level.edit {on}` enters Editing or leaves it
+  for a normal, replayable run with the current level; `level.camera {at,
+  zoom}` moves the edit camera; the game answers `level.view {at, zoom,
+  canvas}` (zoom is CSS pixels per world unit, canvas is the `#game`
+  rectangle in the frame's CSS pixels) and `level.mode {editing}` on every
+  state change.
+- While Editing, `content.set` of `level.json` respawns the shown level at
+  once. Outside Editing it still applies at the next run start.
 
 ## Porting a game to the kit
 

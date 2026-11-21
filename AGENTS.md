@@ -227,7 +227,10 @@ Level layout, saved tunable values, sprites and audio live as files in
 kind goes through `thing_kind` in `kinds_registration`, above `ContentPlugin`;
 its `on_spawn` must not depend on art existing. The level and saved tunables
 are run content (in the replay hash); sprites and audio are not. The selftest
-and checks use `test_level()` and Rust-default tunables.
+and checks use `test_level()` and Rust-default tunables. The editor's level
+editor (`GameState::Editing`, `content::edit`) shows the level frozen and runs
+no sim system; each kind's `EditRules` and the `LevelGrid` resource tell it
+what it may do (docs/content-kit.md, "The level editor").
 
 ## Typography and cards
 
