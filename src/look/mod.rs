@@ -15,6 +15,8 @@
 
 pub mod apply;
 pub mod contract;
+#[cfg(feature = "editor")]
+pub mod editor;
 pub mod end_card;
 pub mod fetch;
 pub mod hash;

@@ -4,7 +4,7 @@
 //! | Direction   | Name             | Data                                              |
 //! |-------------|------------------|---------------------------------------------------|
 //! | host → game | `tunables.list`  | —                                                 |
-//! | game → host | `tunables`       | the catalog: groups, tunables with values, checks, sounds, content, level |
+//! | game → host | `tunables`       | the catalog: groups, tunables with values, checks, sounds, content, level, looks |
 //! | host → game | `tunables.set`   | `{ "<path>": value, … }`                          |
 //! | game → host | `tunable`        | `{ path, value, applied: "tick"\|"now", tick }` or `{ path, error }` |
 //! | host → game | `checks.run`     | `{ "names": [ … ] }`                              |
@@ -276,6 +276,9 @@ pub fn catalog_json(world: &World) -> Json {
     });
     if let Some(level) = level_catalog(world) {
         j["level"] = level;
+    }
+    if let Some(looks) = crate::look::editor::looks_catalog(world) {
+        j["looks"] = looks;
     }
     j
 }
@@ -1284,6 +1287,21 @@ mod tests {
         assert_eq!(
             named(&mut app, "level.mode"),
             vec![json!({ "editing": false })]
+        );
+    }
+
+    #[test]
+    fn the_catalog_carries_looks_only_with_a_look_plugin() {
+        let mut app = build_builtin_app();
+        app.update();
+        assert!(catalog_json(app.world()).get("looks").is_none());
+        app.insert_resource(crate::look::ActiveLook::default_for(
+            &crate::ui::theme::LOOK,
+        ));
+        let j = catalog_json(app.world());
+        assert_eq!(
+            j["looks"],
+            crate::look::editor::looks_catalog(app.world()).unwrap()
         );
     }
 }
