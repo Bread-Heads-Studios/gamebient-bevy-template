@@ -8,7 +8,7 @@ use super::contract::Contract;
 use super::manifest::{Manifest, Param, Slot};
 use super::pack;
 use super::select::Selection;
-use super::validate::{Files, Report, Severity, parse_colour, validate};
+use super::validate::{Files, Problem, Report, Severity, parse_colour, validate};
 
 /// Drawn for a palette role the contract does not declare: a programming
 /// error, made loud on screen.
@@ -21,6 +21,10 @@ pub struct ActiveLook {
     pub files: Files,
     pub content_hash: Option<String>,
     pub source: Selection,
+    /// The validator's warnings on this pack (it had no errors). A built-in
+    /// pack ships with none (`tests/looks.rs`); the editor saves a pack with
+    /// any as a draft.
+    pub warnings: Vec<Problem>,
     colours: Vec<(String, Color)>,
 }
 
@@ -41,6 +45,7 @@ impl ActiveLook {
             files: Files::new(),
             content_hash: None,
             source: Selection::Default,
+            warnings: Vec::new(),
             colours: Vec::new(),
         }
     }
@@ -62,6 +67,7 @@ impl ActiveLook {
         let Report {
             manifest,
             content_hash,
+            problems: warnings,
             ..
         } = report;
         let manifest = manifest.expect("ok() implies a manifest");
@@ -76,6 +82,7 @@ impl ActiveLook {
             files,
             content_hash: Some(content_hash),
             source,
+            warnings,
             colours,
         })
     }

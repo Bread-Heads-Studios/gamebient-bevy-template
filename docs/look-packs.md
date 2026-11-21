@@ -263,7 +263,7 @@ editor's Looks tab dress the running game in the pack it is writing:
 |---|---|---|
 | editor → game | `look.set {id, files: {"look.json": {text}, "<name>.png": {png: base64}, "<name>.ogg": {ogg: base64}}}` | Validate this pack and wear it. |
 | editor → game | `look.clear {}` | Go back to the game's own look. |
-| game → editor | `look {id, ok, errors: [string], hash}` | The validator's verdict, and the pack's content hash when `ok`. |
+| game → editor | `look {id, ok, errors: [string], hash, warnings: [string]}` | The validator's verdict, the pack's content hash when `ok`, and its warnings. |
 
 - The game runs this page's validator on the files as given, with `id` as
   the folder name. A valid pack is worn through `look::swap::LookSwap` and
@@ -271,7 +271,12 @@ editor's Looks tab dress the running game in the pack it is writing:
   nothing: the last good look stays, and `errors` lists each problem as
   `<where>: <what>` (`palette.coin: colours are #rrggbb or #rrggbbaa`).
   `hash` is the same BLAKE3 content hash `look-check` prints; `null` when
-  not `ok`. `look.clear` answers `{"id": "default", "ok": true, "errors": [], "hash": null}`.
+  not `ok`. `warnings` (beside the spec's fields) lists the validator's
+  warnings on a pack it took, in the same form (an unreferenced file, say).
+  A payload that is not JSON answers `{"id": "", "ok": false, "errors":
+  ["pack: not JSON"], ...}`. The name and hash come from the look the game
+  wears after the validator accepted it; nothing reads the bytes first.
+  `look.clear` answers `{"id": "default", "ok": true, "errors": [], "hash": null, "warnings": []}`.
 - The catalog (`tunables`) carries `looks`: the contract as data (palette
   roles with their default colours, string keys with defaults and maximum
   lengths, image slots, audio cues, and `end_card` when the game declares
@@ -281,8 +286,19 @@ editor's Looks tab dress the running game in the pack it is writing:
 - Looks stay cosmetic: `tests/looks.rs`
   (`a_look_set_pack_does_not_change_a_replay`) replays the selftest under a
   `look.set` pack that sets every role and key.
-- The editor saves a pack to `assets/looks/<id>/` and its store listing to
-  `looks-listing/<id>.json` (not read by the game).
+- **Drafts are not built in.** The editor saves a pack the game took
+  cleanly (`ok`, no warnings) to `assets/looks/<id>/`, where `build.rs`
+  embeds it. A pack it refused, or took with warnings, is still saved, so no
+  work is lost, but to `looks-drafts/<id>/` at the top of the repo: same flat
+  layout, never read by `build.rs`, the embedder, `build_web.sh` (it ships
+  `assets/` only) or the tests. So a draft never turns `cargo test`, CI or a
+  release red, and `tests/looks.rs` keeps holding every built-in pack to
+  "ships clean". The editor picks the place from the game's verdict on
+  exactly the files it saves; a pack whose verdict changes moves between
+  the two folders in that save's one commit, so it is never in both, and
+  the two share one id namespace. Try a draft by hand with
+  `cargo run -- --look looks-drafts/<id>`.
+- Its store listing is `looks-listing/<id>.json` (not read by the game).
 
 ## Limits
 

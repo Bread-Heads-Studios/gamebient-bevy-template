@@ -67,6 +67,12 @@ impl LookSwap<'_> {
         Ok(())
     }
 
+    /// The look being worn: after a successful `apply`, the pack just
+    /// validated, with its name and content hash.
+    pub fn worn(&self) -> &ActiveLook {
+        &self.look
+    }
+
     /// Back to the game's own look (the editor's `look.clear`): no pack, no
     /// pack assets, and `LookChanged` so appliers put the defaults back.
     pub fn clear(&mut self) {

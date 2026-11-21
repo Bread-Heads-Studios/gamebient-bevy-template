@@ -19,7 +19,7 @@ use super::runtime::ActiveLook;
 use super::select::Selection;
 use super::split::WEB_EMBED_MAX_BYTES;
 use super::swap::LookSwap;
-use super::validate::{Files, Report, content_hash, limits};
+use super::validate::{Files, Report, limits};
 use gamebient_input::{HostCommand, HostEvent};
 
 /// Packs the editor wore with `look.set` this session: id to name. The
@@ -187,23 +187,37 @@ pub fn error_lines(report: &Report) -> Vec<String> {
         .collect()
 }
 
-/// `look`'s data: the content hash when the pack is worn, else the errors.
-pub fn verdict(id: &str, result: &Result<String, Vec<String>>) -> Json {
+/// A worn pack: its content hash and the validator's warnings, as
+/// `<where>: <what>` lines.
+pub struct Worn {
+    pub hash: String,
+    pub warnings: Vec<String>,
+}
+
+/// `look`'s data: the content hash and any warnings when the pack is worn,
+/// else the errors. `warnings` is beside the spec's fields: a pack with
+/// warnings is worn but is not one to build in (built-in packs ship clean),
+/// so the editor saves it as a draft.
+pub fn verdict(id: &str, result: &Result<Worn, Vec<String>>) -> Json {
     match result {
-        Ok(hash) => json!({ "id": id, "ok": true, "errors": [], "hash": hash }),
-        Err(errors) => json!({ "id": id, "ok": false, "errors": errors, "hash": null }),
+        Ok(w) => {
+            json!({ "id": id, "ok": true, "errors": [], "hash": w.hash, "warnings": w.warnings })
+        }
+        Err(errors) => {
+            json!({ "id": id, "ok": false, "errors": errors, "hash": null, "warnings": [] })
+        }
     }
 }
 
 /// Validates the pack with the game's validator and, when it passes, wears
-/// it (`LookSwap::apply`); its content hash on success. A refused pack
-/// changes nothing.
+/// it (`LookSwap::apply`); its content hash and warnings on success. A
+/// refused pack changes nothing.
 fn try_set(
     swap: &mut LookSwap<'_>,
     written: &mut EditorLooks,
     id: &str,
     data: &Json,
-) -> Result<String, Vec<String>> {
+) -> Result<Worn, Vec<String>> {
     if !is_id(id) {
         return Err(vec![format!(
             "id: lowercase letters, digits and -, at most {}",
@@ -211,17 +225,22 @@ fn try_set(
         )]);
     }
     let files = decode_files(data.get("files").unwrap_or(&Json::Null))?;
-    let hash = content_hash(&files);
-    let name = files
-        .get(MANIFEST_FILE)
-        .and_then(|b| manifest::parse(b).ok())
-        .map(|m| m.name);
+    // The validator sees the bytes first; the name and hash come from the
+    // look it accepted and now wears.
     swap.apply(files, Selection::Editor(id.to_string()), Some(id), None)
         .map_err(|r| error_lines(&r))?;
+    let worn = swap.worn();
+    let hash = worn.content_hash.clone().unwrap_or_default();
+    let warnings = worn
+        .warnings
+        .iter()
+        .map(|p| format!("{}: {}", p.at, p.message))
+        .collect();
+    let name = worn.manifest.as_ref().map(|m| m.name.clone());
     written
         .0
         .insert(id.to_string(), name.unwrap_or_else(|| id.to_string()));
-    Ok(hash)
+    Ok(Worn { hash, warnings })
 }
 
 fn handle_look_messages(
@@ -235,18 +254,20 @@ fn handle_look_messages(
             continue;
         };
         let reply = match name.as_str() {
-            "look.set" => {
-                let data: Json = serde_json::from_str(data).unwrap_or(Json::Null);
-                let id = data
-                    .get("id")
-                    .and_then(Json::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                verdict(&id, &try_set(&mut swap, &mut written, &id, &data))
-            }
+            "look.set" => match serde_json::from_str::<Json>(data) {
+                Ok(data) => {
+                    let id = data
+                        .get("id")
+                        .and_then(Json::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    verdict(&id, &try_set(&mut swap, &mut written, &id, &data))
+                }
+                Err(_) => verdict("", &Err(vec!["pack: not JSON".into()])),
+            },
             "look.clear" => {
                 swap.clear();
-                json!({ "id": "default", "ok": true, "errors": [], "hash": null })
+                json!({ "id": "default", "ok": true, "errors": [], "hash": null, "warnings": [] })
             }
             _ => continue,
         };
@@ -260,7 +281,7 @@ fn handle_look_messages(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::look::validate::parse_colour;
+    use crate::look::validate::{content_hash, parse_colour};
     use crate::ui::theme::LOOK;
 
     #[test]
@@ -505,7 +526,7 @@ mod tests {
         assert_eq!(
             r,
             vec![
-                json!({ "id": "editor-test", "ok": true, "errors": [], "hash": content_hash(&files) })
+                json!({ "id": "editor-test", "ok": true, "errors": [], "hash": content_hash(&files), "warnings": [] })
             ]
         );
         let look = app.world().resource::<ActiveLook>();
@@ -525,6 +546,52 @@ mod tests {
                 .map(String::as_str),
             Some("Editor Test")
         );
+    }
+
+    #[test]
+    fn a_payload_that_is_not_json_is_refused_as_such() {
+        let mut app = app();
+        send(&mut app, "look.set", pack("good"));
+        app.world_mut().write_message(HostCommand::Custom {
+            name: "look.set".into(),
+            data: "{not json".into(),
+        });
+        app.update();
+        let r: Vec<Json> = app
+            .world_mut()
+            .resource_mut::<Messages<HostEvent>>()
+            .drain()
+            .filter_map(|e| match e {
+                HostEvent::Custom { name, data } if name == "look" => {
+                    Some(serde_json::from_str(&data).unwrap())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0]["ok"], json!(false));
+        assert_eq!(r[0]["errors"], json!(["pack: not JSON"]));
+        assert_eq!(app.world().resource::<ActiveLook>().id(), "good");
+    }
+
+    #[test]
+    fn a_pack_with_warnings_is_worn_and_names_them() {
+        let mut app = app();
+        let mut p = pack("spare");
+        // A file look.json never names: a warning, not an error.
+        p["files"]["spare.png"] =
+            json!({ "png": encode(include_bytes!("../../tests/fixtures/sprite-a.png")) });
+        let r = send(&mut app, "look.set", p);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0]["ok"], json!(true), "{r:?}");
+        assert!(r[0]["hash"].is_string());
+        assert_eq!(
+            r[0]["warnings"],
+            json!(["spare.png: not referenced by look.json"])
+        );
+        assert_eq!(app.world().resource::<ActiveLook>().id(), "spare");
+        let clean = send(&mut app, "look.set", pack("clean"));
+        assert_eq!(clean[0]["warnings"], json!([]));
     }
 
     #[test]
@@ -590,7 +657,9 @@ mod tests {
         let r = send(&mut app, "look.clear", json!({}));
         assert_eq!(
             r,
-            vec![json!({ "id": "default", "ok": true, "errors": [], "hash": null })]
+            vec![
+                json!({ "id": "default", "ok": true, "errors": [], "hash": null, "warnings": [] })
+            ]
         );
         let look = app.world().resource::<ActiveLook>();
         assert_eq!(look.id(), "default");
