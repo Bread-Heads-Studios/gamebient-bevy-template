@@ -258,6 +258,50 @@ fn no_built_in_pack_changes_a_replay() {
     }
 }
 
+/// D1 for hosted looks: a pack that arrives through the hosted path in the
+/// middle of the run (its files land when the sim reaches tick 10) leaves
+/// the score, checksum, content hash and tick count as under the default.
+#[test]
+fn a_hosted_pack_arriving_mid_run_does_not_change_a_replay() {
+    use gamebient_game::game::sim::SimTick;
+    use gamebient_game::look::fetch::PendingFetch;
+    use gamebient_game::look::validate::content_hash;
+
+    let replay = record_scripted_run();
+    let base = verify(&replay);
+    assert!(base.matches, "{base:?}");
+
+    let files = look::pack::embedded_files("night-shift").unwrap();
+    let mut app = build_verify_app(&replay);
+    app.insert_resource(Selection::Default);
+    app.add_plugins(LookPlugin {
+        contract: &theme::LOOK,
+    });
+    let (pending, arrival) = PendingFetch::new_hosted("night-shift", content_hash(&files));
+    app.insert_resource(pending);
+    let landing = files.clone();
+    app.add_systems(Update, move |tick: Option<Res<SimTick>>| {
+        if tick.is_some_and(|t| t.0 >= 10) {
+            let mut slot = arrival.lock().unwrap();
+            if slot.is_none() {
+                *slot = Some(Ok(landing.clone()));
+            }
+        }
+    });
+    let v = run_verify_app(&mut app, &replay);
+    assert_eq!(
+        app.world().resource::<ActiveLook>().source,
+        Selection::Hosted("night-shift".into()),
+        "the hosted pack never landed"
+    );
+    assert_eq!(
+        (v.score, v.checksum, v.content, v.ticks),
+        (base.score, base.checksum, base.content, base.ticks),
+        "a hosted pack changed the sim"
+    );
+    assert!(v.matches);
+}
+
 use bevy::camera::primitives::MeshAabb;
 use gamebient_game::game::content::sprites::{ArtOf, SpriteArt};
 use gamebient_game::game::player::Player;
@@ -821,7 +865,7 @@ mod fetch_arrival {
         let (pending, arrival) = PendingFetch::new("night-shift", hash);
         app.insert_resource(pending)
             .init_resource::<Announced>()
-            .add_systems(Update, (arrive, count).chain());
+            .add_systems(Update, count.after(arrive));
         (app, arrival)
     }
 

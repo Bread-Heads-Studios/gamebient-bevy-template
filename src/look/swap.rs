@@ -66,6 +66,19 @@ impl LookSwap<'_> {
         info!("look: now wearing {}", self.look.id());
         Ok(())
     }
+
+    /// Back to the game's own look (`look.clear`). Always succeeds.
+    pub fn reset(&mut self) {
+        let contract = self.look.contract;
+        *self.look = ActiveLook::default_for(contract);
+        *self.assets = build_assets(
+            &self.look,
+            self.images.as_deref_mut(),
+            self.audio.as_deref_mut(),
+        );
+        self.changed.write(LookChanged);
+        info!("look: back to the default");
+    }
 }
 
 /// The checks alone, touching nothing: the content hash first (when the

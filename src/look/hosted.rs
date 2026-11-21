@@ -10,10 +10,13 @@
 //! files there) and applied only if its content hash matches `hash` and it
 //! passes the validator. Presentation only: the sim never sees a look.
 
-use gamebient_input::HostEvent;
+use bevy::prelude::*;
+use gamebient_input::{HostCommand, HostEvent};
 use serde::Deserialize;
 
+use super::fetch::PendingFetch;
 use super::names;
+use super::swap::LookSwap;
 use super::validate::limits;
 
 /// Where hosted packs live. `GX_LOOK_ORIGIN` at build time overrides it
@@ -22,6 +25,8 @@ pub const HOSTED_ORIGIN: &str = match option_env!("GX_LOOK_ORIGIN") {
     Some(origin) => origin,
     None => "https://colecovisiongx.com/looks/",
 };
+
+const _: () = assert!(HOSTED_ORIGIN.as_bytes()[HOSTED_ORIGIN.len() - 1] == b'/');
 
 pub const SET: &str = "look.set";
 pub const CLEAR: &str = "look.clear";
@@ -156,6 +161,45 @@ pub fn applied(id: &str, outcome: Result<(), String>) -> HostEvent {
     HostEvent::Custom {
         name: APPLIED.into(),
         data: data.to_string(),
+    }
+}
+
+/// Handles `look.set` / `look.clear` from the host. A newer command
+/// replaces a fetch in flight (its late result is never read). Native
+/// builds have no hosted fetch and answer `unsupported`.
+pub fn handle_commands(
+    mut commands: Commands,
+    mut host: MessageReader<HostCommand>,
+    mut swap: LookSwap,
+    mut answer: MessageWriter<HostEvent>,
+) {
+    for command in host.read() {
+        let HostCommand::Custom { name, data } = command else {
+            continue;
+        };
+        let Some(parsed) = parse(name, data, HOSTED_ORIGIN) else {
+            continue;
+        };
+        match parsed {
+            Err((id, refusal)) => {
+                warn!("look: {name} refused ({})", refusal.reason());
+                answer.write(applied(&id, Err(refusal.reason())));
+            }
+            Ok(HostedCommand::Clear) => {
+                commands.remove_resource::<PendingFetch>();
+                swap.reset();
+                answer.write(applied("default", Ok(())));
+            }
+            #[cfg(target_arch = "wasm32")]
+            Ok(HostedCommand::Set(look)) => {
+                commands.insert_resource(super::fetch::start_hosted(&look));
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Ok(HostedCommand::Set(look)) => {
+                commands.remove_resource::<PendingFetch>();
+                answer.write(applied(&look.id, Err("unsupported".into())));
+            }
+        }
     }
 }
 
