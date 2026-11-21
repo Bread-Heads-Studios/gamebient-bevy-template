@@ -26,7 +26,10 @@ pub const HOSTED_ORIGIN: &str = match option_env!("GX_LOOK_ORIGIN") {
     None => "https://colecovisiongx.com/looks/",
 };
 
-const _: () = assert!(HOSTED_ORIGIN.as_bytes()[HOSTED_ORIGIN.len() - 1] == b'/');
+const _: () = assert!(
+    !HOSTED_ORIGIN.is_empty() && HOSTED_ORIGIN.as_bytes()[HOSTED_ORIGIN.len() - 1] == b'/',
+    "GX_LOOK_ORIGIN must end in '/'"
+);
 
 pub const SET: &str = "look.set";
 pub const CLEAR: &str = "look.clear";
@@ -164,8 +167,9 @@ pub fn applied(id: &str, outcome: Result<(), String>) -> HostEvent {
     }
 }
 
-/// Handles `look.set` / `look.clear` from the host. A newer command
-/// replaces a fetch in flight (its late result is never read). Native
+/// Handles `look.set` / `look.clear` from the host. Every look command,
+/// accepted or refused, replaces a fetch in flight (its late result is
+/// never read). Native
 /// builds have no hosted fetch and answer `unsupported`.
 pub fn handle_commands(
     mut commands: Commands,
@@ -183,6 +187,7 @@ pub fn handle_commands(
         match parsed {
             Err((id, refusal)) => {
                 warn!("look: {name} refused ({})", refusal.reason());
+                commands.remove_resource::<PendingFetch>();
                 answer.write(applied(&id, Err(refusal.reason())));
             }
             Ok(HostedCommand::Clear) => {

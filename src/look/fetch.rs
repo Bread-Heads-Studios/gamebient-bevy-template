@@ -94,23 +94,27 @@ pub fn arrive(
             };
             Err((reason.into(), Report::read_error(e)))
         }
-        Ok(files) if content_hash(&files) != pending.content_hash => Err((
-            "hash".into(),
-            Report::read_error(format!(
-                "content hash {} does not match {}",
-                content_hash(&files),
-                pending.content_hash
-            )),
-        )),
-        Ok(files) => swap
-            .apply(files, source, Some(id), Some(&pending.content_hash))
-            .map_err(|report| {
-                let first = report.errors().next().map_or_else(
-                    || "rejected".to_string(),
-                    |p| format!("{}: {}", p.at, p.message),
-                );
-                (format!("invalid: {}", truncate(&first, 120)), report)
-            }),
+        Ok(files) => {
+            let got = content_hash(&files);
+            if got != pending.content_hash {
+                Err((
+                    "hash".into(),
+                    Report::read_error(format!(
+                        "content hash {got} does not match {}",
+                        pending.content_hash
+                    )),
+                ))
+            } else {
+                // None: the hash was just checked above.
+                swap.apply(files, source, Some(id), None).map_err(|report| {
+                    let first = report.errors().next().map_or_else(
+                        || "rejected".to_string(),
+                        |p| format!("{}: {}", p.at, p.message),
+                    );
+                    (format!("invalid: {}", truncate(&first, 120)), report)
+                })
+            }
+        }
     };
     if let Err((_, report)) = &outcome {
         let reasons: Vec<String> = report

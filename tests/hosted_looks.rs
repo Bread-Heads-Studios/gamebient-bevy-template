@@ -206,3 +206,29 @@ fn other_custom_commands_are_left_alone() {
     app.update();
     assert!(app.world().resource::<Seen>().applied.is_empty());
 }
+
+#[test]
+fn a_refused_command_also_drops_a_fetch_in_flight() {
+    let mut app = app(Selection::Default);
+    let (files, hash) = night_shift();
+    let arrival = in_flight(&mut app, &hash);
+    send(
+        &mut app,
+        look::hosted::SET,
+        serde_json::json!({
+            "id": "fizzix",
+            "base": "https://evil.example/looks/",
+            "hash": "0".repeat(64),
+            "files": ["look.json"],
+        }),
+    );
+    app.update();
+    assert!(!app.world().contains_resource::<PendingFetch>());
+    *arrival.lock().unwrap() = Some(Ok(files));
+    app.update();
+    assert_eq!(app.world().resource::<ActiveLook>().id(), "default");
+    assert_eq!(
+        app.world().resource::<Seen>().applied,
+        vec![serde_json::json!({"id":"fizzix","ok":false,"reason":"origin"})]
+    );
+}
