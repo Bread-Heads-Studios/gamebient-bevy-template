@@ -51,6 +51,31 @@ build: `GX_WEB_EMBED_MAX=100 ./build.sh web` (bytes; testing only, never
 for a shipping build), serve `dist/` and open `?mute=1&look=<id>`. The
 console says `look: fetching <id>`, then `look: now wearing <id>`.
 
+## Hosted looks (web)
+
+A host page can dress a running web build in a pack it hosts, without a
+redeploy. It sends:
+
+    { "type": "gx:custom", "v": 1, "name": "look.set",
+      "data": { "id": "fizzix", "base": "https://colecovisiongx.com/looks/voidrunner/<hash>/",
+                "hash": "<content hash>", "files": ["look.json", "logo.png"] } }
+
+and `look.clear` (no data) to go back to the game's own look. The game
+answers every command with a `custom` event `look.applied`:
+`{"id":"fizzix","ok":true}` or `{"id":"fizzix","ok":false,"reason":"hash"}`.
+Reasons: `origin`, `caps`, `fetch`, `hash`, `unsupported` (native),
+`invalid: <first problem>`.
+
+Trust: the game fetches only under `HOSTED_ORIGIN`
+(`https://colecovisiongx.com/looks/`, compiled in) and wears a pack only if
+its content hash matches `hash` and it passes the validator, so anyone can
+send the command but only published packs can load. `id` must be the
+manifest's `id`.
+
+Publishing is done from the website repo: `scripts/publish-look.mjs`.
+To test against a local website, build with
+`GX_LOOK_ORIGIN=http://localhost:3000/looks/ ./build.sh web`.
+
 ## Try one
 
 | Where | How |

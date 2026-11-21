@@ -18,6 +18,7 @@ pub mod contract;
 pub mod end_card;
 pub mod fetch;
 pub mod hash;
+pub mod hosted;
 pub mod manifest;
 pub mod names;
 pub mod pack;
@@ -37,6 +38,7 @@ use bevy::prelude::*;
 pub use apply::{LookAssets, LookChanged, LookColour, LookText};
 pub use contract::{Contract, ParamKind, ParamSpec, RecipeSpec, ShapeSpec, SlotSpec, StringSpec};
 pub use end_card::{EndCardPart, EndCardSlot, EndCardStyle, Part};
+pub use hosted::HostedLook;
 pub use manifest::{
     EndCard, ImageSlot, LookKind, Manifest, Param, Prim, Primitive, RecipeSlot, ShapeSlot, Slot,
 };
@@ -73,6 +75,18 @@ impl Plugin for LookPlugin {
             .init_resource::<LookAssets>()
             .init_resource::<ShapeTargets>()
             .add_message::<LookChanged>()
+            // Host messages: registered by GxInputPlugin in a real game;
+            // registering again is a no-op, and headless tests need them.
+            .add_message::<gamebient_input::HostCommand>()
+            .add_message::<gamebient_input::HostEvent>()
+            .add_systems(
+                Update,
+                (
+                    hosted::handle_commands,
+                    fetch::arrive.run_if(resource_exists::<fetch::PendingFetch>),
+                )
+                    .chain(),
+            )
             .add_systems(Startup, apply::load_assets)
             // Retexting must land before text layout (UI content measure and
             // Text2d layout, both in PostUpdate), or the frame a string
@@ -116,10 +130,7 @@ impl Plugin for LookPlugin {
         if let Selection::Fetch(id) = &selection
             && let Some(pending) = fetch::start(id)
         {
-            app.insert_resource(pending).add_systems(
-                Update,
-                fetch::arrive.run_if(resource_exists::<fetch::PendingFetch>),
-            );
+            app.insert_resource(pending);
         }
     }
 }

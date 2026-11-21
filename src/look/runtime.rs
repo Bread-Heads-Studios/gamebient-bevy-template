@@ -97,6 +97,8 @@ impl ActiveLook {
             Selection::Dir(_) => return Self::default_for(contract),
             // Boots on the default; the pack arrives later via `swap`.
             Selection::Fetch(_) => return Self::default_for(contract),
+            // Only ever reached by a swap (`hosted.rs`), never at launch.
+            Selection::Hosted(_) => return Self::default_for(contract),
         };
         attempt.unwrap_or_else(|report| {
             log_report(&report);
