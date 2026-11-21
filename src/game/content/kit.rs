@@ -17,6 +17,44 @@ pub struct KindProps {
     pub colour: Color,
     /// Game-specific components for a kind (markers, bodies). Runs inside the spawn, in the sim.
     pub on_spawn: Option<fn(&mut EntityCommands)>,
+    /// What the level editor may do with this kind. `KindProps::size` is
+    /// already the size a new Thing gets.
+    pub edit: EditRules,
+}
+
+/// What the level editor may do with Things of one kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EditRules {
+    /// The thing can be resized in the editor; its `size` is then written.
+    pub resizable: bool,
+    /// The most of this kind a level may hold (None = no limit).
+    pub max: Option<u32>,
+    /// The editor may add this kind to a level. False for kinds spawned
+    /// only at runtime (a bullet): the catalog leaves them out, so the
+    /// palette never offers them.
+    pub placeable: bool,
+}
+
+impl Default for EditRules {
+    fn default() -> Self {
+        Self {
+            resizable: false,
+            max: None,
+            placeable: true,
+        }
+    }
+}
+
+/// The level editor's grid step, in world units. A game whose world units
+/// are not pixels inserts its own before `ContentPlugin` (the template's
+/// units are about one player wide, so it uses 1.0).
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct LevelGrid(pub f32);
+
+impl Default for LevelGrid {
+    fn default() -> Self {
+        Self(20.0)
+    }
 }
 
 /// The game's kinds, in registration order.
@@ -101,4 +139,26 @@ pub fn setup_thing_art(
         })
         .collect();
     commands.insert_resource(ThingArt { mesh, materials });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edit_rules_default_to_fixed_size_no_limit_and_placeable() {
+        assert_eq!(
+            EditRules::default(),
+            EditRules {
+                resizable: false,
+                max: None,
+                placeable: true,
+            }
+        );
+    }
+
+    #[test]
+    fn the_level_grid_defaults_to_twenty_units() {
+        assert_eq!(LevelGrid::default(), LevelGrid(20.0));
+    }
 }

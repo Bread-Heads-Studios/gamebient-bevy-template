@@ -4,7 +4,7 @@
 //! | Direction   | Name             | Data                                              |
 //! |-------------|------------------|---------------------------------------------------|
 //! | host → game | `tunables.list`  | —                                                 |
-//! | game → host | `tunables`       | the catalog: groups, tunables with values, checks, sounds, content |
+//! | game → host | `tunables`       | the catalog: groups, tunables with values, checks, sounds, content, level |
 //! | host → game | `tunables.set`   | `{ "<path>": value, … }`                          |
 //! | game → host | `tunable`        | `{ path, value, applied: "tick"\|"now", tick }` or `{ path, error }` |
 //! | host → game | `checks.run`     | `{ "names": [ … ] }`                              |
@@ -211,7 +211,7 @@ pub fn catalog_json(world: &World) -> Json {
             j
         })
         .collect();
-    json!({
+    let mut j = json!({
         "game": name,
         "build": env!("GX_BUILD_ID"),
         "state": format!("{:?}", world.resource::<State<GameState>>().get()),
@@ -235,7 +235,56 @@ pub fn catalog_json(world: &World) -> Json {
             .get_resource::<crate::game::content::saved::ContentWarnings>()
             .map(|w| w.0.clone())
             .unwrap_or_default(),
-    })
+    });
+    if let Some(level) = level_catalog(world) {
+        j["level"] = level;
+    }
+    j
+}
+
+/// `"#rrggbb"` of a colour in sRGB, for the editor's palette swatches.
+pub fn colour_hex(c: Color) -> String {
+    let s = c.to_srgba();
+    let ch = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    format!("#{:02x}{:02x}{:02x}", ch(s.red), ch(s.green), ch(s.blue))
+}
+
+/// The catalog's `level`: the grid and every placeable kind, in
+/// registration order (runtime-only kinds are left out, so the palette
+/// never offers them). `None` when the game registers no kinds (the editor
+/// then hides Edit).
+pub fn level_catalog(world: &World) -> Option<Json> {
+    use crate::game::content::kit::{Kinds, LevelGrid};
+    let kinds = world.get_resource::<Kinds>()?;
+    if kinds.0.is_empty() {
+        return None;
+    }
+    let grid = world
+        .get_resource::<LevelGrid>()
+        .copied()
+        .unwrap_or_default()
+        .0;
+    let files = world.get_resource::<crate::game::content::LiveFiles>();
+    let rows: Vec<Json> = kinds
+        .0
+        .iter()
+        .filter(|(_, p)| p.edit.placeable)
+        .map(|(name, p)| {
+            let path = format!("sprites/{name}.png");
+            let sprite = files
+                .is_some_and(|f| f.0.iter().any(|(q, _)| *q == path))
+                .then_some(path);
+            json!({
+                "kind": name,
+                "size": [p.size.x, p.size.y],
+                "colour": colour_hex(p.colour),
+                "sprite": sprite,
+                "resizable": p.edit.resizable,
+                "max": p.edit.max,
+            })
+        })
+        .collect();
+    Some(json!({ "grid": grid, "kinds": rows }))
 }
 
 fn answer_tunables_list(world: &mut World) {
@@ -855,5 +904,83 @@ mod tests {
                 crate::game::content::files::hex(crate::game::content::files::fnv1a64(b))
             );
         }
+    }
+
+    #[test]
+    fn the_catalog_level_lists_every_placeable_kind_with_its_rules() {
+        use crate::game::content::kit::{Kinds, LevelGrid};
+        let mut app = build_builtin_app();
+        app.update();
+        let j = catalog_json(app.world());
+        let level = &j["level"];
+        assert_eq!(level["grid"], json!(app.world().resource::<LevelGrid>().0));
+        let kinds = app.world().resource::<Kinds>();
+        let placeable: Vec<_> = kinds.0.iter().filter(|(_, p)| p.edit.placeable).collect();
+        let rows = level["kinds"].as_array().unwrap();
+        assert_eq!(rows.len(), placeable.len());
+        for (row, (name, p)) in rows.iter().zip(placeable) {
+            assert_eq!(row["kind"], json!(name));
+            assert_eq!(row["size"], json!([p.size.x, p.size.y]));
+            assert_eq!(row["colour"], json!(colour_hex(p.colour)));
+            assert_eq!(row["resizable"], json!(p.edit.resizable));
+            assert_eq!(row["max"], json!(p.edit.max));
+            let sprite = format!("sprites/{name}.png");
+            let has = crate::game::content::files::embedded(&sprite).is_some();
+            assert_eq!(row["sprite"], if has { json!(sprite) } else { Json::Null });
+        }
+    }
+
+    #[test]
+    fn a_live_sprite_shows_in_the_catalog_level() {
+        let mut app = build_builtin_app();
+        app.update();
+        let first = app.world().resource::<crate::game::content::kit::Kinds>().0[0]
+            .0
+            .clone();
+        send(
+            &mut app,
+            "content.set",
+            &json!({ "file": format!("sprites/{first}.png"), "png": PIXEL_PNG }).to_string(),
+        );
+        app.update();
+        let j = catalog_json(app.world());
+        assert_eq!(
+            j["level"]["kinds"][0]["sprite"],
+            json!(format!("sprites/{first}.png"))
+        );
+    }
+
+    #[test]
+    fn a_kind_that_is_not_placeable_is_left_out() {
+        use crate::game::content::kit::Kinds;
+        let mut app = build_builtin_app();
+        app.update();
+        let first = {
+            let mut kinds = app.world_mut().resource_mut::<Kinds>();
+            kinds.0[0].1.edit.placeable = false;
+            kinds.0[0].0.clone()
+        };
+        let j = catalog_json(app.world());
+        let rows = j["level"]["kinds"].as_array().unwrap();
+        assert!(rows.iter().all(|r| r["kind"] != json!(first)), "{rows:?}");
+        let n = app.world().resource::<Kinds>().0.len();
+        assert_eq!(rows.len(), n - 1);
+    }
+
+    #[test]
+    fn a_game_without_kinds_sends_no_level() {
+        let mut app = build_builtin_app();
+        app.update();
+        app.world_mut()
+            .resource_mut::<crate::game::content::kit::Kinds>()
+            .0
+            .clear();
+        assert!(catalog_json(app.world()).get("level").is_none());
+    }
+
+    #[test]
+    fn colours_are_lowercase_srgb_hex() {
+        assert_eq!(colour_hex(Color::srgb(1.0, 0.85, 0.2)), "#ffd933");
+        assert_eq!(colour_hex(Color::BLACK), "#000000");
     }
 }

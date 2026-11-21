@@ -38,8 +38,16 @@ to change how a kind behaves, it edits Rust.
 ## Adding a kind
 
 Register it in `kinds_registration` (`src/game/mod.rs`) with
-`thing_kind(name, KindProps { size, colour, on_spawn })`. Then `level.json`
-can place it by name.
+`thing_kind(name, KindProps { size, colour, on_spawn, edit })`. Then
+`level.json` can place it by name. `edit` is the kind's `EditRules`: whether
+the level editor may resize it (`resizable`, its `size` is then written),
+the most a level may hold (`max`, `None` for no limit) and whether the editor
+may add it at all (`placeable`; set it to `false` for kinds spawned only at
+runtime, such as bullets, which the catalog then leaves out). The template's Player
+is `max: Some(1)`; a goal is usually one of a kind too, and a platform
+resizable. The editor's grid step is the `LevelGrid` resource (default 20
+world units); insert your own above `ContentPlugin` when your world units are
+not pixels.
 
 - Registration order is the kind's index (`Thing { kind }`). Never reorder
   between releases, exactly like tunables.

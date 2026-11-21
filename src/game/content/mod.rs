@@ -47,6 +47,7 @@ pub struct ContentPlugin;
 impl Plugin for ContentPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Kinds>()
+            .init_resource::<kit::LevelGrid>()
             .insert_resource(LiveFiles(
                 files::EMBEDDED
                     .iter()
