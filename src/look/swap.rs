@@ -66,6 +66,16 @@ impl LookSwap<'_> {
         info!("look: now wearing {}", self.look.id());
         Ok(())
     }
+
+    /// Back to the game's own look (the editor's `look.clear`): no pack, no
+    /// pack assets, and `LookChanged` so appliers put the defaults back.
+    pub fn clear(&mut self) {
+        let contract = self.look.contract;
+        *self.look = ActiveLook::default_for(contract);
+        *self.assets = LookAssets::default();
+        self.changed.write(LookChanged);
+        info!("look: now wearing default");
+    }
 }
 
 /// The checks alone, touching nothing: the content hash first (when the

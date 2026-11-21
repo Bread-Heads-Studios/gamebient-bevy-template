@@ -254,6 +254,36 @@ own, so a shape changes how a thing looks, never how it plays. `LookPlugin`
 stays out of `GamePlugin`; the headless replay verifier has no `Assets<Mesh>`
 and skips shapes entirely.
 
+## The editor (`look.set`)
+
+An editor build (`--features editor`, `tools/build_editor.sh`) lets the
+editor's Looks tab dress the running game in the pack it is writing:
+
+| Direction | Message | Meaning |
+|---|---|---|
+| editor → game | `look.set {id, files: {"look.json": {text}, "<name>.png": {png: base64}, "<name>.ogg": {ogg: base64}}}` | Validate this pack and wear it. |
+| editor → game | `look.clear {}` | Go back to the game's own look. |
+| game → editor | `look {id, ok, errors: [string], hash}` | The validator's verdict, and the pack's content hash when `ok`. |
+
+- The game runs this page's validator on the files as given, with `id` as
+  the folder name. A valid pack is worn through `look::swap::LookSwap` and
+  `LookChanged` is sent, so appliers restyle live. An invalid one changes
+  nothing: the last good look stays, and `errors` lists each problem as
+  `<where>: <what>` (`palette.coin: colours are #rrggbb or #rrggbbaa`).
+  `hash` is the same BLAKE3 content hash `look-check` prints; `null` when
+  not `ok`. `look.clear` answers `{"id": "default", "ok": true, "errors": [], "hash": null}`.
+- The catalog (`tunables`) carries `looks`: the contract as data (palette
+  roles with their default colours, string keys with defaults and maximum
+  lengths, image slots, audio cues, and `end_card` when the game declares
+  the four `endcard*` roles), the built-in packs plus the ones `look.set`
+  wore this session, and the validator's limits (`validate::limits`,
+  `split::WEB_EMBED_MAX_BYTES`). Code: `src/look/editor.rs`.
+- Looks stay cosmetic: `tests/looks.rs`
+  (`a_look_set_pack_does_not_change_a_replay`) replays the selftest under a
+  `look.set` pack that sets every role and key.
+- The editor saves a pack to `assets/looks/<id>/` and its store listing to
+  `looks-listing/<id>.json` (not read by the game).
+
 ## Limits
 
 | Thing | Limit |

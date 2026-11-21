@@ -112,6 +112,9 @@ impl Plugin for LookPlugin {
             );
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, reload::hot_reload);
+        // The editor's look.set / look.clear (src/look/editor.rs).
+        #[cfg(feature = "editor")]
+        app.add_plugins(editor::LookEditorPlugin);
         // A large built-in pack (`Selection::Fetch`): boot on the default
         // look, fetch its files, swap them in when they arrive.
         #[cfg(target_arch = "wasm32")]
