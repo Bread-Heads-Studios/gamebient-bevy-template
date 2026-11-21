@@ -281,33 +281,52 @@ fn sync_edit_camera(
     }
 }
 
-/// Keeps `EditView::canvas` on the `#game` canvas's on-screen rectangle (the
-/// gamebient-input glue letterboxes it with a CSS transform, which
-/// `getBoundingClientRect` includes). Written only when it differs, so
-/// `level.view` follows a resize.
+/// Where the canvas is, in the frame's CSS pixels: x, y, width, height.
+/// `None` when it can't be read. A resource so a headless test can stand in
+/// for the page.
+#[derive(Resource, Clone, Copy)]
+pub struct CanvasProbe(pub fn() -> Option<[f32; 4]>);
+
+impl Default for CanvasProbe {
+    fn default() -> Self {
+        Self(game_canvas_rect)
+    }
+}
+
+/// The `#game` canvas's on-screen rectangle (the gamebient-input glue
+/// letterboxes it with a CSS transform, which `getBoundingClientRect`
+/// includes).
 #[cfg(target_arch = "wasm32")]
-fn track_canvas_rect(mut view: ResMut<EditView>) {
-    let Some(canvas) = web_sys::window()
-        .and_then(|w| w.document())
-        .and_then(|d| d.get_element_by_id("game"))
-    else {
-        return;
-    };
+fn game_canvas_rect() -> Option<[f32; 4]> {
+    let canvas = web_sys::window()?.document()?.get_element_by_id("game")?;
     let r = canvas.get_bounding_client_rect();
-    let rect = [
+    Some([
         r.x() as f32,
         r.y() as f32,
         r.width() as f32,
         r.height() as f32,
-    ];
-    if rect[2] > 0.0 && rect[3] > 0.0 && view.canvas != rect {
+    ])
+}
+
+/// Native windows draw the game at its own size (the editor hosts web
+/// builds), so the default canvas stands.
+#[cfg(not(target_arch = "wasm32"))]
+fn game_canvas_rect() -> Option<[f32; 4]> {
+    None
+}
+
+/// Keeps `EditView::canvas` on the canvas's rectangle. Runs on entering
+/// Editing before [`fit_edit_view`], so the first fit uses the real canvas,
+/// and every frame while Editing. Written only when it differs, so
+/// `level.view` follows a resize.
+pub fn track_canvas_rect(probe: Res<CanvasProbe>, mut view: ResMut<EditView>) {
+    let Some(rect) = (probe.0)() else {
+        return;
+    };
+    if rect.iter().all(|v| v.is_finite()) && rect[2] > 0.0 && rect[3] > 0.0 && view.canvas != rect {
         view.canvas = rect;
     }
 }
-
-/// Native windows draw the game at its own size (the editor hosts web builds).
-#[cfg(not(target_arch = "wasm32"))]
-fn track_canvas_rect() {}
 
 #[cfg(test)]
 mod tests {
@@ -458,6 +477,38 @@ mod tests {
         let kinds = app.world().resource::<Kinds>();
         let (at, zoom) = fit_view(level_bounds(level, kinds), grid, view.canvas_size());
         assert_eq!((view.at, view.zoom), (at, zoom));
+    }
+
+    /// The first entry fits the level to the canvas the page reports, not
+    /// the default one (a hosted editor's frame is narrower than the game).
+    #[test]
+    fn the_first_fit_uses_the_reported_canvas() {
+        fn small() -> Option<[f32; 4]> {
+            Some([12.0, 8.0, 497.0, 372.75])
+        }
+        // Wide enough that neither canvas's fit hits the zoom clamp.
+        const WIDE: &[u8] = br#"{"v":1,"things":[{"id":"player","kind":"Player","at":[0,0]},{"id":"coin-1","kind":"Coin","at":[300,0]}]}"#;
+        let mut app = build_headless_app();
+        app.insert_resource(CanvasProbe(small));
+        set_level(app.world_mut(), WIDE).unwrap();
+        app.update();
+        go(&mut app, GameState::Editing);
+        let view = *app.world().resource::<EditView>();
+        assert_eq!(view.canvas, [12.0, 8.0, 497.0, 372.75]);
+        let grid = app.world().resource::<LevelGrid>().0;
+        let level = &app.world().resource::<Level>().0;
+        let kinds = app.world().resource::<Kinds>();
+        let (at, zoom) = fit_view(level_bounds(level, kinds), grid, Vec2::new(497.0, 372.75));
+        assert_eq!((view.at, view.zoom), (at, zoom));
+        let (_, default_zoom) = fit_view(
+            level_bounds(level, kinds),
+            grid,
+            EditView::default().canvas_size(),
+        );
+        assert_ne!(
+            zoom, default_zoom,
+            "the test level tells the canvases apart"
+        );
     }
 
     #[test]

@@ -66,6 +66,7 @@ impl Plugin for GamePlugin {
             .init_resource::<sim::SpawnCounter>()
             .init_resource::<replay::recorder::ReplayRecorder>()
             .init_resource::<content::edit::EditView>()
+            .init_resource::<content::edit::CanvasProbe>()
             .add_message::<scoring::ScoreEvent>()
             .add_message::<audio::SfxEvent>()
             // Music control from gameplay (switches, layers). Registered in
@@ -167,6 +168,9 @@ impl Plugin for GamePlugin {
                 (
                     cleanup_game_entities,
                     content::edit::spawn_edit_level,
+                    // The real canvas before the fit (the default is the
+                    // game's own size, wider than a hosted editor's frame).
+                    content::edit::track_canvas_rect,
                     content::edit::fit_edit_view,
                 )
                     .chain(),

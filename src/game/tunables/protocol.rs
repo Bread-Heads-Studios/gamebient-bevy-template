@@ -1192,6 +1192,40 @@ mod tests {
         assert_eq!(app.world().resource::<EditView>().zoom, ZOOM_MAX);
     }
 
+    /// The first `level.view` carries the zoom that fits the level in the
+    /// canvas the page reports.
+    #[test]
+    fn the_first_level_view_fits_the_reported_canvas() {
+        use crate::game::content::edit::{CanvasProbe, EditView, fit_view, level_bounds};
+        use crate::game::content::kit::{Kinds, LevelGrid};
+        use crate::game::content::level::Level;
+        fn small() -> Option<[f32; 4]> {
+            Some([0.0, 40.0, 497.0, 372.75])
+        }
+        let mut app = build_headless_app();
+        app.insert_resource(CanvasProbe(small));
+        app.update();
+        drain_custom(&mut app);
+        let events = enter_editing(&mut app);
+        let view: Json = serde_json::from_str(
+            &events
+                .iter()
+                .find(|e| e.0 == "level.view")
+                .expect("a view")
+                .1,
+        )
+        .unwrap();
+        assert_eq!(view["canvas"], json!([0.0, 40.0, 497.0, 372.75]));
+        let w = app.world();
+        let (_, zoom) = fit_view(
+            level_bounds(&w.resource::<Level>().0, w.resource::<Kinds>()),
+            w.resource::<LevelGrid>().0,
+            Vec2::new(497.0, 372.75),
+        );
+        assert_eq!(view["zoom"].as_f64().unwrap() as f32, zoom);
+        assert_eq!(w.resource::<EditView>().zoom, zoom);
+    }
+
     #[test]
     fn level_view_follows_a_letterbox_change() {
         use crate::game::content::edit::EditView;
