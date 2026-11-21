@@ -1,7 +1,8 @@
 //! The editor's side of Look Packs (feature `editor`): the catalog's
-//! `looks` key, and (`LookEditorPlugin`, below) the `look.set` /
-//! `look.clear` host messages that dress the running game in a pack the
-//! editor is writing, answered by `look`. Presentation only, like every
+//! `looks` key, and (`LookEditorPlugin`, below) the `look.preview` /
+//! `look.preview.clear` host messages that dress the running game in a pack
+//! the editor is writing, answered by `look`. (`look.set` / `look.clear` are
+//! the hosted looks' commands, `hosted.rs`; the two never share a name.) Presentation only, like every
 //! look: nothing here touches the sim. Guide: docs/look-packs.md ("The
 //! editor").
 
@@ -12,6 +13,8 @@ use serde_json::{Value as Json, json};
 
 use super::contract::Contract;
 use super::end_card::ROLES;
+use super::fetch::{self, PendingFetch};
+use super::hosted;
 use super::manifest;
 use super::names::{MANIFEST_FILE, is_id};
 use super::pack;
@@ -22,7 +25,7 @@ use super::swap::LookSwap;
 use super::validate::{Files, Report, limits};
 use gamebient_input::{HostCommand, HostEvent};
 
-/// Packs the editor wore with `look.set` this session: id to name. The
+/// Packs the editor wore with `look.preview` this session: id to name. The
 /// catalog lists them beside the built-in packs.
 #[derive(Resource, Default, Debug, Clone, PartialEq)]
 pub struct EditorLooks(pub BTreeMap<String, String>);
@@ -81,7 +84,7 @@ pub fn limits_json() -> Json {
 }
 
 /// The built-in packs (embedded, then on wasm the fetchable ones, named by
-/// id since their files are not in the bundle) and the packs `look.set`
+/// id since their files are not in the bundle) and the packs `look.preview`
 /// wore, as `[{id, name}]` sorted by id; a pack the editor wore wins.
 pub fn packs_json(written: Option<&EditorLooks>) -> Json {
     let mut packs: BTreeMap<String, String> = BTreeMap::new();
@@ -118,8 +121,15 @@ pub fn looks_catalog(world: &World) -> Option<Json> {
     }))
 }
 
-/// `look.set` / `look.clear` from the editor, answered with `look`. Added by
-/// `LookPlugin` in editor builds only.
+/// The editor's preview: validate a pack and wear it.
+pub const PREVIEW: &str = "look.preview";
+/// Back to the game's own look.
+pub const PREVIEW_CLEAR: &str = "look.preview.clear";
+/// The answer to both.
+pub const ANSWER: &str = "look";
+
+/// `look.preview` / `look.preview.clear` from the editor, answered with
+/// `look`. Added by `LookPlugin` in editor builds only.
 pub struct LookEditorPlugin;
 
 impl Plugin for LookEditorPlugin {
@@ -129,11 +139,19 @@ impl Plugin for LookEditorPlugin {
         app.add_message::<HostCommand>()
             .add_message::<HostEvent>()
             .init_resource::<EditorLooks>()
-            .add_systems(Update, handle_look_messages);
+            // After the hosted handler and before `arrive`, with a sync point
+            // each side: a preview cancels a hosted fetch started this very
+            // frame, and `arrive` never lands a pack the preview replaced.
+            .add_systems(
+                Update,
+                handle_look_messages
+                    .after(hosted::handle_commands)
+                    .before(fetch::arrive),
+            );
     }
 }
 
-/// A pack's files from `look.set`'s `files`: `look.json` as `{text}`, a
+/// A pack's files from `look.preview`'s `files`: `look.json` as `{text}`, a
 /// `.png` as `{png}` and an `.ogg` as `{ogg}` (standard base64). `Err` is
 /// one `<name>: <why>` line per file that could not be read. The names are
 /// the validator's to judge; only the extension picks the field.
@@ -244,6 +262,7 @@ fn try_set(
 }
 
 fn handle_look_messages(
+    mut cancel: Commands,
     mut commands: MessageReader<HostCommand>,
     mut swap: LookSwap,
     mut written: ResMut<EditorLooks>,
@@ -254,7 +273,7 @@ fn handle_look_messages(
             continue;
         };
         let reply = match name.as_str() {
-            "look.set" => match serde_json::from_str::<Json>(data) {
+            PREVIEW => match serde_json::from_str::<Json>(data) {
                 Ok(data) => {
                     let id = data
                         .get("id")
@@ -265,14 +284,18 @@ fn handle_look_messages(
                 }
                 Err(_) => verdict("", &Err(vec!["pack: not JSON".into()])),
             },
-            "look.clear" => {
+            PREVIEW_CLEAR => {
                 swap.reset();
                 json!({ "id": "default", "ok": true, "errors": [], "hash": null, "warnings": [] })
             }
             _ => continue,
         };
+        // Like every hosted look command: whatever its verdict, a preview
+        // supersedes a fetch in flight (hosted or a built-in `?look=`), so
+        // its late result is never worn over the editor's pack.
+        cancel.remove_resource::<PendingFetch>();
         out.write(HostEvent::Custom {
-            name: "look".into(),
+            name: ANSWER.into(),
             data: reply.to_string(),
         });
     }
@@ -522,7 +545,7 @@ mod tests {
         let data = pack("editor-test");
         let files = decode_files(&data["files"]).unwrap();
         let before = app.world().resource::<Announced>().0;
-        let r = send(&mut app, "look.set", data);
+        let r = send(&mut app, PREVIEW, data);
         assert_eq!(
             r,
             vec![
@@ -551,9 +574,9 @@ mod tests {
     #[test]
     fn a_payload_that_is_not_json_is_refused_as_such() {
         let mut app = app();
-        send(&mut app, "look.set", pack("good"));
+        send(&mut app, PREVIEW, pack("good"));
         app.world_mut().write_message(HostCommand::Custom {
-            name: "look.set".into(),
+            name: PREVIEW.into(),
             data: "{not json".into(),
         });
         app.update();
@@ -581,7 +604,7 @@ mod tests {
         // A file look.json never names: a warning, not an error.
         p["files"]["spare.png"] =
             json!({ "png": encode(include_bytes!("../../tests/fixtures/sprite-a.png")) });
-        let r = send(&mut app, "look.set", p);
+        let r = send(&mut app, PREVIEW, p);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0]["ok"], json!(true), "{r:?}");
         assert!(r[0]["hash"].is_string());
@@ -590,20 +613,20 @@ mod tests {
             json!(["spare.png: not referenced by look.json"])
         );
         assert_eq!(app.world().resource::<ActiveLook>().id(), "spare");
-        let clean = send(&mut app, "look.set", pack("clean"));
+        let clean = send(&mut app, PREVIEW, pack("clean"));
         assert_eq!(clean[0]["warnings"], json!([]));
     }
 
     #[test]
     fn an_invalid_pack_is_refused_and_the_last_good_look_stays() {
         let mut app = app();
-        send(&mut app, "look.set", pack("good"));
+        send(&mut app, PREVIEW, pack("good"));
         let mut bad = pack("bad");
         bad["files"]["look.json"]["text"] = json!(
             r##"{"v":1,"id":"bad","name":"Bad","kind":"palette","palette":{"no-such-role":"#000000"}}"##
         );
         let before = app.world().resource::<Announced>().0;
-        let r = send(&mut app, "look.set", bad);
+        let r = send(&mut app, PREVIEW, bad);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0]["ok"], json!(false));
         assert_eq!(r[0]["hash"], Json::Null);
@@ -627,7 +650,7 @@ mod tests {
     #[test]
     fn the_id_must_be_a_folder_name_and_match_look_json() {
         let mut app = app();
-        let r = send(&mut app, "look.set", json!({ "id": "../x", "files": {} }));
+        let r = send(&mut app, PREVIEW, json!({ "id": "../x", "files": {} }));
         assert_eq!(
             r[0]["errors"],
             json!([format!(
@@ -637,7 +660,7 @@ mod tests {
         );
         let mut other = pack("one");
         other["id"] = json!("two");
-        let r = send(&mut app, "look.set", other);
+        let r = send(&mut app, PREVIEW, other);
         assert!(
             r[0]["errors"]
                 .as_array()
@@ -650,11 +673,11 @@ mod tests {
     }
 
     #[test]
-    fn look_clear_goes_back_to_the_games_own_look() {
+    fn look_preview_clear_goes_back_to_the_games_own_look() {
         let mut app = app();
-        send(&mut app, "look.set", pack("worn"));
+        send(&mut app, PREVIEW, pack("worn"));
         let before = app.world().resource::<Announced>().0;
-        let r = send(&mut app, "look.clear", json!({}));
+        let r = send(&mut app, PREVIEW_CLEAR, json!({}));
         assert_eq!(
             r,
             vec![
@@ -690,7 +713,7 @@ mod tests {
                     (name.clone(), f)
                 })
                 .collect();
-            let r = send(&mut app, "look.set", json!({ "id": id, "files": wire }));
+            let r = send(&mut app, PREVIEW, json!({ "id": id, "files": wire }));
             assert_eq!(r[0]["hash"], json!(built), "{id}: {r:?}");
         }
     }

@@ -973,12 +973,12 @@ fn the_shown_player_is_dressed_while_editing() {
     assert!(app.world().get::<LookColour>(parent).is_none());
 }
 
-/// D1 for the editor's path: a pack worn through `look.set`, setting every
+/// D1 for the editor's path: a pack worn through `look.preview`, setting every
 /// palette role and string key to a value unlike the defaults, replays the
 /// selftest to the same score, checksum, content hash and tick count.
 #[cfg(feature = "editor")]
 #[test]
-fn a_look_set_pack_does_not_change_a_replay() {
+fn a_look_preview_pack_does_not_change_a_replay() {
     use gamebient_input::HostCommand;
     let replay = record_scripted_run();
     let base = verify(&replay);
@@ -1000,7 +1000,7 @@ fn a_look_set_pack_does_not_change_a_replay() {
         contract: &theme::LOOK,
     });
     app.world_mut().write_message(HostCommand::Custom {
-        name: "look.set".into(),
+        name: "look.preview".into(),
         data: serde_json::json!({ "id": "d1-editor", "files": { "look.json": { "text": manifest.to_string() } } })
             .to_string(),
     });
@@ -1013,7 +1013,7 @@ fn a_look_set_pack_does_not_change_a_replay() {
     assert_eq!(
         (v.score, v.checksum, v.content, v.ticks),
         (base.score, base.checksum, base.content, base.ticks),
-        "a look.set pack changed the sim"
+        "a look.preview pack changed the sim"
     );
     assert!(v.matches);
 }

@@ -18,9 +18,12 @@
 //! | host → game | `level.camera`   | `{ at: [x, y], zoom }`: the edit camera; ignored outside Editing |
 //! | game → host | `level.view`     | `{ at: [x, y], zoom, canvas: [x, y, w, h] }`: zoom is CSS px per world unit, canvas in the frame's CSS px |
 //! | game → host | `level.mode`     | `{ editing: bool }`, on every state change |
-//! | host → game | `look.set`       | `{ id, files: { "look.json": {text}, "<name>.png": {png}, "<name>.ogg": {ogg} } }`: validate and wear (src/look/editor.rs) |
-//! | host → game | `look.clear`     | `{}`: back to the game's own look |
-//! | game → host | `look`           | `{ id, ok, errors: ["<where>: <what>"], hash }`; hash is the pack's content hash when ok, else null |
+//! | host → game | `look.preview`   | `{ id, files: { "look.json": {text}, "<name>.png": {png}, "<name>.ogg": {ogg} } }`: validate and wear (src/look/editor.rs) |
+//! | host → game | `look.preview.clear` | `{}`: back to the game's own look |
+//! | game → host | `look`           | `{ id, ok, errors: ["<where>: <what>"], hash, warnings: ["<where>: <what>"] }`; hash is the pack's content hash when ok, else null |
+//!
+//! (`look.set` / `look.clear` / `look.applied` are the hosted looks'
+//! commands, in every build: `src/look/hosted.rs`.)
 //!
 //! `content.set` files: `level.json` (applies at the next run start; send
 //! `run.restart`), `tunables.json` (through `PendingTunes`, all or nothing),

@@ -12,6 +12,9 @@ use gamebient_input::{HostCommand, HostEvent};
 #[derive(Resource, Default)]
 struct Seen {
     applied: Vec<serde_json::Value>,
+    /// The editor's `look` answers (editor builds only).
+    #[allow(dead_code)]
+    previewed: Vec<serde_json::Value>,
     changed: usize,
 }
 
@@ -21,10 +24,12 @@ fn record(
     mut seen: ResMut<Seen>,
 ) {
     for e in events.read() {
-        if let HostEvent::Custom { name, data } = e
-            && name == look::hosted::APPLIED
-        {
-            seen.applied.push(serde_json::from_str(data).unwrap());
+        if let HostEvent::Custom { name, data } = e {
+            if name == look::hosted::APPLIED {
+                seen.applied.push(serde_json::from_str(data).unwrap());
+            } else if name == "look" {
+                seen.previewed.push(serde_json::from_str(data).unwrap());
+            }
         }
     }
     seen.changed += changed.read().count();
@@ -231,4 +236,111 @@ fn a_refused_command_also_drops_a_fetch_in_flight() {
         app.world().resource::<Seen>().applied,
         vec![serde_json::json!({"id":"fizzix","ok":false,"reason":"origin"})]
     );
+}
+
+/// Editor builds speak both protocols from one `gx:custom` handler set:
+/// hosted `look.set` / `look.clear` (answered `look.applied`) and the
+/// editor's `look.preview` / `look.preview.clear` (answered `look`).
+#[cfg(feature = "editor")]
+mod with_the_editor {
+    use super::*;
+    use gamebient_game::look::editor::{PREVIEW, PREVIEW_CLEAR};
+
+    fn preview(id: &str) -> serde_json::Value {
+        let manifest = serde_json::json!({
+            "v": 1, "id": id, "name": "Preview", "kind": "palette",
+            "palette": { theme::LOOK.palette[0].0: "#123456" },
+        });
+        serde_json::json!({ "id": id, "files": { "look.json": { "text": manifest.to_string() } } })
+    }
+
+    #[test]
+    fn a_preview_supersedes_a_hosted_fetch_in_flight() {
+        let mut app = app(Selection::Default);
+        app.update();
+        let (files, hash) = night_shift();
+        let arrival = in_flight(&mut app, &hash);
+        send(&mut app, PREVIEW, preview("draft"));
+        app.update();
+        assert_eq!(app.world().resource::<ActiveLook>().id(), "draft");
+        assert!(!app.world().contains_resource::<PendingFetch>());
+        // The hosted pack lands late and is never worn or answered.
+        *arrival.lock().unwrap() = Some(Ok(files));
+        app.update();
+        app.update();
+        let look = app.world().resource::<ActiveLook>();
+        assert_eq!(look.id(), "draft");
+        assert_eq!(look.source, Selection::Editor("draft".into()));
+        let seen = app.world().resource::<Seen>();
+        assert!(seen.applied.is_empty(), "{:?}", seen.applied);
+        assert_eq!(seen.previewed.len(), 1);
+        assert_eq!(seen.previewed[0]["ok"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn a_preview_sent_with_a_fetch_that_lands_the_same_frame_still_wins() {
+        let mut app = app(Selection::Default);
+        app.update();
+        let (files, hash) = night_shift();
+        let arrival = in_flight(&mut app, &hash);
+        *arrival.lock().unwrap() = Some(Ok(files));
+        send(&mut app, PREVIEW, preview("draft"));
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<ActiveLook>().id(), "draft");
+        assert!(app.world().resource::<Seen>().applied.is_empty());
+    }
+
+    #[test]
+    fn a_refused_preview_and_a_preview_clear_also_drop_a_fetch() {
+        for (name, data) in [
+            (PREVIEW, serde_json::json!({ "id": "../x", "files": {} })),
+            (PREVIEW_CLEAR, serde_json::json!({})),
+        ] {
+            let mut app = app(Selection::Default);
+            app.update();
+            let (files, hash) = night_shift();
+            let arrival = in_flight(&mut app, &hash);
+            send(&mut app, name, data);
+            app.update();
+            assert!(!app.world().contains_resource::<PendingFetch>(), "{name}");
+            *arrival.lock().unwrap() = Some(Ok(files));
+            app.update();
+            assert_eq!(
+                app.world().resource::<ActiveLook>().id(),
+                "default",
+                "{name}"
+            );
+            assert!(app.world().resource::<Seen>().applied.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn hosted_commands_are_not_previews_and_previews_are_not_hosted() {
+        let mut app = app(Selection::Default);
+        app.update();
+        send(&mut app, PREVIEW, preview("draft"));
+        app.update();
+        // A hosted clear after a preview: the latest command wins, and only
+        // the hosted protocol answers it.
+        send(&mut app, look::hosted::CLEAR, serde_json::Value::Null);
+        app.update();
+        assert_eq!(app.world().resource::<ActiveLook>().id(), "default");
+        let seen = app.world().resource::<Seen>();
+        assert_eq!(
+            seen.applied,
+            vec![serde_json::json!({"id":"default","ok":true})]
+        );
+        assert_eq!(seen.previewed.len(), 1, "{:?}", seen.previewed);
+        assert_eq!(seen.previewed[0]["id"], serde_json::json!("draft"));
+        // The old editor names are the hosted ones now: a hosted-shaped
+        // look.set is never read as a preview.
+        send(&mut app, look::hosted::SET, preview("draft"));
+        app.update();
+        let seen = app.world().resource::<Seen>();
+        assert_eq!(seen.previewed.len(), 1);
+        assert_eq!(seen.applied.len(), 2);
+        assert_eq!(seen.applied[1]["ok"], serde_json::json!(false));
+        assert_eq!(app.world().resource::<ActiveLook>().id(), "default");
+    }
 }

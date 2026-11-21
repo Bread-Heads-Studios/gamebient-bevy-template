@@ -74,7 +74,7 @@ impl LookSwap<'_> {
     }
 
     /// Back to the game's own look (hosted `look.clear`, the editor's
-    /// `look.clear`): no pack, no pack assets, and `LookChanged` so appliers
+    /// `look.preview.clear`): no pack, no pack assets, and `LookChanged` so appliers
     /// put the defaults back. Always succeeds.
     pub fn reset(&mut self) {
         let contract = self.look.contract;

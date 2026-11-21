@@ -20,7 +20,7 @@ pub enum Selection {
     /// the game boots on the default look and swaps this in when its files
     /// arrive from `assets/looks/<id>/` and match the build's content hash.
     Fetch(String),
-    /// A pack the editor sent with `look.set` (feature `editor`). Never
+    /// A pack the editor sent with `look.preview` (feature `editor`). Never
     /// chosen at launch: `from_launch` cannot produce it.
     Editor(String),
     /// A pack the host page picked (`look.set`, `hosted.rs`), fetched from
