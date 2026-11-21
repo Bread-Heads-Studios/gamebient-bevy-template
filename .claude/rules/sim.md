@@ -22,6 +22,7 @@ check them yourself on every sim change:
   cache: put it in a resource or component that `OnEnter(Playing)` resets.
 - No sim read of `UiScale`, `Window`, `GameViewport` or `FrameInsets`.
 - The level (`content/level.json`) is run content and in the replay hash; the selftest and checks use `LevelSource::Test`, never `content/`.
+- `GameState::Editing` (the level editor) runs no `SimSet` system; never add a sim system that runs outside `Playing`.
 - Fold extra state into `Checksum` when a score could be reached through
   different in-game states.
 - Text spawned from `src/game/` takes `Option<Res<UiFonts>>`, never a

@@ -14,10 +14,15 @@
 //! | game → host | `sound`          | `{ name, ok: true }` or `{ name, ok: false, error }` |
 //! | host → game | `content.set`    | `{ file, text }` (a `.json` file) or `{ file, png }` (base64, `sprites/<Kind>.png`) |
 //! | game → host | `content`        | `{ file, ok, error?, hash }`; hash is FNV-1a 64 of the exact bytes |
+//! | host → game | `level.edit`     | `{ on: bool }`: enter Editing, or leave it and start a run |
+//! | host → game | `level.camera`   | `{ at: [x, y], zoom }`: the edit camera; ignored outside Editing |
+//! | game → host | `level.view`     | `{ at: [x, y], zoom, canvas: [x, y, w, h] }`: zoom is CSS px per world unit, canvas in the frame's CSS px |
+//! | game → host | `level.mode`     | `{ editing: bool }`, on every state change |
 //!
 //! `content.set` files: `level.json` (applies at the next run start; send
 //! `run.restart`), `tunables.json` (through `PendingTunes`, all or nothing),
 //! `sprites.json`, `sprites/<Kind>.png`, `audio/songs.json`, `audio/sfx.json`.
+//! While Editing, `level.json` respawns the shown level at once and no restart is needed.
 //! The catalog's `files` maps every content file the game runs to its hash.
 //!
 //! Everything here runs in `Update`; the only thing that touches run state
@@ -58,6 +63,11 @@ struct ChecksRequested(Vec<String>);
 #[derive(Resource, Default)]
 struct ContentSets(Vec<Json>);
 
+/// The last `level.edit`: `Some(true)` enter Editing, `Some(false)` leave it
+/// for a run. Applied by `apply_edit_request` once the fade is idle.
+#[derive(Resource, Default)]
+struct EditRequest(Option<bool>);
+
 /// Set by `run.restart`; cleared once the run has been re-entered.
 #[derive(Resource, Default)]
 pub struct RestartPending(pub bool);
@@ -74,13 +84,19 @@ impl Plugin for EditorProtocolPlugin {
         .init_resource::<ChecksRequested>()
         .init_resource::<ContentSets>()
         .init_resource::<RestartPending>()
+        .init_resource::<EditRequest>()
         // Around the menu-time drain (`apply_pending_tunes` in `Update`,
         // registered by `TunablesPlugin`): a set received this frame
         // applies this frame and is reported this frame. During a run
         // the drain is in `SimSet` and the report follows a tick later.
         .add_systems(
             Update,
-            (handle_custom_commands, apply_content_sets, restart_run)
+            (
+                handle_custom_commands,
+                apply_content_sets,
+                restart_run,
+                apply_edit_request,
+            )
                 .chain()
                 .before(apply_pending_tunes),
         )
@@ -91,6 +107,8 @@ impl Plugin for EditorProtocolPlugin {
                 run_requested_checks,
                 report_tune_applied,
                 run_sound_previews,
+                report_level_mode,
+                report_level_view,
             )
                 .chain()
                 .after(apply_pending_tunes),
@@ -113,6 +131,9 @@ fn handle_custom_commands(
     mut restart: ResMut<RestartPending>,
     mut previews: ResMut<PreviewsRequested>,
     mut sets: ResMut<ContentSets>,
+    mut edit: ResMut<EditRequest>,
+    state: Res<State<GameState>>,
+    mut view: ResMut<crate::game::content::edit::EditView>,
     mut out: MessageWriter<HostEvent>,
 ) {
     for command in commands.read() {
@@ -154,6 +175,23 @@ fn handle_custom_commands(
             }
             "run.restart" => restart.0 = true,
             "content.set" => sets.0.push(data),
+            "level.edit" => {
+                if let Some(on) = data.get("on").and_then(Json::as_bool) {
+                    edit.0 = Some(on);
+                }
+            }
+            "level.camera" => {
+                if *state.get() != GameState::Editing {
+                    continue;
+                }
+                let at = data
+                    .get("at")
+                    .and_then(Json::as_array)
+                    .filter(|a| a.len() == 2)
+                    .and_then(|a| Some(Vec2::new(a[0].as_f64()? as f32, a[1].as_f64()? as f32)));
+                let zoom = data.get("zoom").and_then(Json::as_f64).map(|z| z as f32);
+                view.set_camera(at, zoom);
+            }
             "sound.preview" => previews.0.push(
                 data.get("name")
                     .and_then(Json::as_str)
@@ -353,7 +391,17 @@ fn set_content(world: &mut World, file: &str, data: &Json) -> Result<u64, String
     };
     let e = |r: Result<(), crate::game::content::model::ContentError>| r.map_err(|e| e.0);
     match file {
-        "level.json" => e(level::set_level(world, &bytes))?,
+        "level.json" => {
+            e(level::set_level(world, &bytes))?;
+            // While Editing the shown level follows at once; otherwise the
+            // new level waits for the next run start.
+            if world
+                .get_resource::<State<GameState>>()
+                .is_some_and(|s| *s.get() == GameState::Editing)
+            {
+                crate::game::content::edit::respawn_edit_level(world);
+            }
+        }
         "sprites.json" => e(sprites::set_sprites_meta(world, &bytes))?,
         "audio/songs.json" => e(audio::set_songs(world, &bytes))?,
         "audio/sfx.json" => e(audio::set_sfx(world, &bytes))?,
@@ -498,6 +546,64 @@ fn restart_run(
     }
     if target == GameState::Playing {
         restart.0 = false;
+    }
+}
+
+/// `level.edit`: into Editing, or out of it into a normal run start. Through
+/// the `ScreenFade` when there is one, exactly like `restart_run`. A request
+/// for the state the game is already in is dropped.
+fn apply_edit_request(
+    mut edit: ResMut<EditRequest>,
+    state: Res<State<GameState>>,
+    mut next: ResMut<NextState<GameState>>,
+    fade: Option<ResMut<crate::ui::transition::ScreenFade>>,
+) {
+    let Some(on) = edit.0 else {
+        return;
+    };
+    if on == (*state.get() == GameState::Editing) {
+        edit.0 = None;
+        return;
+    }
+    let target = if on {
+        GameState::Editing
+    } else {
+        GameState::Playing
+    };
+    match fade {
+        Some(mut fade) => {
+            if !fade.is_idle() || !fade.request(target) {
+                return; // try again next frame
+            }
+        }
+        None => next.set(target),
+    }
+    edit.0 = None;
+}
+
+/// `level.view`'s data.
+pub fn view_json(v: &crate::game::content::edit::EditView) -> Json {
+    json!({ "at": [v.at.x, v.at.y], "zoom": v.zoom, "canvas": v.canvas })
+}
+
+/// `level.mode` on every state change (a run ending in GameOver included).
+fn report_level_mode(state: Res<State<GameState>>, mut out: MessageWriter<HostEvent>) {
+    if state.is_changed() {
+        out.write(custom(
+            "level.mode",
+            json!({ "editing": *state.get() == GameState::Editing }),
+        ));
+    }
+}
+
+/// `level.view` whenever the edit camera or the canvas changes while Editing.
+fn report_level_view(
+    state: Res<State<GameState>>,
+    view: Res<crate::game::content::edit::EditView>,
+    mut out: MessageWriter<HostEvent>,
+) {
+    if *state.get() == GameState::Editing && view.is_changed() {
+        out.write(custom("level.view", view_json(&view)));
     }
 }
 
@@ -982,5 +1088,168 @@ mod tests {
     fn colours_are_lowercase_srgb_hex() {
         assert_eq!(colour_hex(Color::srgb(1.0, 0.85, 0.2)), "#ffd933");
         assert_eq!(colour_hex(Color::BLACK), "#000000");
+    }
+
+    fn named(app: &mut App, name: &str) -> Vec<Json> {
+        drain_custom(app)
+            .iter()
+            .filter(|e| e.0 == name)
+            .map(|e| serde_json::from_str(&e.1).unwrap())
+            .collect()
+    }
+
+    /// `level.edit {on:true}` from wherever the game is, two frames: the
+    /// request, then the transition and the reports.
+    fn enter_editing(app: &mut App) -> Vec<(String, String)> {
+        send(app, "level.edit", r#"{"on":true}"#);
+        app.update();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::Editing
+        );
+        drain_custom(app)
+    }
+
+    #[test]
+    fn level_edit_enters_editing_reports_mode_and_view_then_plays() {
+        let mut app = build_headless_app();
+        app.update();
+        drain_custom(&mut app);
+        let events = enter_editing(&mut app);
+        let mode: Vec<Json> = events
+            .iter()
+            .filter(|e| e.0 == "level.mode")
+            .map(|e| serde_json::from_str(&e.1).unwrap())
+            .collect();
+        assert_eq!(mode, vec![json!({ "editing": true })]);
+        let view: Json = serde_json::from_str(
+            &events
+                .iter()
+                .find(|e| e.0 == "level.view")
+                .expect("a view")
+                .1,
+        )
+        .unwrap();
+        let v = *app
+            .world()
+            .resource::<crate::game::content::edit::EditView>();
+        assert_eq!(view, view_json(&v));
+        assert_eq!(view["canvas"].as_array().unwrap().len(), 4);
+
+        send(&mut app, "level.edit", r#"{"on":false}"#);
+        app.update();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::Playing
+        );
+        assert_eq!(
+            named(&mut app, "level.mode"),
+            vec![json!({ "editing": false })]
+        );
+    }
+
+    #[test]
+    fn level_edit_off_outside_editing_changes_nothing() {
+        let mut app = build_headless_app();
+        app.update();
+        let before = *app.world().resource::<State<GameState>>().get();
+        send(&mut app, "level.edit", r#"{"on":false}"#);
+        app.update();
+        app.update();
+        assert_eq!(*app.world().resource::<State<GameState>>().get(), before);
+    }
+
+    #[test]
+    fn level_camera_moves_and_clamps_only_while_editing() {
+        use crate::game::content::edit::{EditView, ZOOM_MAX, ZOOM_MIN};
+        let mut app = build_headless_app();
+        app.update();
+        // Outside Editing: ignored.
+        let before = *app.world().resource::<EditView>();
+        send(&mut app, "level.camera", r#"{"at":[5,5],"zoom":2}"#);
+        app.update();
+        assert_eq!(*app.world().resource::<EditView>(), before);
+
+        enter_editing(&mut app);
+        send(&mut app, "level.camera", r#"{"at":[10,20],"zoom":3}"#);
+        app.update();
+        let v = *app.world().resource::<EditView>();
+        assert_eq!((v.at, v.zoom), (Vec2::new(10.0, 20.0), 3.0));
+        assert_eq!(named(&mut app, "level.view"), vec![view_json(&v)]);
+
+        send(&mut app, "level.camera", r#"{"zoom":0}"#);
+        app.update();
+        assert_eq!(app.world().resource::<EditView>().zoom, ZOOM_MIN);
+        // 1e300 is finite JSON but not a finite f32: the zoom stays.
+        send(&mut app, "level.camera", r#"{"zoom":1e300,"at":[1e300,0]}"#);
+        app.update();
+        let v = *app.world().resource::<EditView>();
+        assert_eq!((v.at, v.zoom), (Vec2::new(10.0, 20.0), ZOOM_MIN));
+        send(&mut app, "level.camera", r#"{"zoom":500}"#);
+        app.update();
+        assert_eq!(app.world().resource::<EditView>().zoom, ZOOM_MAX);
+    }
+
+    #[test]
+    fn level_view_follows_a_letterbox_change() {
+        use crate::game::content::edit::EditView;
+        let mut app = build_headless_app();
+        app.update();
+        enter_editing(&mut app);
+        app.world_mut().resource_mut::<EditView>().canvas = [10.0, 0.0, 480.0, 360.0];
+        app.update();
+        let views = named(&mut app, "level.view");
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0]["canvas"], json!([10.0, 0.0, 480.0, 360.0]));
+        app.update();
+        assert!(named(&mut app, "level.view").is_empty(), "only on a change");
+    }
+
+    #[test]
+    fn content_set_level_while_editing_respawns_at_once() {
+        use crate::game::content::edit::EditThing;
+        let mut app = build_headless_app();
+        app.update();
+        enter_editing(&mut app);
+        let text = r#"{"v":1,"things":[{"id":"coin-9","kind":"Coin","at":[1,1]}]}"#;
+        send(
+            &mut app,
+            "content.set",
+            &json!({ "file": "level.json", "text": text }).to_string(),
+        );
+        app.update();
+        let shown: Vec<String> = app
+            .world_mut()
+            .query_filtered::<&crate::game::content::kit::ThingId, With<EditThing>>()
+            .iter(app.world())
+            .map(|id| id.0.clone())
+            .collect();
+        assert_eq!(shown, vec!["coin-9".to_string()]);
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::Editing,
+            "no restart"
+        );
+    }
+
+    #[test]
+    fn a_run_ending_in_game_over_reports_the_mode() {
+        let mut app = build_headless_app();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        drain_custom(&mut app);
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::GameOver);
+        app.update();
+        assert_eq!(
+            named(&mut app, "level.mode"),
+            vec![json!({ "editing": false })]
+        );
     }
 }

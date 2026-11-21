@@ -133,6 +133,32 @@ In the editor build (`--features editor`) the host sends `content.set` with
 audio apply in place. The protocol table is the module doc of
 `src/game/tunables/protocol.rs`; `sound.preview` takes an event or cue name.
 
+## The level editor
+
+The editor build lets a creator move, add, remove, duplicate and resize the
+Things in `content/level.json` on the running game.
+
+- `GameState::Editing` (`src/game/content/edit.rs`) despawns the run and
+  shows the current level for display only: `EditThing` entities with the
+  kit's art and no `on_spawn` components or `SpawnOrder`. Presentation
+  dressing still runs, so it looks like the game: the art children carry the
+  `EditArt` marker and `player::dress_player` dresses the shown Player's. **No `SimSet`
+  system runs in Editing**, so replays, `RunClock`, the selftest and the
+  checks never see it. Never give a sim system a run condition that lets it
+  run in Editing.
+- A separate orthographic `EditCamera` shows the level, fitted to its bounds
+  on entry; the game's own cameras are switched off while Editing.
+- Each kind's `EditRules` (`resizable`, `max`) and the `LevelGrid` resource
+  reach the editor through the catalog's `level`.
+- Host messages (`gx:custom`): `level.edit {on}` enters Editing or leaves it
+  for a normal, replayable run with the current level; `level.camera {at,
+  zoom}` moves the edit camera; the game answers `level.view {at, zoom,
+  canvas}` (zoom is CSS pixels per world unit, canvas is the `#game`
+  rectangle in the frame's CSS pixels) and `level.mode {editing}` on every
+  state change.
+- While Editing, `content.set` of `level.json` respawns the shown level at
+  once. Outside Editing it still applies at the next run start.
+
 ## Porting a game to the kit
 
 1. Cues and layers: constructors take a name first
