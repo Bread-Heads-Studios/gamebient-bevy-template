@@ -67,7 +67,15 @@ impl LookSwap<'_> {
         Ok(())
     }
 
-    /// Back to the game's own look (`look.clear`). Always succeeds.
+    /// The look being worn: after a successful `apply`, the pack just
+    /// validated, with its name and content hash.
+    pub fn worn(&self) -> &ActiveLook {
+        &self.look
+    }
+
+    /// Back to the game's own look (hosted `look.clear`, the editor's
+    /// `look.preview.clear`): no pack, no pack assets, and `LookChanged` so appliers
+    /// put the defaults back. Always succeeds.
     pub fn reset(&mut self) {
         let contract = self.look.contract;
         *self.look = ActiveLook::default_for(contract);

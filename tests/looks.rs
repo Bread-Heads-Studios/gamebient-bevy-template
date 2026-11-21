@@ -972,3 +972,48 @@ fn the_shown_player_is_dressed_while_editing() {
     assert!(app.world().get::<Player>(parent).is_none());
     assert!(app.world().get::<LookColour>(parent).is_none());
 }
+
+/// D1 for the editor's path: a pack worn through `look.preview`, setting every
+/// palette role and string key to a value unlike the defaults, replays the
+/// selftest to the same score, checksum, content hash and tick count.
+#[cfg(feature = "editor")]
+#[test]
+fn a_look_preview_pack_does_not_change_a_replay() {
+    use gamebient_input::HostCommand;
+    let replay = record_scripted_run();
+    let base = verify(&replay);
+    let mut palette = serde_json::Map::new();
+    for (role, _) in theme::LOOK.palette {
+        palette.insert((*role).into(), "#7f3fbf".into());
+    }
+    let mut strings = serde_json::Map::new();
+    for s in theme::LOOK.strings {
+        strings.insert(s.key.into(), "Z".into());
+    }
+    let manifest = serde_json::json!({
+        "v": 1, "id": "d1-editor", "name": "D1", "kind": "skin",
+        "palette": palette, "strings": strings,
+    });
+    let mut app = build_verify_app(&replay);
+    app.insert_resource(Selection::Default);
+    app.add_plugins(LookPlugin {
+        contract: &theme::LOOK,
+    });
+    app.world_mut().write_message(HostCommand::Custom {
+        name: "look.preview".into(),
+        data: serde_json::json!({ "id": "d1-editor", "files": { "look.json": { "text": manifest.to_string() } } })
+            .to_string(),
+    });
+    let v = run_verify_app(&mut app, &replay);
+    assert_eq!(
+        app.world().resource::<ActiveLook>().id(),
+        "d1-editor",
+        "the pack was worn"
+    );
+    assert_eq!(
+        (v.score, v.checksum, v.content, v.ticks),
+        (base.score, base.checksum, base.content, base.ticks),
+        "a look.preview pack changed the sim"
+    );
+    assert!(v.matches);
+}
