@@ -65,6 +65,7 @@ impl Plugin for GamePlugin {
             .init_resource::<sim::RunOver>()
             .init_resource::<sim::SpawnCounter>()
             .init_resource::<replay::recorder::ReplayRecorder>()
+            .init_resource::<content::edit::EditView>()
             .add_message::<scoring::ScoreEvent>()
             .add_message::<audio::SfxEvent>()
             // Music control from gameplay (switches, layers). Registered in
@@ -158,9 +159,22 @@ impl Plugin for GamePlugin {
             .add_systems(
                 OnExit(GameState::Playing),
                 (replay::recorder::seal_run, cleanup_game_entities).chain(),
-            );
+            )
+            // The level editor: the run is despawned, the level shown,
+            // the camera fitted to it. No SimSet system runs in Editing.
+            .add_systems(
+                OnEnter(GameState::Editing),
+                (
+                    cleanup_game_entities,
+                    content::edit::spawn_edit_level,
+                    content::edit::fit_edit_view,
+                )
+                    .chain(),
+            )
+            .add_systems(OnExit(GameState::Editing), cleanup_game_entities);
 
         if !self.headless {
+            app.add_plugins(content::edit::EditCameraPlugin);
             app.init_resource::<audio::MusicCache>()
                 .init_resource::<audio::CurrentCue>()
                 .init_resource::<audio::Duck>()

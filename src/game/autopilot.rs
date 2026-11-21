@@ -252,6 +252,7 @@ fn drive_autopilot(
                 app_exit.write(AppExit::Success);
             }
         }
+        GameState::Editing => virt.set_held(Buttons::NONE),
     }
 }
 

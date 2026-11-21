@@ -5,11 +5,14 @@
 //! of Thing a level places and `level` the level itself, which is run
 //! content (it is in the replay content hash). `sprites` swaps a kind's box
 //! for a picture; it is presentation only. `audio` replaces songs and sound
-//! effects by name; also presentation only.
+//! effects by name; also presentation only. `edit` is the level editor's
+//! Editing state: the level shown, frozen, under its own camera; presentation
+//! only.
 
 pub mod audio;
 #[cfg(feature = "editor")]
 pub mod base64;
+pub mod edit;
 pub mod files;
 pub mod kit;
 pub mod level;

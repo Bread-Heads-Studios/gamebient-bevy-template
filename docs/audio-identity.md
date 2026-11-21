@@ -22,6 +22,7 @@ replaces entirely.
 | Playing layer 0 | `PLAY_LAYER` | Plucked counter-line and driving hats; `LayerEvent::Start(0)` when a game's danger state begins. |
 | GameOver | `game_over_sting()` | One bar descending G–E–D–C, 1.5 s tail, silence after. |
 | DemoEnd | `demo_end_tag()` | The menu theme's first phrase, then silence. |
+| Editing | none | Silence: the level editor shows the level, frozen (editor builds only). |
 
 ## SFX voice
 

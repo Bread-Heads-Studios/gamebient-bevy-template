@@ -32,7 +32,8 @@ fn player_mesh(look: Option<&crate::look::ActiveLook>) -> Mesh {
 /// outside `SimSet`; the headless verifier never adds that plugin. It writes
 /// only to the art child, never to the sim entity, so the Player's own
 /// archetype is the same with or without a pack (D1, docs/look-packs.md;
-/// `tests/archetype_order.rs`).
+/// `tests/archetype_order.rs`). It also dresses the shown Player while
+/// Editing (`content::edit::EditArt`), so edit mode looks like the game.
 ///
 /// A child showing a sprite (`content/sprites/Player.png`) is the game's own
 /// art: the pack leaves it alone and its `LookColour` is taken off, so the
@@ -50,6 +51,8 @@ pub fn dress_player(
     look: Option<Res<crate::look::ActiveLook>>,
     sprite_art: Option<Res<super::content::sprites::SpriteArt>>,
     players: Query<&Children, With<Player>>,
+    kinds: Option<Res<super::content::kit::Kinds>>,
+    shown: Query<(Entity, &super::content::sprites::ArtOf), With<super::content::edit::EditArt>>,
     art: Query<(&Mesh3d, Has<crate::look::LookColour>), With<super::content::sprites::ArtOf>>,
 ) {
     let redress = changed.read().count() > 0;
@@ -57,27 +60,39 @@ pub fn dress_player(
         return;
     };
     let quad = sprite_art.as_ref().map(|a| a.quad.id());
-    for children in &players {
-        for child in children.iter() {
-            let Ok((mesh, tagged)) = art.get(child) else {
-                continue;
-            };
-            if Some(mesh.0.id()) == quad {
-                if tagged {
-                    commands.entity(child).remove::<crate::look::LookColour>();
-                }
-                continue;
+    // The run's Player art (children of the `Player` sim entity) and, while
+    // Editing, the shown Player's art (marked `EditArt`; the shown Thing has
+    // no `Player` marker). Presentation only: only art children are written.
+    let player_kind = kinds.as_deref().and_then(|k| k.index("Player"));
+    let targets: Vec<Entity> = players
+        .iter()
+        .flat_map(|children| children.iter())
+        .chain(
+            shown
+                .iter()
+                .filter(|(_, a)| Some(a.0) == player_kind)
+                .map(|(e, _)| e),
+        )
+        .collect();
+    for child in targets {
+        let Ok((mesh, tagged)) = art.get(child) else {
+            continue;
+        };
+        if Some(mesh.0.id()) == quad {
+            if tagged {
+                commands.entity(child).remove::<crate::look::LookColour>();
             }
-            if !tagged {
-                commands.entity(child).insert((
-                    Mesh3d(meshes.add(player_mesh(look.as_deref()))),
-                    crate::look::LookColour::new("player"),
-                ));
-            } else if redress {
-                commands
-                    .entity(child)
-                    .insert(Mesh3d(meshes.add(player_mesh(look.as_deref()))));
-            }
+            continue;
+        }
+        if !tagged {
+            commands.entity(child).insert((
+                Mesh3d(meshes.add(player_mesh(look.as_deref()))),
+                crate::look::LookColour::new("player"),
+            ));
+        } else if redress {
+            commands
+                .entity(child)
+                .insert(Mesh3d(meshes.add(player_mesh(look.as_deref()))));
         }
     }
 }

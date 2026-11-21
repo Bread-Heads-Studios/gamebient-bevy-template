@@ -243,7 +243,10 @@ mod look_contract_tests {
                 "{cue} missing from AUDIO_CUES"
             );
         }
-        for (state, _) in MUSIC {
+        // A silent state (no cue, e.g. Editing) plays nothing, so a pack has
+        // nothing there to override (`audio::switch_music` returns before
+        // looking up the pack's track).
+        for (state, _) in MUSIC.iter().filter(|(_, cue)| cue.is_some()) {
             let cue = crate::game::audio::music_key(state);
             assert!(
                 AUDIO_CUES.contains(&cue.as_str()),
