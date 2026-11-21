@@ -18,6 +18,7 @@ pub mod contract;
 pub mod end_card;
 pub mod fetch;
 pub mod hash;
+pub mod hosted;
 pub mod manifest;
 pub mod names;
 pub mod pack;
