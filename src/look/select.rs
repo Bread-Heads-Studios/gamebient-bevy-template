@@ -23,6 +23,9 @@ pub enum Selection {
     /// A pack the editor sent with `look.set` (feature `editor`). Never
     /// chosen at launch: `from_launch` cannot produce it.
     Editor(String),
+    /// A pack the host page picked (`look.set`, `hosted.rs`), fetched from
+    /// the hosted origin. Never chosen at launch; only by a swap.
+    Hosted(String),
 }
 
 fn classify(value: Option<String>, allow_dir: bool) -> Selection {

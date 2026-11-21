@@ -73,14 +73,19 @@ impl LookSwap<'_> {
         &self.look
     }
 
-    /// Back to the game's own look (the editor's `look.clear`): no pack, no
-    /// pack assets, and `LookChanged` so appliers put the defaults back.
-    pub fn clear(&mut self) {
+    /// Back to the game's own look (hosted `look.clear`, the editor's
+    /// `look.clear`): no pack, no pack assets, and `LookChanged` so appliers
+    /// put the defaults back. Always succeeds.
+    pub fn reset(&mut self) {
         let contract = self.look.contract;
         *self.look = ActiveLook::default_for(contract);
-        *self.assets = LookAssets::default();
+        *self.assets = build_assets(
+            &self.look,
+            self.images.as_deref_mut(),
+            self.audio.as_deref_mut(),
+        );
         self.changed.write(LookChanged);
-        info!("look: now wearing default");
+        info!("look: back to the default");
     }
 }
 

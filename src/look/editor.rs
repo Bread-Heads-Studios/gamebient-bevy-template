@@ -266,7 +266,7 @@ fn handle_look_messages(
                 Err(_) => verdict("", &Err(vec!["pack: not JSON".into()])),
             },
             "look.clear" => {
-                swap.clear();
+                swap.reset();
                 json!({ "id": "default", "ok": true, "errors": [], "hash": null, "warnings": [] })
             }
             _ => continue,
