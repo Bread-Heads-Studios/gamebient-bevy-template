@@ -71,6 +71,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 blake3 = "1"
 
+# winit needs a windowing backend on Linux (CI), as every game's own
+# Linux target table gives it.
+[target.'cfg(target_os = "linux")'.dependencies]
+bevy = { version = "0.18", default-features = false, features = ["x11"] }
+
 [build-dependencies]
 blake3 = "1"
 EOF
