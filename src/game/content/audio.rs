@@ -9,6 +9,12 @@
 //! read by sim code and never enter the content hash. In the headless sim
 //! and the verifier [`set_songs`] and [`set_sfx`] change nothing and return
 //! an error.
+//!
+//! Song data is leaked once per distinct version (an intern table in front of
+//! `Box::leak`); `tracker.rs` stays the same in every game.
+
+use std::collections::BTreeMap;
+use std::sync::{Mutex, MutexGuard};
 
 use bevy::prelude::*;
 
@@ -77,29 +83,113 @@ fn bad_noise() -> ContentError {
     )
 }
 
-fn leak_str(s: &str) -> &'static str {
-    Box::leak(s.to_owned().into_boxed_str())
+/// Every piece of a file song that must be `&'static` (`tracker::Song` and
+/// `tracker::Instrument` borrow for `'static`, and `tracker.rs` is copied
+/// verbatim into every game, so it does not change), keyed by its exact
+/// data. Identical data is leaked once and reused, so live edits grow
+/// memory only with genuinely new versions. Presentation only: no sim code
+/// reads it. `BTreeMap`, not a hash map (`src/game` bans those).
+struct Interner {
+    /// Checked songs, by their canonical serialized `SongData`.
+    songs: BTreeMap<String, Song>,
+    strings: BTreeMap<String, &'static str>,
+    envelopes: BTreeMap<Vec<u8>, &'static [u8]>,
+    arpeggios: BTreeMap<Vec<i8>, &'static [i8]>,
+    /// Instrument tables, by their canonical serialized `[InstrumentData]`.
+    tables: BTreeMap<String, &'static [Instrument]>,
 }
 
-fn leak<T>(v: Vec<T>) -> &'static [T] {
-    Box::leak(v.into_boxed_slice())
+static INTERN: Mutex<Interner> = Mutex::new(Interner {
+    songs: BTreeMap::new(),
+    strings: BTreeMap::new(),
+    envelopes: BTreeMap::new(),
+    arpeggios: BTreeMap::new(),
+    tables: BTreeMap::new(),
+});
+
+fn interner() -> MutexGuard<'static, Interner> {
+    INTERN.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn instrument_from(d: &InstrumentData) -> Result<Instrument, ContentError> {
-    let noise = match &d.noise {
-        None => None,
-        Some((m, r)) => Some((
-            noise_mode(m).ok_or_else(bad_noise)?,
-            noise_rate(r).ok_or_else(bad_noise)?,
-        )),
-    };
-    Ok(Instrument {
-        env: leak(d.env.clone()),
-        release: d.release,
-        arp: leak(d.arp.clone()),
-        vibrato: d.vibrato.map(|[c, hz]| (c, hz)),
-        noise,
-    })
+impl Interner {
+    fn string(&mut self, s: &str) -> &'static str {
+        if let Some(&v) = self.strings.get(s) {
+            return v;
+        }
+        let v: &'static str = Box::leak(s.to_owned().into_boxed_str());
+        self.strings.insert(s.to_owned(), v);
+        v
+    }
+
+    fn envelope(&mut self, e: &[u8]) -> &'static [u8] {
+        if let Some(&v) = self.envelopes.get(e) {
+            return v;
+        }
+        let v: &'static [u8] = Box::leak(e.to_vec().into_boxed_slice());
+        self.envelopes.insert(e.to_vec(), v);
+        v
+    }
+
+    fn arpeggio(&mut self, a: &[i8]) -> &'static [i8] {
+        if let Some(&v) = self.arpeggios.get(a) {
+            return v;
+        }
+        let v: &'static [i8] = Box::leak(a.to_vec().into_boxed_slice());
+        self.arpeggios.insert(a.to_vec(), v);
+        v
+    }
+
+    fn instrument(&mut self, d: &InstrumentData) -> Result<Instrument, ContentError> {
+        let noise = match &d.noise {
+            None => None,
+            Some((m, r)) => Some((
+                noise_mode(m).ok_or_else(bad_noise)?,
+                noise_rate(r).ok_or_else(bad_noise)?,
+            )),
+        };
+        Ok(Instrument {
+            env: self.envelope(&d.env),
+            release: d.release,
+            arp: self.arpeggio(&d.arp),
+            vibrato: d.vibrato.map(|[c, hz]| (c, hz)),
+            noise,
+        })
+    }
+
+    fn table(&mut self, list: &[InstrumentData]) -> Result<&'static [Instrument], ContentError> {
+        let key = serde_json::to_string(list).expect("instrument data serializes");
+        if let Some(&t) = self.tables.get(&key) {
+            return Ok(t);
+        }
+        let built = list
+            .iter()
+            .map(|d| self.instrument(d))
+            .collect::<Result<Vec<_>, _>>()?;
+        let t: &'static [Instrument] = Box::leak(built.into_boxed_slice());
+        self.tables.insert(key, t);
+        Ok(t)
+    }
+}
+
+/// How much the intern table holds (for tests and diagnostics).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InternCounts {
+    pub songs: usize,
+    pub strings: usize,
+    pub envelopes: usize,
+    pub arpeggios: usize,
+    pub tables: usize,
+}
+
+pub fn intern_counts() -> InternCounts {
+    let i = interner();
+    InternCounts {
+        songs: i.songs.len(),
+        strings: i.strings.len(),
+        envelopes: i.envelopes.len(),
+        arpeggios: i.arpeggios.len(),
+        tables: i.tables.len(),
+    }
 }
 
 fn instrument_data(i: &Instrument) -> InstrumentData {
@@ -146,44 +236,44 @@ fn song_error(what: &str, e: SongError) -> ContentError {
 }
 
 fn song_named(what: &str, d: &SongData) -> Result<Song, ContentError> {
-    let instruments = d
-        .instruments
-        .iter()
-        .map(instrument_from)
-        .collect::<Result<Vec<_>, _>>()?;
-    let noise_instruments = d
-        .noise_instruments
-        .iter()
-        .map(instrument_from)
-        .collect::<Result<Vec<_>, _>>()?;
+    let key = serde_json::to_string(d).expect("song data serializes");
+    let mut i = interner();
+    if let Some(&s) = i.songs.get(&key) {
+        // Checked when it was first interned.
+        return Ok(s);
+    }
     let song = Song {
         bpm: d.bpm,
         beats_per_bar: d.beats_per_bar,
         steps_per_beat: d.steps_per_beat,
         bars: d.bars,
         voices: [
-            leak_str(&d.voices[0]),
-            leak_str(&d.voices[1]),
-            leak_str(&d.voices[2]),
+            i.string(&d.voices[0]),
+            i.string(&d.voices[1]),
+            i.string(&d.voices[2]),
         ],
-        noise: leak_str(&d.noise),
-        instruments: leak(instruments),
-        noise_instruments: leak(noise_instruments),
+        noise: i.string(&d.noise),
+        instruments: i.table(&d.instruments)?,
+        noise_instruments: i.table(&d.noise_instruments)?,
     };
+    drop(i);
     // The tracker checks every token, length, instrument and pitch while it
     // lays the song out. At this tempo the song is zero samples long, so
     // the check renders nothing.
     let check = Song { bpm: 1.0e9, ..song };
     tracker::render_song_samples(&check, 0.0).map_err(|e| song_error(what, e))?;
+    // Only a song that passed is remembered whole; its pieces are interned
+    // either way, so a refused file re-sent leaks nothing new either.
+    interner().songs.insert(key, song);
     Ok(song)
 }
 
 /// A file's song as a tracker [`Song`], checked by the tracker itself.
 ///
-/// `Song` holds `&'static` data, so the converted strings and instrument
-/// tables are leaked (`Box::leak`). That is bounded: one leak per loaded
-/// file at startup, and in the editor build one per live edit, which is
-/// acceptable for the length of an editing session.
+/// `Song` holds `&'static` data, so its strings and instrument tables are
+/// leaked (`Box::leak`), through the intern table: identical data is leaked
+/// once and reused, so an editing session's memory grows only with
+/// genuinely new versions of a song (`tests/audio_intern.rs`).
 pub fn song_from_data(d: &SongData) -> Result<Song, ContentError> {
     song_named("The song", d)
 }

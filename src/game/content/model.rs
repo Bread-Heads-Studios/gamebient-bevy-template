@@ -270,9 +270,9 @@ pub struct InstrumentData {
     pub release: u8,
     #[serde(default)]
     pub arp: Vec<i8>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vibrato: Option<[f32; 2]>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub noise: Option<(String, String)>,
 }
 

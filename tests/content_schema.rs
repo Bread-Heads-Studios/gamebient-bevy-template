@@ -198,3 +198,31 @@ fn sfx() {
     let invalid: Vec<&str> = invalid.iter().map(String::as_str).collect();
     agree("sfx", SfxFile::parse, &valid, &invalid);
 }
+
+#[test]
+fn built_in_songs_written_as_data_fit_the_songs_schema() {
+    use gamebient_game::game::audio::songs;
+    use gamebient_game::game::content::audio::data_from_song;
+    let mut map = serde_json::Map::new();
+    for (name, s) in [
+        ("menu", &songs::MENU),
+        ("play", &songs::PLAY),
+        ("play_layer", &songs::PLAY_LAYER),
+        ("game_over", &songs::GAME_OVER),
+        ("demo_end", &songs::DEMO_END),
+    ] {
+        map.insert(
+            name.into(),
+            serde_json::to_value(data_from_song(s)).unwrap(),
+        );
+    }
+    let file = serde_json::json!({ "v": 1, "songs": map });
+    let v = schema("songs");
+    assert!(
+        v.is_valid(&file),
+        "{:?}",
+        v.iter_errors(&file)
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+    );
+}
