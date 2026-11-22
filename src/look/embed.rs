@@ -43,6 +43,7 @@ const EMBED_MAX_ENV: &str = "GX_WEB_EMBED_MAX";
 /// Panics (fails the build) on a pack id or file name the validator would
 /// refuse: those names become `include_bytes!` paths and fetch URLs.
 pub fn embed_looks() {
+    declare_cfgs();
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("looks_embedded.rs");
     let root = Path::new("assets/looks");
     println!("cargo:rerun-if-changed=assets/looks");
@@ -145,6 +146,21 @@ pub fn embed_looks() {
     fetchable.push_str("];\n");
     code.push_str(&fetchable);
     std::fs::write(out, code).unwrap();
+}
+
+/// Declares the cfgs `src/look/` reads, so a game that sets none of them
+/// gets no `unexpected_cfgs` warning (CI denies warnings):
+///
+/// - `gx_look_no_pbr`: a 2D game without `bevy_pbr` sets it from its own
+///   `build.rs` (`println!("cargo::rustc-cfg=gx_look_no_pbr");`), which
+///   compiles out the `StandardMaterial` retint (`apply.rs`).
+/// - `feature = "editor"`: `mod.rs` gates `editor.rs` on it. Declaring the
+///   value here only silences the lint; it does not add the feature. A
+///   game must not declare `editor` in `Cargo.toml` unless it has the
+///   template's tunables layer (`editor.rs` needs `game::content`).
+fn declare_cfgs() {
+    println!("cargo::rustc-check-cfg=cfg(gx_look_no_pbr)");
+    println!("cargo::rustc-check-cfg=cfg(feature, values(\"editor\"))");
 }
 
 /// `look_split::WEB_EMBED_MAX_BYTES`, unless `GX_WEB_EMBED_MAX` (testing

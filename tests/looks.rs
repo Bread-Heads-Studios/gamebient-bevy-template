@@ -150,6 +150,62 @@ fn a_tagged_sprite_takes_the_pack_colour() {
     );
 }
 
+/// The 2D material retint (`retint_color_material`) follows the same rules
+/// as the others: the pack on the spawn frame, again on `LookChanged`, and
+/// nothing in between. It writes the shared material asset, so an untagged
+/// entity drawing the same handle changes too.
+#[test]
+fn a_tagged_color_material_takes_the_pack_colour() {
+    let mut app = app_with(Selection::Embedded("night-shift".into()));
+    app.init_resource::<Assets<ColorMaterial>>();
+    let shared = app
+        .world_mut()
+        .resource_mut::<Assets<ColorMaterial>>()
+        .add(ColorMaterial::from(theme::PAPER));
+    let own = app
+        .world_mut()
+        .resource_mut::<Assets<ColorMaterial>>()
+        .add(ColorMaterial::from(theme::INK));
+    app.world_mut()
+        .spawn((MeshMaterial2d(shared.clone()), LookColour::new("paper")));
+    app.world_mut().spawn(MeshMaterial2d(shared.clone()));
+    app.world_mut().spawn((
+        MeshMaterial2d(own.clone()),
+        LookColour::new("ink").alpha(0.5),
+    ));
+    app.update();
+    let colour = |app: &App, h: &Handle<ColorMaterial>| {
+        app.world()
+            .resource::<Assets<ColorMaterial>>()
+            .get(h)
+            .unwrap()
+            .color
+    };
+    let night_paper = parse_colour("#f4f1e8").unwrap();
+    assert_eq!(colour(&app, &shared), night_paper);
+    assert_eq!(
+        colour(&app, &own),
+        parse_colour("#05070f").unwrap().with_alpha(0.5)
+    );
+
+    // No LookChanged, no rewrite: the game's own later edit stands.
+    let red = Color::srgb(1.0, 0.0, 0.0);
+    app.world_mut()
+        .resource_mut::<Assets<ColorMaterial>>()
+        .get_mut(&shared)
+        .unwrap()
+        .color = red;
+    app.update();
+    assert_eq!(colour(&app, &shared), red);
+
+    // Hot reload back to the default look recolours the shared material.
+    app.insert_resource(ActiveLook::resolve(&theme::LOOK, Selection::Default));
+    app.world_mut().write_message(look::LookChanged);
+    app.update();
+    assert_eq!(colour(&app, &shared), theme::PAPER);
+    assert_eq!(colour(&app, &own), theme::INK.with_alpha(0.5));
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_pack_folder_reloads_when_it_changes_and_survives_a_bad_edit() {

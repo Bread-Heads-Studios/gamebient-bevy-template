@@ -105,6 +105,10 @@ impl Plugin for LookPlugin {
                     apply::retint_text,
                     apply::retint_background,
                     apply::retint_sprite,
+                    apply::retint_color_material,
+                    // Needs bevy_pbr; a 2D game opts out with the
+                    // `gx_look_no_pbr` cfg (see `apply.rs`).
+                    #[cfg(not(gx_look_no_pbr))]
                     apply::retint_material,
                     apply::retext,
                 )

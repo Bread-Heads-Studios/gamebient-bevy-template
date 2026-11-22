@@ -3,6 +3,12 @@
 //! systems here (in `PostUpdate`, so before the frame renders) replace
 //! them from the active pack on the frame they spawn and again on every
 //! `LookChanged` (hot reload). Untagged entities keep what spawn gave them.
+//!
+//! The `StandardMaterial` retint needs `bevy_pbr`. A 2D game built without
+//! it sets the `gx_look_no_pbr` cfg from its own `build.rs`
+//! (`println!("cargo::rustc-cfg=gx_look_no_pbr");`), which leaves that
+//! retint out; `embed.rs` declares the cfg. Everything else here, the
+//! `ColorMaterial` retint included, needs only `bevy_sprite_render`.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
@@ -17,13 +23,15 @@ pub struct LookChanged;
 /// Colours the entity from palette role `role`. On an entity with a
 /// `TextColor` (every UI `Text`, which Bevy also gives a transparent
 /// `BackgroundColor`) it colours the text only. Otherwise it colours the
-/// `BackgroundColor`, `Sprite` or `StandardMaterial` it finds there.
+/// `BackgroundColor`, `Sprite`, `ColorMaterial` (`MeshMaterial2d`) or
+/// `StandardMaterial` (`MeshMaterial3d`) it finds there.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct LookColour {
     pub role: &'static str,
     pub alpha: Option<f32>,
     /// For a `StandardMaterial`: emissive = the colour times this (times
-    /// the pack's `glow` for the role, which can only dim it).
+    /// the pack's `glow` for the role, which can only dim it). Ignored
+    /// everywhere else (`ColorMaterial` has no emissive).
     pub emissive: Option<f32>,
 }
 
@@ -168,6 +176,8 @@ pub fn retint_sprite(
 
 /// Mutates the material asset itself: entities sharing a material share
 /// the new colour. Give an entity its own material to colour it alone.
+/// Needs `bevy_pbr`: compiled out under `gx_look_no_pbr` (module docs).
+#[cfg(not(gx_look_no_pbr))]
 pub fn retint_material(
     look: Res<ActiveLook>,
     mut changed: MessageReader<LookChanged>,
@@ -188,6 +198,36 @@ pub fn retint_material(
             if let Some(s) = tag.emissive {
                 m.emissive = LinearRgba::from(c) * s * look.glow(tag.role);
             }
+        }
+    }
+}
+
+/// The 2D twin of `retint_material`, for `MeshMaterial2d<ColorMaterial>`.
+/// It mutates the material asset itself, so every entity drawing that
+/// handle takes the new colour, tagged or not. A `ColorMaterial` handle is
+/// often shared (one per colour or per kind): if tagged entities with
+/// different roles share one, whichever the query visits last wins, in no
+/// set order. Give each role (or each entity coloured alone) its own
+/// material. Only `color` is written; `alpha_mode`, `texture` and
+/// `uv_transform` stay as spawned, so a translucent `alpha` needs a
+/// blending material (`ColorMaterial::from(colour)` is opaque for an opaque
+/// colour; `ColorMaterial::default()` blends).
+pub fn retint_color_material(
+    look: Res<ActiveLook>,
+    mut changed: MessageReader<LookChanged>,
+    materials: Option<ResMut<Assets<ColorMaterial>>>,
+    q: Query<(Ref<LookColour>, &MeshMaterial2d<ColorMaterial>)>,
+) {
+    let all = changed.read().count() > 0;
+    let Some(mut materials) = materials else {
+        return;
+    };
+    for (tag, handle) in &q {
+        if !(all || tag.is_added()) {
+            continue;
+        }
+        if let Some(m) = materials.get_mut(&handle.0) {
+            m.color = tag.resolve(&look);
         }
     }
 }
