@@ -31,6 +31,14 @@ A pack cannot change gameplay, hitboxes, scores or timing. The replay test prove
 
 `art/logo.svg` is a placeholder you can copy and edit.
 
+## Check a game's end card
+
+`end-card-sample/` is a finished sponsor pack with an end card (headline, body, URL and logo) and nothing else: no palette, strings or slots. Every game that declares the four `endcard*` palette roles accepts it, so use it to check a game's end card, in a port or after a change to the game-over card:
+
+`cargo run -- --look <template>/docs/sponsor-kit/end-card-sample`
+
+Lose a run and look at the game-over card. `cargo run --features look-check --bin look-check -- <template>/docs/sponsor-kit/end-card-sample` should print `ok`. It is not a built-in pack: nothing builds or ships `docs/`, so never copy it into `assets/looks/`. (The template's `assets/looks/sample-sponsor` sets template roles, strings and a `player` slot, so other games refuse it.)
+
 ## Preview
 
 - Native: `cargo run -- --look <id>` or `GX_LOOK=<id> cargo run`.

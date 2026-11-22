@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "end-card-sample",
+  "name": "Acme Snacks End Card",
+  "kind": "sponsor",
+  "creator": "Bread Heads Studios",
+  "end_card": {
+    "headline": "THANKS FOR PLAYING",
+    "body": "Brought to you by Acme Snacks, a made-up brand.",
+    "url": "https://example.com",
+    "image": "logo.png"
+  }
+}
