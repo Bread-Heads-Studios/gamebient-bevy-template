@@ -126,6 +126,8 @@ To test against a local website, build with
 
 Only `headline` is required. The URL is shown as text; the game never opens it. Set the `endcard` palette role to give the card its own plate (transparent by default). See `docs/sponsor-kit/` for the sponsor kit.
 
+To check a game's end card, wear `docs/sponsor-kit/end-card-sample/`: an end card (headline, body, URL and logo) and nothing else, so every game's contract accepts it. Run `cargo run -- --look <template>/docs/sponsor-kit/end-card-sample` from the game and lose a run. It is not a built-in pack (nothing builds or ships `docs/`), so never copy it into `assets/looks/`. The template's own `sample-sponsor` sets template roles, strings and a `player` slot, so other games refuse it.
+
 ## Versions
 
 `SCHEMA_VERSION` is 3. v2 added `shape` slots; v3 added `glow`. The rules,
@@ -316,7 +318,7 @@ editor's Looks tab dress the running game in the pack it is writing:
   the four `endcard*` roles), the built-in packs plus the ones `look.preview`
   wore this session, and the validator's limits (`validate::limits`,
   `split::WEB_EMBED_MAX_BYTES`). Code: `src/look/editor.rs`.
-- Looks stay cosmetic: `tests/looks.rs`
+- Looks stay cosmetic: `tests/looks_template.rs`
   (`a_look_preview_pack_does_not_change_a_replay`) replays the selftest under a
   `look.preview` pack that sets every role and key.
 - **Drafts are not built in.** The editor saves a pack the game took
@@ -399,7 +401,8 @@ round.
 
 What the test catches, exactly: `tests/looks.rs`
 (`no_built_in_pack_changes_a_replay`) replays the selftest headless under
-each built-in pack and fails if the score, checksum or tick count moves. So
+each built-in pack and fails if the score, checksum, end or tick count
+moves (the template's `tests/looks_template.rs` adds the GXR2 content hash). So
 it catches a sim read **whose result differs under some built-in pack's
 values**. It never catches a read behind a render-only branch (the verifier
 has no asset stores, so an `Option<Res<Assets<…>>>` branch never runs
@@ -440,7 +443,17 @@ template's `AGENTS.md` ("Look Packs", **Porting**) lists the Cargo and
   unless it has the tunables layer: CI's `--all-features` would then build
   `editor.rs` and fail.
 
-Tests: copy `look_contract_tests` from the template's `src/ui/theme.rs`
+Tests: copy `tests/looks.rs` unchanged (only the crate name in its `use`
+lines changes). It is generic over the game's contract and built-in packs,
+and uses only `look::*`, `ui::theme` (`LOOK`, `PALETTE`, `STRINGS`) and the
+replay API every template game has; it needs one built-in pack that changes
+a palette role and a string key. Do not copy `tests/looks_template.rs`: it
+tests the template's player slot, shapes, sprites and editor. Game-specific
+look tests (a game-side retint, say) go in a file of the game's own, so
+`tests/looks.rs` can be recopied when the template changes it. Check the
+end card with `docs/sponsor-kit/end-card-sample/` (see "End card").
+
+Copy `look_contract_tests` from the template's `src/ui/theme.rs`
 unchanged (end-card roles, end-card column fit, string defaults); it uses
 only `crate::look`, `theme` and `ui::fit::ui_width`. The template's
 `look_contract_game_tests` (every sound is a cue a pack can override) reads
