@@ -133,6 +133,14 @@ In the editor build (`--features editor`) the host sends `content.set` with
 audio apply in place. The protocol table is the module doc of
 `src/game/tunables/protocol.rs`; `sound.preview` takes an event or cue name.
 
+Audio overrides are presentation data. A `songs.json` song becomes a
+tracker `Song`, whose data is `&'static` (`tracker.rs` is the same in every
+game), so it is leaked, through an intern table in `content::audio`:
+identical data is leaked once, and an editing session's memory grows only
+with genuinely new versions of a song (`tests/audio_intern.rs`). `sfx.json`
+programs are owned `Fx` values and leak nothing. The full owned-data fix is
+a later fleet change.
+
 ## The level editor
 
 The editor build lets a creator move, add, remove, duplicate and resize the

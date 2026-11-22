@@ -34,3 +34,24 @@ fn baked_audio_renders_within_budget_and_exports() {
         }
     }
 }
+
+/// FNV-1a 64 of every baked cue and effect's WAV bytes, one `name hash`
+/// line each, written to the file `GX_AUDIO_FINGERPRINTS` names (and
+/// nothing otherwise). Run it before and after an audio change and diff
+/// the two files: rendering must not change by a byte.
+#[test]
+fn render_fingerprints() {
+    let Ok(path) = std::env::var("GX_AUDIO_FINGERPRINTS") else {
+        return;
+    };
+    let mut out = String::new();
+    for (name, source) in export_inventory() {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in source.bytes.iter() {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        out.push_str(&format!("{name} {h:016x}\n"));
+    }
+    std::fs::write(path, out).expect("write fingerprints");
+}
