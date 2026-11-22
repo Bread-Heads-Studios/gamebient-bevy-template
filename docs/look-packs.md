@@ -369,12 +369,21 @@ ever turning one up.
 Game code uses a look in two ways:
 
 - **Tag it** (no system parameters needed): put `LookColour::new("role")` next
-  to a `TextColor`, `BackgroundColor`, `Sprite` or `MeshMaterial3d<StandardMaterial>`
-  (`.alpha(a)`, `.emissive(strength)`), or `LookText("key")` next to a `Text`.
-  On a text entity the tag colours the text only (its required, transparent
-  `BackgroundColor` is left alone); elsewhere it colours whichever of
-  `BackgroundColor`, `Sprite` or material is present.
+  to a `TextColor`, `BackgroundColor`, `Sprite`, `MeshMaterial2d<ColorMaterial>`
+  or `MeshMaterial3d<StandardMaterial>` (`.alpha(a)`, `.emissive(strength)`;
+  emissive is for `StandardMaterial` only), or `LookText("key")` next to a
+  `Text`. On a text entity the tag colours the text only (its required,
+  transparent `BackgroundColor` is left alone); elsewhere it colours
+  whichever of `BackgroundColor`, `Sprite` or material is present.
   The look module fills them in on the frame they spawn and on every reload.
+  A material tag recolours the material **asset**, so every entity drawing
+  that handle changes with it, tagged or not; when tagged entities with
+  different roles share one handle, the last one the query visits wins, in
+  no set order. Give each role its own material (2D games often share one
+  `ColorMaterial` per colour, which is fine as long as one colour is one
+  role). Only the material's colour is written: a translucent `.alpha()`
+  needs a material that blends (`ColorMaterial::default()` does;
+  `ColorMaterial::from(opaque colour)` is opaque).
 - **Ask it**: `Option<Res<ActiveLook>>` and `colour(role)`, `string(key)`,
   `slot(name)`, `glow(role)`, `recipe_number(slot, recipe, param)`; `Res<LookAssets>` for a
   pack's decoded images and audio overrides.
@@ -402,3 +411,38 @@ slot your game reads, to a value unlike the default.
 Editor tunables that only change the look are marked `.cosmetic()` (for
 example `#[reflect(@Tune::colour("Coin colour").cosmetic())]`), which keeps
 them out of a replay's start values, content hash and checksum.
+
+## Porting into a game
+
+Copy `src/look/` from **template main**, byte for byte, `editor.rs`
+included; never edit it in the game, and never diff against another game's
+copy (Voidrunner's has drifted from main and is not a reference). The
+template's `AGENTS.md` ("Look Packs", **Porting**) lists the Cargo and
+`build.rs` lines. Two of them depend on the game:
+
+- **2D without `bevy_pbr`.** The `StandardMaterial` retint needs `bevy_pbr`.
+  A game whose Bevy features leave it out adds one line to `build.rs`'s
+  `main`, before `look_embed::embed_looks();`:
+
+  ```rust
+  println!("cargo::rustc-cfg=gx_look_no_pbr");
+  ```
+
+  It is a build-script cfg, not a Cargo feature, because CI builds with
+  `--all-features` and the switch has to stay off for 3D games. `embed.rs`
+  declares the cfg, so a 3D game that never sets it gets no warning.
+  `tools/test_look_2d.sh` (in CI) proves `src/look/` builds this way with
+  no `bevy_pbr` in the graph.
+- **The editor.** `src/look/editor.rs` is behind `feature = "editor"`, and
+  it needs the template's tunables layer (`game::content`). `embed.rs`
+  declares the feature value for the `unexpected_cfgs` lint, so a game
+  without the editor needs nothing. A game must not declare `editor = []`
+  unless it has the tunables layer: CI's `--all-features` would then build
+  `editor.rs` and fail.
+
+Tests: copy `look_contract_tests` from the template's `src/ui/theme.rs`
+unchanged (end-card roles, end-card column fit, string defaults); it uses
+only `crate::look`, `theme` and `ui::fit::ui_width`. The template's
+`look_contract_game_tests` (every sound is a cue a pack can override) reads
+the template's own audio module: write a game's own version against its
+sound list, or leave it out while `AUDIO_CUES` is empty.

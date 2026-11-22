@@ -92,6 +92,13 @@ jobs:
       - name: Check web Look Pack fetch path
         run: GX_WEB_EMBED_MAX=100 cargo check --target wasm32-unknown-unknown
 
+      # src/look/ in a 2D game: a scratch crate with the fleet's smallest 2D
+      # Bevy feature set (no bevy_pbr in the graph, asserted) and the
+      # gx_look_no_pbr cfg, under clippy -D warnings. The template keeps
+      # pbr, so nothing else here would catch a pbr-only use in src/look/.
+      - name: Look Packs without bevy_pbr (2D games)
+        run: tools/test_look_2d.sh
+
       - name: Entitlement middleware tests
         run: node --test tools/test_entitlement.mjs
 
