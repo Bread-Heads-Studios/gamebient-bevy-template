@@ -204,10 +204,12 @@ pub fn end_card_style() -> crate::look::EndCardStyle {
     }
 }
 
+/// The look contract's tests every game needs. Games copy this module
+/// unchanged: it uses only `crate::look`, this file (`PALETTE`, `STRINGS`,
+/// `end_card_text_width`, `end_card_style`) and `crate::ui::fit::ui_width`.
 #[cfg(test)]
 mod look_contract_tests {
     use super::*;
-    use crate::game::audio::{MUSIC, SfxEvent};
 
     #[test]
     fn the_contract_declares_every_end_card_role() {
@@ -235,6 +237,28 @@ mod look_contract_tests {
     }
 
     #[test]
+    fn string_defaults_fit_their_own_limits() {
+        for s in STRINGS {
+            assert!(
+                s.default.len() <= s.max_chars,
+                "{} default is longer than {}",
+                s.key,
+                s.max_chars
+            );
+        }
+    }
+}
+
+/// Template-only: this reads this game's own audio module
+/// (`game::audio::{MUSIC, SfxEvent, music_key}`). A game writes its own
+/// version against its own sound list, or drops it while `AUDIO_CUES` is
+/// empty.
+#[cfg(test)]
+mod look_contract_game_tests {
+    use super::*;
+    use crate::game::audio::{MUSIC, SfxEvent};
+
+    #[test]
     fn every_sound_the_game_plays_is_a_cue_a_pack_can_override() {
         for e in SfxEvent::ALL {
             let cue = format!("sfx.{}", e.name());
@@ -251,18 +275,6 @@ mod look_contract_tests {
             assert!(
                 AUDIO_CUES.contains(&cue.as_str()),
                 "{cue} missing from AUDIO_CUES"
-            );
-        }
-    }
-
-    #[test]
-    fn string_defaults_fit_their_own_limits() {
-        for s in STRINGS {
-            assert!(
-                s.default.len() <= s.max_chars,
-                "{} default is longer than {}",
-                s.key,
-                s.max_chars
             );
         }
     }
