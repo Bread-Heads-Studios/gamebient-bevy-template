@@ -28,6 +28,7 @@ pub mod manifest;
 pub mod names;
 pub mod node;
 pub mod pack;
+pub mod refit;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod reload;
 pub mod runtime;
@@ -51,6 +52,7 @@ pub use manifest::{
     EndCard, ImageSlot, LookKind, Manifest, Param, Prim, Primitive, RecipeSlot, ShapeSlot, Slot,
 };
 pub use node::{LookBorder, LookGradient, LookTint};
+pub use refit::LookFit;
 pub use runtime::ActiveLook;
 pub use select::Selection;
 pub use shape::{DEFAULT_DETAIL, DETAIL_RANGE, build_mesh, primitive_transform, vertex_count};
@@ -120,6 +122,7 @@ impl Plugin for LookPlugin {
                     apply::retext,
                     node::retint_border,
                     node::retint_gradient,
+                    refit::refit_text,
                 )
                     .in_set(LookSet),
             )

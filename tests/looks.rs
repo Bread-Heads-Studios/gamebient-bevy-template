@@ -1,6 +1,8 @@
 //! Look Packs end to end, for any game: built-in packs validate against the
-//! game's contract, tagged entities pick up a pack, no pack changes a
-//! replay, and a pack folder reloads live.
+//! game's contract, tagged entities (`LookColour`, `LookText`, `LookBorder`,
+//! `LookGradient`, `LookFit`) pick up a pack, no pack changes a replay, and
+//! a pack folder reloads live. `LookGlow` needs `bevy_pbr`, so its tests are
+//! unit tests in `src/look/glow.rs`, not here.
 //!
 //! **Copy this file into a game unchanged** (only the crate name in the
 //! `use` lines differs). Every test is generic over the game's own contract
@@ -17,7 +19,10 @@
 
 use bevy::prelude::*;
 use gamebient_game::look::validate::{parse_colour, validate};
-use gamebient_game::look::{self, ActiveLook, LookColour, LookPlugin, LookText, Selection};
+use gamebient_game::look::{
+    self, ActiveLook, LookBorder, LookColour, LookFit, LookGradient, LookPlugin, LookText,
+    LookTint, Selection,
+};
 use gamebient_game::ui::theme;
 
 fn app_with(selection: Selection) -> App {
@@ -282,6 +287,118 @@ fn a_tagged_color_material_takes_the_pack_colour() {
     app.update();
     assert_eq!(colour(&app, &shared), default_colour(p.role));
     assert_eq!(colour(&app, &own), default_colour(p.role2).with_alpha(0.5));
+}
+
+/// `LookBorder` and `LookGradient` colour a node's border and gradient
+/// stops on spawn, follow a look change, and go back to the role defaults
+/// on a clear. A `None` stop keeps its spawned colour throughout.
+#[test]
+fn border_and_gradient_tags_follow_the_look_and_restore_on_clear() {
+    let p = probe();
+    let mut app = app_with(Selection::Embedded(p.id.into()));
+    let structural = Color::srgb(0.01, 0.02, 0.03);
+    let node = app
+        .world_mut()
+        .spawn((
+            BorderColor::all(default_colour(p.role)),
+            BackgroundGradient::from(LinearGradient::to_bottom(vec![
+                ColorStop::new(default_colour(p.role), Val::Percent(0.0)),
+                ColorStop::new(structural, Val::Percent(50.0)),
+                ColorStop::new(default_colour(p.role2), Val::Percent(100.0)),
+            ])),
+            LookBorder::new(p.role).alpha(0.5),
+            LookGradient::new([
+                Some(LookTint::new(p.role)),
+                None,
+                Some(LookTint::new(p.role2).alpha(0.25)),
+            ]),
+        ))
+        .id();
+    let stops = |app: &App| -> Vec<Color> {
+        match &app.world().get::<BackgroundGradient>(node).unwrap().0[0] {
+            Gradient::Linear(l) => l.stops.iter().map(|s| s.color).collect(),
+            _ => unreachable!(),
+        }
+    };
+    app.update();
+    assert_eq!(
+        *app.world().get::<BorderColor>(node).unwrap(),
+        BorderColor::all(p.colour().with_alpha(0.5))
+    );
+    assert_eq!(
+        stops(&app),
+        vec![p.colour(), structural, p.colour2().with_alpha(0.25)]
+    );
+
+    // Back to the game's own look (what a clear does): the role defaults.
+    app.insert_resource(ActiveLook::resolve(&theme::LOOK, Selection::Default));
+    app.world_mut().write_message(look::LookChanged);
+    app.update();
+    assert_eq!(
+        *app.world().get::<BorderColor>(node).unwrap(),
+        BorderColor::all(default_colour(p.role).with_alpha(0.5))
+    );
+    assert_eq!(
+        stops(&app),
+        vec![
+            default_colour(p.role),
+            structural,
+            default_colour(p.role2).with_alpha(0.25)
+        ]
+    );
+}
+
+/// `LookFit` sizes every string key: the game's own string keeps its
+/// average-advance size exactly, any string a pack may set (up to
+/// `max_chars` of the widest glyph) fits the line, and the size follows a
+/// look change and a clear. The metrics are a stand-in face, so this holds
+/// the arithmetic for any game; `fonts::tests` holds each real face.
+#[test]
+fn look_fit_keeps_the_default_size_and_fits_any_pack_string() {
+    let (advance, widest) = (0.62, 1.1);
+    for s in theme::STRINGS {
+        for line_px in [200.0, 648.0, 864.0] {
+            let fit = LookFit::new(s.key, 72.0, advance, widest, line_px);
+            let own = look::refit::size_for_em(advance, s.default, 72.0, line_px);
+            assert_eq!(fit.size_for(s.default, s.default), own, "{}", s.key);
+            let worst = "W".repeat(s.max_chars);
+            let size = fit.size_for(&worst, s.default);
+            assert!(size <= own, "{}", s.key);
+            assert!(
+                size == 1.0 || s.max_chars as f32 * widest * size <= line_px,
+                "{}: {} glyphs at {size} overflow {line_px}",
+                s.key,
+                s.max_chars
+            );
+        }
+    }
+
+    let p = probe();
+    let spec = theme::STRINGS.iter().find(|s| s.key == p.key).unwrap();
+    let mut app = app_with(Selection::Default);
+    let fit = LookFit::new(p.key, 72.0, advance, widest, 300.0);
+    let line = app
+        .world_mut()
+        .spawn((
+            Text::new(spec.default),
+            TextFont::from_font_size(5.0),
+            LookText(p.key),
+            fit,
+        ))
+        .id();
+    let size = |app: &App| app.world().get::<TextFont>(line).unwrap().font_size;
+    app.update();
+    assert_eq!(size(&app), fit.size_for(spec.default, spec.default));
+
+    app.insert_resource(p.look());
+    app.world_mut().write_message(look::LookChanged);
+    app.update();
+    assert_eq!(size(&app), fit.size_for(&p.text(), spec.default));
+
+    app.insert_resource(ActiveLook::resolve(&theme::LOOK, Selection::Default));
+    app.world_mut().write_message(look::LookChanged);
+    app.update();
+    assert_eq!(size(&app), fit.size_for(spec.default, spec.default));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
