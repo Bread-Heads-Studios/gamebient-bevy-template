@@ -12,6 +12,7 @@ pub mod player;
 #[cfg(feature = "record")]
 pub mod record;
 pub mod replay;
+pub mod rule_table;
 pub mod rules;
 pub mod scoring;
 pub mod sim;
@@ -45,6 +46,8 @@ impl Plugin for GamePlugin {
         kinds_registration(app);
         // After the kinds: the embedded level's kinds are checked against them.
         app.add_plugins(content::ContentPlugin);
+        // After the content kit: the embedded rules name its kinds.
+        app.add_plugins(rules::RulesPlugin);
         app.init_state::<GameState>()
             // Canon input + web glue. StateEvents posts every GameState
             // transition to the embedding host (website analytics, cabinet).

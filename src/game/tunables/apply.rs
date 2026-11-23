@@ -5,10 +5,11 @@
 use bevy::prelude::*;
 
 use crate::game::content::level::{LevelHash, LevelSource, test_level_hash};
+use crate::game::rules::{RulesHash, test_rules_hash};
 use crate::game::sim::{Checksum, SimTick};
 use crate::game::states::GameState;
 
-use super::hash::{content, fold_value};
+use super::hash::{content, fold_value, with_rules};
 use super::index::{TunableIndex, run_starts, write};
 use super::value::Value;
 
@@ -27,8 +28,9 @@ pub struct TuneChange {
 /// last) run.
 #[derive(Resource, Default, Clone, Debug, PartialEq)]
 pub struct TuneLog {
-    /// The run's level (`content::level::LevelHash`, or the test level's
-    /// hash under `LevelSource::Test`); folded first by `hash::content`.
+    /// The run's key: the level hash with the rules hash
+    /// (`hash::with_rules`), or the test level's and test rules' under
+    /// `LevelSource::Test`; folded first by `hash::content`.
     pub level: u64,
     pub starts: Vec<(u16, Value)>,
     pub changes: Vec<TuneChange>,
@@ -89,14 +91,18 @@ pub fn apply_pending_tunes(world: &mut World) {
     }
 }
 
-/// `OnEnter(Playing)`, chained after `sim::begin_run`: the run's level hash
-/// and start values become the log's `level` and `starts`, and their hash is
-/// the first thing the fresh checksum folds.
+/// `OnEnter(Playing)`, chained after `sim::begin_run`: the run's key (the
+/// level hash with the rules hash, `hash::with_rules`) and start values
+/// become the log's `level` and `starts`, and their hash is the first
+/// thing the fresh checksum folds.
 pub fn begin_run_tunables(world: &mut World) {
     let starts = run_starts(world);
     let level = match world.get_resource::<LevelSource>() {
-        Some(LevelSource::Test) => test_level_hash(),
-        _ => world.get_resource::<LevelHash>().map_or(0, |h| h.0),
+        Some(LevelSource::Test) => with_rules(test_level_hash(), test_rules_hash()),
+        _ => with_rules(
+            world.get_resource::<LevelHash>().map_or(0, |h| h.0),
+            world.get_resource::<RulesHash>().map_or(0, |h| h.0),
+        ),
     };
     let log = TuneLog {
         level,
@@ -245,6 +251,33 @@ mod tests {
             .resource_mut::<NextState<GameState>>()
             .set(GameState::Playing);
         app.update();
-        assert_eq!(app.world().resource::<TuneLog>().level, test_level_hash());
+        assert_eq!(
+            app.world().resource::<TuneLog>().level,
+            with_rules(test_level_hash(), test_rules_hash())
+        );
+    }
+
+    #[test]
+    fn begin_run_folds_the_rules_hash_into_the_level_key() {
+        use crate::game::rules::set_rules;
+        let mut app = build_headless_app();
+        set_rules(
+            app.world_mut(),
+            br#"{"v":1,"rules":[{"id":"a","when":{"start":true},"do":[{"add":["score",1]}]}]}"#,
+        )
+        .unwrap();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        let level = app.world().resource::<LevelHash>().0;
+        let rules = app.world().resource::<RulesHash>().0;
+        assert_ne!(rules, 0);
+        assert_eq!(
+            app.world().resource::<TuneLog>().level,
+            with_rules(level, rules)
+        );
+        assert_ne!(app.world().resource::<TuneLog>().level, level);
     }
 }

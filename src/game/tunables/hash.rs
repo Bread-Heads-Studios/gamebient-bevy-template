@@ -62,6 +62,20 @@ pub fn content_of_bytes<'a>(
     sum.0
 }
 
+/// The run's content key: the level hash alone when the run has no rules
+/// (`rules == 0`), so every replay recorded before rules existed keeps its
+/// hash; otherwise the level and the rules hash folded together. This is
+/// what `TuneLog::level` holds and `content_of_bytes` folds first.
+pub fn with_rules(level: u64, rules: u64) -> u64 {
+    if rules == 0 {
+        return level;
+    }
+    let mut sum = Checksum::default();
+    sum.fold(level);
+    sum.fold(rules);
+    sum.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +138,14 @@ mod tests {
                 c.iter().map(|(t, i, b)| (*t, *i, b.as_slice()))
             )
         );
+    }
+
+    #[test]
+    fn no_rules_leave_the_level_key_as_it_was() {
+        assert_eq!(with_rules(0, 0), 0);
+        assert_eq!(with_rules(42, 0), 42);
+        assert_ne!(with_rules(42, 7), 42);
+        assert_ne!(with_rules(42, 7), with_rules(42, 8));
+        assert_ne!(with_rules(42, 7), with_rules(43, 7));
     }
 }
