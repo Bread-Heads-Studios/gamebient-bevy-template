@@ -32,7 +32,7 @@
 //!
 //! TEMPLATE NOTE: replace `DISPLAY` and `BODY` with the game's own faces
 //! (and add `ACCENT` if it has one): new TTF + licence in `src/ui/fonts/`, a
-//! fresh UUID, the real weight, and a measured `advance_em`. Then list every
+//! fresh UUID, the real weight, a measured `advance_em` and `widest_em`. Then list every
 //! string the UI fits in `tests::FITTED`. Leave `STUDIO` and `STUDIO_ITALIC`
 //! exactly as they are: the studio logo is shared.
 
@@ -49,6 +49,8 @@ pub const DISPLAY: Face = Face {
     weight: FontWeight::BOLD,
     // Measured: A-Z 0-9 average 0.621 em.
     advance_em: 0.63,
+    // Measured: widest printable ASCII glyph '@' 1.014 em.
+    widest_em: 1.015,
 };
 
 /// Body face: Inter SemiBold (text optical size).
@@ -59,6 +61,8 @@ pub const BODY: Face = Face {
     weight: FontWeight::SEMIBOLD,
     // Measured: A-Z 0-9 average 0.672 em.
     advance_em: 0.68,
+    // Measured: widest printable ASCII glyph 'W' 1.020 em.
+    widest_em: 1.021,
 };
 
 /// House studio face: Fraunces Black (72pt optical size, Soft 50). Shared
@@ -70,6 +74,8 @@ pub const STUDIO: Face = Face {
     weight: FontWeight::BLACK,
     // Measured: A-Z 0-9 average 0.702 em.
     advance_em: 0.71,
+    // Measured: widest printable ASCII glyph 'W' 1.0915 em.
+    widest_em: 1.092,
 };
 
 /// House studio italic: Fraunces Italic (9pt optical size, Soft 50).
@@ -81,6 +87,8 @@ pub const STUDIO_ITALIC: Face = Face {
     weight: FontWeight::NORMAL,
     // Measured: A-Z 0-9 average 0.636 em.
     advance_em: 0.64,
+    // Measured: widest printable ASCII glyph 'W' 0.9755 em.
+    widest_em: 0.976,
 };
 
 /// Every embedded face, in install order.
@@ -242,6 +250,72 @@ mod tests {
                 face.name,
                 face.advance_em
             );
+        }
+    }
+
+    /// Every glyph the Look Pack validator accepts in a string.
+    const PRINTABLE: std::ops::RangeInclusive<char> = ' '..='~';
+
+    #[test]
+    fn declared_widest_covers_every_printable_ascii_glyph() {
+        for face in ALL {
+            let (widest, c) = PRINTABLE
+                .map(|c| (real_advance_em(face, &c.to_string()), c))
+                .fold((0.0, ' '), |a, b| if b.0 > a.0 { b } else { a });
+            assert!(
+                widest <= face.widest_em,
+                "{}: {c:?} is {widest:.4} em > widest_em {}",
+                face.name,
+                face.widest_em
+            );
+            assert!(
+                face.widest_em - widest < 0.01,
+                "{}: widest_em {} is loose against {c:?} {widest:.4}",
+                face.name,
+                face.widest_em
+            );
+            assert!(face.widest_em >= face.advance_em, "{}", face.name);
+        }
+    }
+
+    /// The worst string a pack may set for any key (its `max_chars` of the
+    /// face's widest glyph) fits the line a `LookFit` gives it, in the real
+    /// TTF's advances, on the view and in a narrow box; the default string
+    /// keeps exactly its `fitted` size.
+    #[test]
+    fn a_worst_case_pack_string_fits_its_look_fit_line() {
+        for face in ALL {
+            let widest = PRINTABLE
+                .max_by(|a, b| {
+                    real_advance_em(face, &a.to_string())
+                        .total_cmp(&real_advance_em(face, &b.to_string()))
+                })
+                .unwrap();
+            for spec in theme::STRINGS {
+                let worst = widest.to_string().repeat(spec.max_chars);
+                for fit in [
+                    face.look_fit(spec.key, 88.0),
+                    face.look_fit_in(spec.key, 88.0, 300.0),
+                ] {
+                    let size = fit.size_for(&worst, spec.default);
+                    let width = real_advance_em(face, &worst) * size;
+                    assert!(
+                        size == 1.0 || width <= fit.line_px,
+                        "{} {}: {worst:?} at {size} is {width} > {}",
+                        face.name,
+                        spec.key,
+                        fit.line_px
+                    );
+                }
+                assert_eq!(
+                    face.look_fit(spec.key, 88.0)
+                        .size_for(spec.default, spec.default),
+                    face.fitted(spec.default, 88.0).font_size,
+                    "{} {}",
+                    face.name,
+                    spec.key
+                );
+            }
         }
     }
 

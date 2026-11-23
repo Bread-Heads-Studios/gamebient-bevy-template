@@ -6,6 +6,15 @@
 //! to exceed on the strings the UI fits; `fonts::tests` parses the real TTFs
 //! and holds every face to that promise. This file is copied verbatim into
 //! games, so it names no font of its own.
+//!
+//! Average-advance fitting is right for the game's own fixed strings,
+//! which `fonts::tests` measures. A string a pack supplies can be any
+//! printable ASCII up to the key's `max_chars`, and an all-`W` (or all-`@`)
+//! line is far wider than the average, so pack-swappable lines fit on each
+//! face's `widest_em` instead: build a `look::LookFit` with
+//! [`Face::look_fit`] / [`Face::look_fit_in`]. The game's own string keeps
+//! exactly its `fitted` size there; any other word is sized at the widest
+//! glyph (`look/refit.rs`).
 
 use bevy::prelude::*;
 
@@ -27,6 +36,11 @@ pub struct Face {
     /// digits text (the case every fitted line is written in). Measured from
     /// the TTF and checked by `fonts::tests`; never guess it.
     pub advance_em: f32,
+    /// The widest single glyph's advance, in ems, over printable ASCII
+    /// (`' '..='~'`, every character the Look Pack validator accepts in a
+    /// string). Measured from the TTF and checked by `fonts::tests`; it is
+    /// what makes any pack string up to `max_chars` fit (`LookFit`).
+    pub widest_em: f32,
 }
 
 impl Face {
@@ -44,6 +58,35 @@ impl Face {
     /// line of the game's UI width.
     pub fn fitted(&self, text: &str, max_size: f32) -> TextFont {
         self.font(fit_font_size(self, text, max_size, ui_width()))
+    }
+
+    /// A `LookFit` for string `key` set in this face on one line of the
+    /// game's UI width (the line `fitted` fits): the game's own string gets
+    /// exactly `fitted(default, max_size)`'s size, any other the size at
+    /// which `max_chars` widest glyphs still fit.
+    pub fn look_fit(&self, key: &'static str, max_size: f32) -> crate::look::LookFit {
+        crate::look::LookFit::new(
+            key,
+            max_size,
+            self.advance_em,
+            self.widest_em,
+            ui_width() * MAX_LINE_SHARE,
+        )
+    }
+
+    /// [`Face::look_fit`] for a line inside a box `box_px` UI pixels wide
+    /// (a card's or a rail's interior: its width less padding and border).
+    /// Only a pack's words are fitted to the box (the whole box is their
+    /// line); the game's own string keeps exactly its `fitted(default,
+    /// max_size)` size, so switching a line to this never changes the
+    /// default look, even where that size overflows the box.
+    pub fn look_fit_in(
+        &self,
+        key: &'static str,
+        max_size: f32,
+        box_px: f32,
+    ) -> crate::look::LookFit {
+        self.look_fit(key, max_size).in_box(box_px)
     }
 }
 
@@ -82,6 +125,7 @@ mod tests {
         handle: bevy::asset::uuid_handle!("0f170000-0000-4000-8000-000000000001"),
         weight: FontWeight::NORMAL,
         advance_em: 0.6,
+        widest_em: 0.6,
     };
 
     #[test]
@@ -147,6 +191,37 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn look_fit_gives_the_default_its_fitted_size_bit_for_bit() {
+        let wide = Face {
+            advance_em: 0.63,
+            widest_em: 1.02,
+            ..MONO
+        };
+        for text in ["A", "GAMEBIENT GAME", "GRAND THEFT AUTO-REPLY", "W"] {
+            for max in [24.0, 72.0, 88.0] {
+                assert_eq!(
+                    wide.look_fit("k", max).default_size(text),
+                    wide.fitted(text, max).font_size,
+                    "{text} {max}"
+                );
+            }
+        }
+        // In a box the default still gets its `fitted` size, even when that
+        // overflows the box; only other words fit it.
+        let boxed = wide.look_fit_in("k", 46.0, 200.0);
+        assert_eq!(boxed.line_px, 200.0);
+        let own = "LAST SLICE";
+        let size = boxed.size_for(own, own);
+        assert_eq!(size, wide.fitted(own, 46.0).font_size);
+        assert!(
+            10.0 * 0.63 * size > 200.0,
+            "the case where the box would bind"
+        );
+        let pack = "WWWWWWWWWW";
+        assert!(10.0 * 1.02 * boxed.size_for(pack, own) <= 200.0);
     }
 
     #[test]

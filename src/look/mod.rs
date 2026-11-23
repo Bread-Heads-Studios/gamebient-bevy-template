@@ -19,11 +19,16 @@ pub mod contract;
 pub mod editor;
 pub mod end_card;
 pub mod fetch;
+// Needs bevy_pbr (StandardMaterial); see `apply.rs`.
+#[cfg(not(gx_look_no_pbr))]
+pub mod glow;
 pub mod hash;
 pub mod hosted;
 pub mod manifest;
 pub mod names;
+pub mod node;
 pub mod pack;
+pub mod refit;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod reload;
 pub mod runtime;
@@ -40,10 +45,14 @@ use bevy::prelude::*;
 pub use apply::{LookAssets, LookChanged, LookColour, LookText};
 pub use contract::{Contract, ParamKind, ParamSpec, RecipeSpec, ShapeSpec, SlotSpec, StringSpec};
 pub use end_card::{EndCardPart, EndCardSlot, EndCardStyle, Part};
+#[cfg(not(gx_look_no_pbr))]
+pub use glow::LookGlow;
 pub use hosted::HostedLook;
 pub use manifest::{
     EndCard, ImageSlot, LookKind, Manifest, Param, Prim, Primitive, RecipeSlot, ShapeSlot, Slot,
 };
+pub use node::{LookBorder, LookGradient, LookTint};
+pub use refit::LookFit;
 pub use runtime::ActiveLook;
 pub use select::Selection;
 pub use shape::{DEFAULT_DETAIL, DETAIL_RANGE, build_mesh, primitive_transform, vertex_count};
@@ -111,6 +120,9 @@ impl Plugin for LookPlugin {
                     #[cfg(not(gx_look_no_pbr))]
                     apply::retint_material,
                     apply::retext,
+                    node::retint_border,
+                    node::retint_gradient,
+                    refit::refit_text,
                 )
                     .in_set(LookSet),
             )
@@ -128,6 +140,14 @@ impl Plugin for LookPlugin {
                     .in_set(LookSet)
                     .before(bevy::asset::AssetEventSystems),
             );
+        // After `retint_material`, so a `LookGlow` emissive wins (glow.rs).
+        #[cfg(not(gx_look_no_pbr))]
+        app.add_systems(
+            PostUpdate,
+            glow::retint_glow
+                .in_set(LookSet)
+                .after(apply::retint_material),
+        );
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(Update, reload::hot_reload);
         // The editor's look.preview / look.preview.clear (src/look/editor.rs).
