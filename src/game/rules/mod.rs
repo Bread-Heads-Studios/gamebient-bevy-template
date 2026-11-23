@@ -18,6 +18,9 @@
 //! --check-copies`); a game changes `rule_table.rs`, never these files.
 
 pub mod model;
+pub mod run;
+
+pub use run::{begin_run_rules, run_rules};
 
 use bevy::prelude::*;
 use serde_json::{Value as Json, json};
@@ -77,7 +80,8 @@ impl Plugin for RulesPlugin {
         app.init_resource::<Rules>()
             .init_resource::<RulesHash>()
             .init_resource::<PendingRules>()
-            .init_resource::<RunEnd>();
+            .init_resource::<RunEnd>()
+            .init_resource::<run::RunRules>();
         if let Some(bytes) = embedded("rules.json")
             && let Err(e) = set_rules(app.world_mut(), bytes)
         {

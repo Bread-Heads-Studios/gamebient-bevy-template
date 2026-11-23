@@ -103,6 +103,8 @@ impl Plugin for GamePlugin {
                     replay::recorder::begin_recording,
                     // The level's things, in file order (the player among them).
                     content::level::spawn_level,
+                    // After the level: every thing's start, for `respawn`.
+                    rules::begin_run_rules,
                 )
                     .chain(),
             )
@@ -127,6 +129,9 @@ impl Plugin for GamePlugin {
                     tunables::apply_pending_tunes,
                     player::move_player,
                     scoring::collect_coins,
+                    // The data rules (`content/rules.json`), after physics
+                    // and the game's own Rust rules.
+                    rules::run_rules,
                     scoring::handle_score_events,
                     sim::checksum_tick,
                     player::checksum_player,
