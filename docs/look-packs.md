@@ -390,6 +390,79 @@ Game code uses a look in two ways:
   `slot(name)`, `glow(role)`, `recipe_number(slot, recipe, param)`; `Res<LookAssets>` for a
   pack's decoded images and audio overrides.
 
+## Helpers: what to reach for
+
+`LookColour` and `LookText` cover a text's colour and words, a flat
+`BackgroundColor`, a `Sprite` and a material's base colour. For the rest,
+`src/look/` has one tested helper each; a port uses these and writes no
+game-local copy. All are tags (spawn code puts them next to the game's
+own values; `LookPlugin` applies them in `LookSet` on the frame they
+spawn and on every `LookChanged`, which `look.clear` and
+`look.preview.clear` also send, so a clear puts the role defaults back).
+
+| Need | Use | Notes |
+|---|---|---|
+| A node's border | `LookBorder::new(role)` (`.alpha(a)`) | All four sides of `BorderColor`. |
+| Gradient stops | `LookGradient::two(LookTint::new(top), LookTint::new(bottom))`, `LookGradient::new([Some(t), None, ..])`, `LookGradient::role(role, &[alphas])` | Stop `i` of every gradient in the `BackgroundGradient`; `None` keeps the spawned colour. Positions and shape untouched. |
+| A card (`card_with`) | `LookColour::new(fill)` + `LookBorder` + `LookGradient::two` | The roles' defaults must equal the `CardStyle` literals. |
+| A glow that is a multiple of the base | `LookColour::new(role).emissive(s)` | Emissive = colour × s × `glow`. |
+| A glow that is **not** a multiple of the base | `LookColour::new(role)` + `LookGlow::new(glow_role, game_emissive)` | Default look: exactly `game_emissive`. Pack: pack colour × the game's emissive-to-default brightness ratio, × `glow`. 3D only (compiled out under `gx_look_no_pbr`). Never combine with `.emissive(s)` on one material. |
+| A fitted line whose words a pack sets | `LookText(key)` + `face.look_fit(key, max)` or `face.look_fit_in(key, max, box_px)` + the face's `TextFont` | `refit_text` sets `font_size`: the game's own string keeps exactly its `face.fitted(default, max)` size; any other is sized at the face's `widest_em`, never above the default's size, so any string up to `max_chars` fits the line. |
+| A colour a game system paints from state | No tag. The system reads `look.colour(role)` / `look.mix(from, to, t)` and re-runs on a look change. | See pattern 1 below. |
+| A shared material that sim entities draw | An anchor entity (below). | |
+
+### The four review patterns
+
+Every port review in the first wave found one of these. Check each.
+
+1. **Static tags on system-written colours.** A heart that goes grey when
+   lost, a rarity rim, combo heat: a game system writes the colour from
+   state. A static `LookColour` on it repaints it the role's flat colour on
+   every `LookChanged`, so a look change mid-run draws lost hearts as lit.
+   Leave such entities untagged; the game system reads the role from
+   `Option<Res<ActiveLook>>` and also re-runs when the look changes
+   (`look.is_changed()`, or a `LookChanged` reader), writing exactly its
+   old colour under the default look.
+2. **Fit-at-spawn-only.** A line sized at spawn from the pack's string
+   keeps that size when a hosted `look.set`, a reload or a clear changes
+   the words. Use `LookFit`, or rebuild the screen on `LookChanged`.
+3. **Fit width vs container.** A line fitted against the view but drawn in
+   a card, plank or rail overflows the box. Fit to the box's interior
+   (width less padding and border) with `look_fit_in`.
+4. **Widest-glyph `max_chars`.** `max_chars` counts characters, and
+   `Face::advance_em` is an average: twelve `W`s are far wider than twelve
+   average glyphs. `LookFit` sizes a pack's words at `Face::widest_em`, the
+   widest printable-ASCII glyph (every character the validator accepts,
+   so `@` and `%` count, not only A–Z and 0–9). For a fixed-size line, set
+   `max_chars` so `max_chars × widest_em × size` fits the box, and test it
+   against the TTF.
+
+### Anchor entities for shared materials
+
+A material handle that sim spawns draw (every tire, every scoop flavour)
+cannot be tagged on those entities: sim spawns never carry look tags.
+Spawn one persistent anchor per handle from render-side code
+(`AssetsPlugin` / `UiPlugin`, once the handles exist):
+
+```rust
+for (role, handle) in FLAVOR_ROLES.iter().zip(&assets.flavor_materials) {
+    commands.spawn((LookColour::new(role), MeshMaterial3d(handle.clone())));
+}
+commands.spawn((
+    LookColour::new("rail"),
+    LookGlow::new("rail_glow", RAIL_EMISSIVE),
+    MeshMaterial3d(assets.rail_material.clone()),
+));
+```
+
+The material retint rewrites the asset, so every mesh drawing the handle
+follows, from the first frame and on every change. The anchor has no
+mesh, so it draws nothing, and no `GameEntity` / `StateScoped`, so it lives
+across runs. One role per handle: two anchors with different roles on one
+handle race. 2D games use `MeshMaterial2d<ColorMaterial>` the same way.
+A colour derived from a role (a tint shift, a mix) cannot be an anchor;
+write it from a render-side system that compares before `get_mut`.
+
 **The one rule:** nothing in the sim (`SimSet`, `OnEnter(Playing)` spawns,
 anything the replay verifier runs) reads `ActiveLook` or `LookAssets`. Split
 an entity into a sim spawn and a render-side dresser instead: the template's
