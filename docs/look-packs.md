@@ -81,7 +81,7 @@ To test against a local website, build with
 | Where | How |
 |---|---|
 | Native, built-in | `GX_LOOK=night-shift cargo run` (or `cargo run -- --look night-shift`) |
-| Native, your folder (live reload) | `cargo run -- --look ./my-packs/acme` — save `look.json` or a PNG and the game updates within half a second (except the menu title, which is fitted when the menu spawns and refreshes the next time it opens); a broken save is logged and the last good look stays |
+| Native, your folder (live reload) | `cargo run -- --look ./my-packs/acme` — save `look.json` or a PNG and the game updates within half a second; a broken save is logged and the last good look stays |
 | Web | `…/?look=night-shift` (built-in packs only) |
 | Check | `cargo run --features look-check --bin look-check -- ./my-packs/acme` |
 
@@ -402,12 +402,12 @@ spawn and on every `LookChanged`, which `look.clear` and
 
 | Need | Use | Notes |
 |---|---|---|
-| A node's border | `LookBorder::new(role)` (`.alpha(a)`) | All four sides of `BorderColor`. |
+| A node's border | `LookBorder::new(role)` (`.alpha(a)`) | Uniform borders only: it writes all four sides of `BorderColor`, so a top-only accent would become four coloured sides even under the default look. |
 | Gradient stops | `LookGradient::two(LookTint::new(top), LookTint::new(bottom))`, `LookGradient::new([Some(t), None, ..])`, `LookGradient::role(role, &[alphas])` | Stop `i` of every gradient in the `BackgroundGradient`; `None` keeps the spawned colour. Positions and shape untouched. |
 | A card (`card_with`) | `LookColour::new(fill)` + `LookBorder` + `LookGradient::two` | The roles' defaults must equal the `CardStyle` literals. |
 | A glow that is a multiple of the base | `LookColour::new(role).emissive(s)` | Emissive = colour × s × `glow`. |
-| A glow that is **not** a multiple of the base | `LookColour::new(role)` + `LookGlow::new(glow_role, game_emissive)` | Default look: exactly `game_emissive`. Pack: pack colour × the game's emissive-to-default brightness ratio, × `glow`. 3D only (compiled out under `gx_look_no_pbr`). Never combine with `.emissive(s)` on one material. |
-| A fitted line whose words a pack sets | `LookText(key)` + `face.look_fit(key, max)` or `face.look_fit_in(key, max, box_px)` + the face's `TextFont` | `refit_text` sets `font_size`: the game's own string keeps exactly its `face.fitted(default, max)` size; any other is sized at the face's `widest_em`, never above the default's size, so any string up to `max_chars` fits the line. |
+| A glow that is **not** a multiple of the base | `LookColour::new(role)` + `LookGlow::new(role, game_emissive)`, **the same role on both** | Default look: exactly `game_emissive`. Pack: the pack's colour for the role × the game's emissive-to-default brightness ratio, × the pack's `glow` for the role, so one palette entry recolours base and glow together and one `glow` entry dims it. List the role in the contract's `glow`. 3D only (compiled out under `gx_look_no_pbr`). Never combine with `.emissive(s)` on one material. A separate glow role (`LookGlow::new("rail_glow", ..)`) is the exception, only for a part whose glow a pack should recolour independently of its body: the contract then lists `rail_glow` in `palette` and `glow`, and a pack must set and dim `rail_glow` itself (setting `rail` alone leaves the glow in the game's hue). |
+| A fitted line whose words a pack sets | `LookText(key)` + `face.look_fit(key, max)` or `face.look_fit_in(key, max, box_px)` + the face's `TextFont` | `refit_text` sets `font_size`: the game's own string keeps exactly its `face.fitted(default, max)` size (with `look_fit_in` too: the box never re-fits the default, even where the default overflows it); any other is sized at the face's `widest_em` against the line (or box), never above the default's size, so any string up to `max_chars` fits. Only for a line whose whole text is `look.string(key)`: a composed line (`"OWN " + title`, a formatted score) gets the bare string's size and overflows, so size it from a game system. |
 | A colour a game system paints from state | No tag. The system reads `look.colour(role)` / `look.mix(from, to, t)` and re-runs on a look change. | See pattern 1 below. |
 | A shared material that sim entities draw | An anchor entity (below). | |
 
@@ -422,13 +422,22 @@ Every port review in the first wave found one of these. Check each.
    Leave such entities untagged; the game system reads the role from
    `Option<Res<ActiveLook>>` and also re-runs when the look changes
    (`look.is_changed()`, or a `LookChanged` reader), writing exactly its
-   old colour under the default look.
+   old colour under the default look. The same goes for every tag, not only
+   `LookColour`: no `LookBorder` on a border a system highlights (focus,
+   hover, selection), no `LookGradient` on a gradient a system animates,
+   no `LookFit` on a size a system animates (a score pop); each tag
+   rewrites its value on every `LookChanged`.
 2. **Fit-at-spawn-only.** A line sized at spawn from the pack's string
    keeps that size when a hosted `look.set`, a reload or a clear changes
    the words. Use `LookFit`, or rebuild the screen on `LookChanged`.
 3. **Fit width vs container.** A line fitted against the view but drawn in
-   a card, plank or rail overflows the box. Fit to the box's interior
-   (width less padding and border) with `look_fit_in`.
+   a card, plank or rail overflows the box with a pack's longer word. Give
+   it `look_fit_in(key, max, interior)` (width less padding and border):
+   a pack's words fit the box, and the game's own string keeps exactly
+   its `fitted` size, so the default look cannot change. If the game's own
+   string overflows its box too, that is a default-look bug: fix the
+   default (shorter words, a smaller `max`) as a deliberate, screenshotted
+   change, not through the tag.
 4. **Widest-glyph `max_chars`.** `max_chars` counts characters, and
    `Face::advance_em` is an average: twelve `W`s are far wider than twelve
    average glyphs. `LookFit` sizes a pack's words at `Face::widest_em`, the
@@ -448,9 +457,11 @@ Spawn one persistent anchor per handle from render-side code
 for (role, handle) in FLAVOR_ROLES.iter().zip(&assets.flavor_materials) {
     commands.spawn((LookColour::new(role), MeshMaterial3d(handle.clone())));
 }
+// One role for base and glow: a pack's "rail" recolours both, and its
+// glow {"rail": 0.5} dims the glow.
 commands.spawn((
     LookColour::new("rail"),
-    LookGlow::new("rail_glow", RAIL_EMISSIVE),
+    LookGlow::new("rail", RAIL_EMISSIVE),
     MeshMaterial3d(assets.rail_material.clone()),
 ));
 ```

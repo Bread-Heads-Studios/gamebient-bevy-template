@@ -76,14 +76,17 @@ impl Face {
 
     /// [`Face::look_fit`] for a line inside a box `box_px` UI pixels wide
     /// (a card's or a rail's interior: its width less padding and border).
-    /// The whole box is the line; no line share is taken off it.
+    /// Only a pack's words are fitted to the box (the whole box is their
+    /// line); the game's own string keeps exactly its `fitted(default,
+    /// max_size)` size, so switching a line to this never changes the
+    /// default look, even where that size overflows the box.
     pub fn look_fit_in(
         &self,
         key: &'static str,
         max_size: f32,
         box_px: f32,
     ) -> crate::look::LookFit {
-        crate::look::LookFit::new(key, max_size, self.advance_em, self.widest_em, box_px)
+        self.look_fit(key, max_size).in_box(box_px)
     }
 }
 
@@ -206,12 +209,19 @@ mod tests {
                 );
             }
         }
-        let boxed = wide.look_fit_in("k", 46.0, 352.0);
-        assert_eq!(boxed.line_px, 352.0);
-        assert_eq!(
-            boxed.default_size("LAST SLICE"),
-            crate::look::refit::size_for_em(0.63, "LAST SLICE", 46.0, 352.0)
+        // In a box the default still gets its `fitted` size, even when that
+        // overflows the box; only other words fit it.
+        let boxed = wide.look_fit_in("k", 46.0, 200.0);
+        assert_eq!(boxed.line_px, 200.0);
+        let own = "LAST SLICE";
+        let size = boxed.size_for(own, own);
+        assert_eq!(size, wide.fitted(own, 46.0).font_size);
+        assert!(
+            10.0 * 0.63 * size > 200.0,
+            "the case where the box would bind"
         );
+        let pack = "WWWWWWWWWW";
+        assert!(10.0 * 1.02 * boxed.size_for(pack, own) <= 200.0);
     }
 
     #[test]

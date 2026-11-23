@@ -10,17 +10,27 @@
 //! The rule:
 //!
 //! - **The game's own string keeps exactly its authored size**: the size
-//!   `ui::fit` gives it from the face's average advance, `advance_em`
-//!   (`min(line_px / (chars * advance_em), max_size)`, floored), the same
-//!   arithmetic as `Face::fitted`, so the default look is pixel-identical.
+//!   `Face::fitted` gave it, from the face's average advance against the
+//!   view's line (`default_px`): `min(default_px / (chars * advance_em),
+//!   max_size)`, floored, the same arithmetic in the same order. This holds
+//!   for a boxed line too (`in_box`): the box never re-fits the default,
+//!   so tagging a line can never change the default look.
 //! - **Any other string** is sized as if every glyph were the face's
-//!   widest (`widest_em`), and never larger than the default's size. So any
-//!   string a pack may set, up to the key's `max_chars`, fits `line_px`.
+//!   widest (`widest_em`) against `line_px`, and never larger than the
+//!   default's size. So any string a pack may set, up to the key's
+//!   `max_chars`, fits `line_px`.
 //!
-//! `line_px` is the width the line may take, in UI pixels: the line share
-//! of the view (`Face::look_fit` in `ui/fit.rs`) or a container's interior
-//! (`Face::look_fit_in`), never the view when the line sits in a narrower
-//! box. This file names no face; `ui/fit.rs` builds the tag from one.
+//! `line_px` is the width a pack's word may take, in UI pixels: the line
+//! share of the view (`Face::look_fit` in `ui/fit.rs`) or a container's
+//! interior (`Face::look_fit_in`), never the view when the line sits in a
+//! narrower box. This file names no face; `ui/fit.rs` builds the tag.
+//!
+//! **Only for a line whose whole text is `look.string(key)`.** The size is
+//! worked out from the key's string, not from the `Text`, so a composed
+//! line (`"OWN " + title`, a formatted score) gets the bare string's size
+//! and overflows; size such a line from a game system instead (pattern 1).
+//! Nor on a line whose size a game system animates (a score pop): every
+//! `LookChanged` would reset it.
 
 use bevy::prelude::*;
 
@@ -37,8 +47,11 @@ pub struct LookFit {
     pub advance_em: f32,
     /// The face's widest glyph, ems (`Face::widest_em`).
     pub widest_em: f32,
-    /// Width the line may take, UI pixels.
+    /// Width a pack's word may take, UI pixels.
     pub line_px: f32,
+    /// Width the game's own string is fitted against, UI pixels: the line
+    /// `Face::fitted` uses. Equal to `line_px` unless boxed (`in_box`).
+    pub default_px: f32,
 }
 
 /// The largest whole size, up to `max_size`, at which `text` at `em` per
@@ -62,12 +75,21 @@ impl LookFit {
             advance_em,
             widest_em,
             line_px,
+            default_px: line_px,
         }
+    }
+
+    /// The same line drawn inside a box `box_px` wide: a pack's words fit
+    /// the box; the game's own string keeps its size against `default_px`
+    /// (even if that overflows the box: the default look never changes).
+    pub const fn in_box(mut self, box_px: f32) -> Self {
+        self.line_px = box_px;
+        self
     }
 
     /// The size of the game's own string `default`.
     pub fn default_size(&self, default: &str) -> f32 {
-        size_for_em(self.advance_em, default, self.max_size, self.line_px)
+        size_for_em(self.advance_em, default, self.max_size, self.default_px)
     }
 
     /// The size of `text` on a line whose own string is `default`.
@@ -127,6 +149,11 @@ mod tests {
                 assert!(n as f32 * FIT.widest_em * size <= FIT.line_px, "{n}");
             }
         }
+        // In a box: the default keeps its view size, other words fit the box.
+        let boxed = FIT.in_box(200.0);
+        assert_eq!(boxed.size_for("GAMEBIENT GAME", "GAMEBIENT GAME"), 88.0);
+        let w = "W".repeat(14);
+        assert!(14.0 * FIT.widest_em * boxed.size_for(&w, "GAMEBIENT GAME") <= 200.0);
         // A short word does not outgrow the default's size.
         let shrunk = LookFit::new("k", 88.0, 0.63, 1.02, 300.0);
         let own = shrunk.default_size("A FAIRLY LONG ONE");

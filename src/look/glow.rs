@@ -19,10 +19,21 @@
 //! - Either way it is then dimmed by the pack's `glow` for the role
 //!   (`ActiveLook::glow`, `0.0..=1.0`), never brightened.
 //!
-//! The ratio is taken against the role's **contract default**, so the role
-//! should default to the colour the part glows in (its base colour, or a
-//! glow role of its own). A role defaulting to black has no ratio; the
-//! pack colour is then used at strength 1.
+//! **Use the same role on both tags** (`LookColour::new("rail")` +
+//! `LookGlow::new("rail", RAIL_EMISSIVE)`): one palette entry then recolours
+//! body and glow together, and one `glow` entry dims it. List the role in
+//! the contract's `glow`. A separate glow role is the exception, for a part
+//! whose glow a pack should recolour on its own: the pack must then set and
+//! dim that role, since setting the body's role leaves the glow in the
+//! game's hue.
+//!
+//! The ratio is taken against the role's **contract default** (normally
+//! the material's base colour). A role defaulting to black has no ratio;
+//! the pack colour is then used at strength 1. The default is matched
+//! exactly: a pack that writes the default as hex (`#e6331a` for
+//! `srgb(0.9, 0.2, 0.1)`) is not bit-equal, so it takes the pack path
+//! (the base's hue at the game's strength, not the authored glow hue).
+//! Leave a role out of a pack to keep the game's own glow.
 //!
 //! Needs `bevy_pbr`: the whole module is compiled out under
 //! `gx_look_no_pbr` (2D games have no `StandardMaterial`).
