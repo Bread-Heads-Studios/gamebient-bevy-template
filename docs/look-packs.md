@@ -405,9 +405,12 @@ spawn and on every `LookChanged`, which `look.clear` and
 | A node's border | `LookBorder::new(role)` (`.alpha(a)`) | Uniform borders only: it writes all four sides of `BorderColor`, so a top-only accent would become four coloured sides even under the default look. |
 | Gradient stops | `LookGradient::two(LookTint::new(top), LookTint::new(bottom))`, `LookGradient::new([Some(t), None, ..])`, `LookGradient::role(role, &[alphas])` | Stop `i` of every gradient in the `BackgroundGradient`; `None` keeps the spawned colour. Positions and shape untouched. |
 | A card (`card_with`) | `LookColour::new(fill)` + `LookBorder` + `LookGradient::two` | The roles' defaults must equal the `CardStyle` literals. |
-| A glow that is a multiple of the base | `LookColour::new(role).emissive(s)` | Emissive = colour × s × `glow`. |
+| A glow that is a multiple of the base | `LookColour::new(role).emissive(s)` | Emissive RGB = colour (linear) × s × `glow`. The material's emissive **alpha is kept** as built: Bevy reads it as the exposure weight, so scaling it would change a weak glow under the default look. |
 | A glow that is **not** a multiple of the base | `LookColour::new(role)` + `LookGlow::new(role, game_emissive)`, **the same role on both** | Default look: exactly `game_emissive`. Pack: the pack's colour for the role × the game's emissive-to-default brightness ratio, × the pack's `glow` for the role, so one palette entry recolours base and glow together and one `glow` entry dims it. List the role in the contract's `glow`. 3D only (compiled out under `gx_look_no_pbr`). Never combine with `.emissive(s)` on one material. A separate glow role (`LookGlow::new("rail_glow", ..)`) is the exception, only for a part whose glow a pack should recolour independently of its body: the contract then lists `rail_glow` in `palette` and `glow`, and a pack must set and dim `rail_glow` itself (setting `rail` alone leaves the glow in the game's hue). |
-| A fitted line whose words a pack sets | `LookText(key)` + `face.look_fit(key, max)` or `face.look_fit_in(key, max, box_px)` + the face's `TextFont` | `refit_text` sets `font_size`: the game's own string keeps exactly its `face.fitted(default, max)` size (with `look_fit_in` too: the box never re-fits the default, even where the default overflows it); any other is sized at the face's `widest_em` against the line (or box), never above the default's size, so any string up to `max_chars` fits. Only for a line whose whole text is `look.string(key)`: a composed line (`"OWN " + title`, a formatted score) gets the bare string's size and overflows, so size it from a game system. |
+| A fitted line whose words a pack sets | `LookText(key)` + `face.look_fit(key, max)` or `face.look_fit_in(key, max, box_px)` + the face's `TextFont` | `refit_text` sets `font_size`: the game's own string keeps exactly its `face.fitted(default, max)` size (with `look_fit_in` too: the box never re-fits the default, even where the default overflows it); any other is sized by its **real width**, the sum of its glyphs from the face's `advances` table (95 values in ems for `' '..='~'`, measured from the TTF), against the line (or box), never above the default's size. Ordinary pack words so land at or near the default's size, and any string up to `max_chars` still fits, the all-widest-glyph worst case included. Only for a line whose whole text is `look.string(key)`: a composed line (`"OWN " + title`, a formatted score) gets the bare string's size and overflows, so size it from a game system. |
+| A light's colour | `LookLight(role)` on the `PointLight` / `SpotLight` / `DirectionalLight` / camera `AmbientLight` entity | Colour only: intensity, illuminance, brightness, range and shadows stay the game's, so an intensity animation keeps running. Written on every `LookChanged` (a clear restores the role default) and on spawn **only under a pack**: nothing is written at spawn under the default look. 3D only (not under `gx_look_no_pbr`). Not on a light whose colour a system animates (pattern 1). |
+| The global ambient light | `app.insert_resource(LookAmbient(role))` | `GlobalAmbientLight`'s colour, same rules. 3D only. |
+| The clear colour | `app.insert_resource(LookClearColour(role))` beside the game's `ClearColor` in `main.rs` | `ClearColor` (the letterbox bars, any uncovered gap), same rules; works in 2D. The role default should equal the game's clear colour. |
 | A colour a game system paints from state | No tag. The system reads `look.colour(role)` / `look.mix(from, to, t)` and re-runs on a look change. | See pattern 1 below. |
 | A shared material that sim entities draw | An anchor entity (below). | |
 
@@ -440,9 +443,11 @@ Every port review in the first wave found one of these. Check each.
    change, not through the tag.
 4. **Widest-glyph `max_chars`.** `max_chars` counts characters, and
    `Face::advance_em` is an average: twelve `W`s are far wider than twelve
-   average glyphs. `LookFit` sizes a pack's words at `Face::widest_em`, the
-   widest printable-ASCII glyph (every character the validator accepts,
-   so `@` and `%` count, not only A–Z and 0–9). For a fixed-size line, set
+   average glyphs. `LookFit` sizes a pack's words by their real width from
+   `Face::advances` (every character the validator accepts, so `@` and
+   `%` count, not only A–Z and 0–9), so `max_chars` of the widest glyph
+   (`Face::widest_em`) always fits and ordinary words stay near the
+   default's size. For a fixed-size line, set
    `max_chars` so `max_chars × widest_em × size` fits the box, and test it
    against the TTF.
 
@@ -536,6 +541,24 @@ tests the template's player slot, shapes, sprites and editor. Game-specific
 look tests (a game-side retint, say) go in a file of the game's own, so
 `tests/looks.rs` can be recopied when the template changes it. Check the
 end card with `docs/sponsor-kit/end-card-sample/` (see "End card").
+
+Copy `tests/app_boots.rs` unchanged too (only the crate name changes). It
+builds the game's real plugin set headless (`MinimalPlugins` plus the
+asset, state, input, window and text plugins, the render-side asset
+stores and `UiScale`; then `DisplayPlugin`, `LookPlugin`, the windowed
+`GamePlugin`, `AssetsPlugin`, `UiPlugin` and `FramePlugin`), runs a few
+frames, initialises every schedule (each state's `OnEnter` / `OnExit`,
+which the frames never reach), and runs a few frames of `Playing`, under
+the default look and every built-in pack. A conflicting query (B0001) or
+a missing resource anywhere in the assembled app fails it. A game whose
+screens need one more engine resource headless adds it in `app()` with a
+comment, rather than writing its own boot test.
+
+Recopying `src/ui/fit.rs` means each `Face` in `fonts.rs` needs its
+`advances` table: copy the template's `fonts::tests`, run `cargo test
+print_advance_tables -- --ignored --nocapture`, paste the rows, and
+`declared_advances_match_every_printable_ascii_glyph` holds them to the
+TTFs from then on.
 
 Copy `look_contract_tests` from the template's `src/ui/theme.rs`
 unchanged (end-card roles, end-card column fit, string defaults); it uses
