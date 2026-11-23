@@ -29,9 +29,12 @@ pub struct LookChanged;
 pub struct LookColour {
     pub role: &'static str,
     pub alpha: Option<f32>,
-    /// For a `StandardMaterial`: emissive = the colour times this (times
-    /// the pack's `glow` for the role, which can only dim it). Ignored
-    /// everywhere else (`ColorMaterial` has no emissive).
+    /// For a `StandardMaterial`: emissive RGB = the colour's linear RGB
+    /// times this (times the pack's `glow` for the role, which can only dim
+    /// it). The emissive's **alpha is left as the material was built**:
+    /// Bevy reads emissive alpha as the exposure weight, not opacity, so
+    /// scaling it would change a weak glow's look under the default pack.
+    /// Ignored everywhere else (`ColorMaterial` has no emissive).
     pub emissive: Option<f32>,
 }
 
@@ -196,7 +199,9 @@ pub fn retint_material(
             let c = tag.resolve(&look);
             m.base_color = c;
             if let Some(s) = tag.emissive {
-                m.emissive = LinearRgba::from(c) * s * look.glow(tag.role);
+                // RGB only: the authored alpha (exposure weight) stays.
+                let alpha = m.emissive.alpha;
+                m.emissive = (LinearRgba::from(c) * s * look.glow(tag.role)).with_alpha(alpha);
             }
         }
     }
@@ -245,5 +250,111 @@ pub fn retext(
                 text.0 = s.to_string();
             }
         }
+    }
+}
+
+#[cfg(all(test, not(gx_look_no_pbr)))]
+mod tests {
+    use super::*;
+    use crate::look::Contract;
+    use crate::look::manifest::MANIFEST_FILE;
+    use crate::look::select::Selection;
+    use std::collections::BTreeMap;
+
+    const TIER: Color = Color::srgb(0.95, 0.7, 0.2);
+
+    static C: Contract = Contract {
+        palette: &[("tier", TIER)],
+        strings: &[],
+        slots: &[],
+        audio: &[],
+        fonts: &[],
+        glow: &["tier"],
+    };
+
+    fn app_with(look: ActiveLook) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<LookChanged>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .insert_resource(look)
+            .add_systems(Update, retint_material);
+        app
+    }
+
+    fn material(app: &mut App, m: StandardMaterial) -> Handle<StandardMaterial> {
+        app.world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(m)
+    }
+
+    fn get(app: &App, h: &Handle<StandardMaterial>) -> StandardMaterial {
+        app.world()
+            .resource::<Assets<StandardMaterial>>()
+            .get(h)
+            .unwrap()
+            .clone()
+    }
+
+    /// Under the default look an emissive tag writes back exactly the
+    /// `LinearRgba` the game built, alpha included: a weak glow (`0.05`,
+    /// attic-excavator's tier0) keeps its exposure weight, whichever way
+    /// the game wrote that alpha.
+    #[test]
+    fn the_default_look_keeps_the_authored_emissive_alpha_included() {
+        for (s, alpha) in [(0.05, 1.0), (0.05, 0.05), (1.5, 1.0), (0.4, 0.3)] {
+            let authored = (LinearRgba::from(TIER) * s).with_alpha(alpha);
+            let mut app = app_with(ActiveLook::default_for(&C));
+            let h = material(
+                &mut app,
+                StandardMaterial {
+                    base_color: TIER,
+                    emissive: authored,
+                    ..default()
+                },
+            );
+            app.world_mut().spawn((
+                MeshMaterial3d(h.clone()),
+                LookColour::new("tier").emissive(s),
+            ));
+            app.update();
+            let m = get(&app, &h);
+            assert_eq!(m.emissive, authored, "strength {s}, alpha {alpha}");
+            assert_eq!(m.base_color, TIER);
+        }
+    }
+
+    /// Under a pack the RGB follows the pack colour times the strength and
+    /// the pack's glow; the alpha stays the game's; a clear restores it all.
+    #[test]
+    fn a_pack_scales_the_emissive_rgb_only_and_a_clear_restores_it() {
+        let authored = LinearRgba::from(TIER) * 0.05; // alpha 0.05 too
+        let json = r##"{"v":3,"id":"p","name":"P","kind":"palette","palette":{"tier":"#3366ff"},"glow":{"tier":0.5}}"##;
+        let files = BTreeMap::from([(MANIFEST_FILE.to_string(), json.as_bytes().to_vec())]);
+        let pack = ActiveLook::from_files(&C, files, Selection::Default, None).expect("valid");
+        let blue = LinearRgba::from(pack.colour("tier"));
+        let mut app = app_with(pack);
+        let h = material(
+            &mut app,
+            StandardMaterial {
+                base_color: TIER,
+                emissive: authored,
+                ..default()
+            },
+        );
+        app.world_mut().spawn((
+            MeshMaterial3d(h.clone()),
+            LookColour::new("tier").emissive(0.05),
+        ));
+        app.update();
+        let e = get(&app, &h).emissive;
+        assert_eq!(e.alpha, authored.alpha);
+        assert!((e.blue - blue.blue * 0.05 * 0.5).abs() < 1e-6);
+        assert!((e.red - blue.red * 0.05 * 0.5).abs() < 1e-6);
+
+        app.insert_resource(ActiveLook::default_for(&C));
+        app.world_mut().write_message(LookChanged);
+        app.update();
+        assert_eq!(get(&app, &h).emissive, authored);
     }
 }
