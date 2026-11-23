@@ -430,6 +430,20 @@ impl Pass {
     }
 
     fn exec(&mut self, world: &mut World, state: &mut RunRules, f: Firing) {
+        // Out of budget: queue the firing (or drop it, queue full) before
+        // cloning its rule, which a crowd of touching pairs would otherwise
+        // do hundreds of thousands of times a tick.
+        if self.budget == 0 {
+            let has_acts = state
+                .file
+                .rules
+                .get(f.rule)
+                .is_some_and(|r| f.next < r.acts.len());
+            if has_acts && state.waiting.len() < MAX_WAITING {
+                state.waiting.push_back(f);
+            }
+            return;
+        }
         let Some(rule) = state.file.rules.get(f.rule).cloned() else {
             return;
         };

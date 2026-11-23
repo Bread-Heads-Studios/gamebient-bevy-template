@@ -7,15 +7,20 @@ use bevy::prelude::*;
 use gamebient_game::game::audio::SfxEvent;
 use gamebient_game::game::content::kit::{Kinds, Thing};
 use gamebient_game::game::content::level::{Level, LevelSource};
+use gamebient_game::game::content::model::LEVEL_MAX_THINGS;
 use gamebient_game::game::content::model::{LevelFile, PlacedThing};
 use gamebient_game::game::content::saved::reset_to_defaults;
 use gamebient_game::game::replay::build_headless_app;
+use gamebient_game::game::rule_table::COUNTERS;
+use gamebient_game::game::rules::model::{MAX_BYTES, canonical_text};
+use gamebient_game::game::rules::run::MAX_WAITING;
 use gamebient_game::game::rules::run::{RunRules, run_rules};
-use gamebient_game::game::rules::{Outcome, PendingRules, RunEnd, set_rules};
+use gamebient_game::game::rules::{Outcome, PendingRules, RunEnd, extreme_rules, set_rules, vocab};
 use gamebient_game::game::scoring::GameData;
 use gamebient_game::game::sim::{Checksum, PendingSeed, RunOver, SimTick, SpawnOrder, seed_bytes};
 use gamebient_game::game::states::GameState;
 use gamebient_input::{Buttons, VirtualInput};
+use serde_json::{Value as Json, json};
 
 #[derive(Resource, Default)]
 struct Heard(Vec<SfxEvent>);
@@ -30,6 +35,12 @@ const FAR: (&str, f32, f32) = ("Player", -9.0, -7.0);
 /// A run on `things` (kind, x, y) under `rules` (the JSON of the rules
 /// list), seeded with `seed`; returns once tick 1 has run.
 fn run_with_seed(rules: &str, things: &[(&str, f32, f32)], seed: u64) -> App {
+    run_file(&format!(r#"{{"v":1,"rules":{rules}}}"#), things, seed)
+}
+
+/// A run on `things` under the whole rules file `text`, seeded with
+/// `seed`; returns once tick 1 has run.
+fn run_file(text: &str, things: &[(&str, f32, f32)], seed: u64) -> App {
     let mut app = build_headless_app();
     reset_to_defaults(app.world_mut());
     app.init_resource::<Heard>().add_systems(Last, hear);
@@ -48,11 +59,7 @@ fn run_with_seed(rules: &str, things: &[(&str, f32, f32)], seed: u64) -> App {
     };
     app.insert_resource(Level(level))
         .insert_resource(LevelSource::Content);
-    set_rules(
-        app.world_mut(),
-        format!(r#"{{"v":1,"rules":{rules}}}"#).as_bytes(),
-    )
-    .unwrap();
+    set_rules(app.world_mut(), text.as_bytes()).unwrap();
     app.world_mut().resource_mut::<PendingSeed>().0 = Some(seed_bytes(seed));
     app.update();
     app.world_mut()
@@ -377,4 +384,115 @@ fn new_rules_land_on_the_next_tick_of_the_run_in_progress() {
     ticks(&mut app, 1);
     assert_eq!(data(&app).score, 15);
     assert!(app.world().resource::<PendingRules>().0.is_none());
+}
+
+/// `extreme_rules` (64 rules x 8 actions at every limit) with each rule's
+/// trigger changed by `when` and each action passed through `act`, so that
+/// every rule fires. Conditions are dropped only as needed to stay within
+/// the size limit.
+fn extreme_firing(when: impl Fn(usize) -> Json, act: impl Fn(&Json) -> Json) -> String {
+    let v = vocab(build_headless_app().world());
+    let file: Json = serde_json::from_str(&extreme_rules(&v)).unwrap();
+    let rules: Vec<Json> = file["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let mut r = r.clone();
+            assert!(r["when"].get("timer").is_some(), "{r}");
+            r["when"] = when(i);
+            let acts: Vec<Json> = r["do"].as_array().unwrap().iter().map(&act).collect();
+            r["do"] = Json::Array(acts);
+            r
+        })
+        .collect();
+    // A longer trigger can push the file past the size limit: drop
+    // conditions, last rule first, until it fits.
+    let mut rules = rules;
+    let mut i = rules.len();
+    let mut text = canonical_text(&rules);
+    while text.len() > MAX_BYTES {
+        i = if i == 0 { rules.len() - 1 } else { i - 1 };
+        if let Some(conds) = rules[i].get_mut("if").and_then(Json::as_array_mut) {
+            conds.pop();
+        }
+        text = canonical_text(&rules);
+    }
+    text
+}
+
+/// Ticks `n` times, checking after each tick that every counter is in its
+/// range, the things are within the level limit and the queue is bounded.
+fn tick_within_limits(app: &mut App, n: u32) {
+    for _ in 0..n {
+        app.update();
+        let d = data(app);
+        for c in COUNTERS {
+            let v = (c.get)(d);
+            assert!((c.min..=c.max).contains(&v), "{} = {v}", c.name);
+        }
+        let things = app.world_mut().query::<&Thing>().iter(app.world()).count();
+        assert!(things <= LEVEL_MAX_THINGS, "{things} things");
+        let waiting = app.world().resource::<RunRules>().waiting.len();
+        assert!(waiting <= MAX_WAITING, "{waiting} waiting");
+    }
+}
+
+/// The spec's "no panics at extreme content" for the interpreter: the
+/// limits all at once, every rule firing.
+#[test]
+fn extreme_rules_all_firing_never_panic() {
+    let every = |_| json!({ "every": 1 });
+    let keep = |a: &Json| a.clone();
+    let crowd: Vec<(&str, f32, f32)> = std::iter::once(FAR)
+        .chain(std::iter::repeat_n(("Coin", 5.0, 5.0), 70))
+        .collect();
+
+    // As built: `end_run` part-way through the first pass, on things that
+    // `remove` has just taken.
+    let mut app = run_file(&extreme_firing(every, keep), &crowd, 7);
+    tick_within_limits(&mut app, 60);
+    assert_eq!(app.world().resource::<RunEnd>().0, Some(Outcome::Lose));
+    assert!(app.world().resource::<RunOver>().0);
+
+    // No `end_run` and no `remove`: 60 ticks of 64 spawns a tick from 1990
+    // things, so spawns meet the level limit.
+    let no_end = |a: &Json| {
+        if a.get("end_run").is_some() || a.get("remove").is_some() {
+            json!({ "sound": "confirm" })
+        } else {
+            a.clone()
+        }
+    };
+    let mut full = vec![FAR];
+    full.extend(std::iter::repeat_n(("Coin", 9.0, 7.0), 1989));
+    let mut app = run_file(&extreme_firing(every, no_end), &full, 7);
+    tick_within_limits(&mut app, 60);
+    assert!(!app.world().resource::<RunOver>().0);
+    let things = app.world_mut().query::<&Thing>().iter(app.world()).count();
+    assert_eq!(things, LEVEL_MAX_THINGS);
+
+    // Every rule on a touch in a crowd of 70 coins that stays together
+    // (no spawns either): 4830 pairs x 64 rules x 8 actions every tick, far
+    // past the action cap, so firings carry and the queue stays full.
+    let touch = |_| json!({ "touch": ["Coin", "Coin"] });
+    let crowd_only = |a: &Json| {
+        if a.get("spawn").is_some() {
+            json!({ "sound": "confirm" })
+        } else {
+            no_end(a)
+        }
+    };
+    let mut app = run_file(&extreme_firing(touch, crowd_only), &crowd, 7);
+    assert_eq!(
+        app.world().resource::<RunRules>().waiting.len(),
+        MAX_WAITING
+    );
+    tick_within_limits(&mut app, 60);
+    assert!(!app.world().resource::<RunOver>().0);
+    assert_eq!(
+        app.world().resource::<RunRules>().waiting.len(),
+        MAX_WAITING
+    );
 }
