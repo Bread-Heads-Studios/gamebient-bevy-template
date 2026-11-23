@@ -16,11 +16,12 @@ and the editor can replace them in a running game with `content.set`.
 | `content/sprites/<kind>.png` | PNG, at most 256x256 | 64 KB each, 64 files |
 | `content/audio/songs.json` | `{"v":1,"songs":{"<cue>":{...}}}` | 128 KB |
 | `content/audio/sfx.json` | `{"v":1,"sfx":{"<SfxEvent name>": <Fx program>}}` | 64 KB |
+| `content/rules.json` | `{"v":1,"rules":[{"id","when","if"?,"do","source"?,"off"?}]}` | 64 rules, 32 KB |
 
 `id` matches `^[a-z0-9_-]{1,32}$` and is unique within the level. Kind names
 match `^[A-Za-z][A-Za-z0-9_-]{0,31}$`; sprite files are `<kind>.png`.
 JSON Schemas (draft 2020-12) live in `content/schema/`
-(`level`, `tunables`, `sprites`, `songs`, `sfx`); `build.rs` does not embed
+(`level`, `tunables`, `sprites`, `songs`, `sfx`, `rules`); `build.rs` does not embed
 them. Parsing and limits are in `src/game/content/model.rs`.
 
 ## Data or Rust
@@ -31,6 +32,7 @@ them. Parsing and limits are in `src/game/content/model.rs`.
 | Starting values of tunables (`tunables.json`) | Which numbers are tunable, their ranges (`tuning.rs`) |
 | How a kind looks: pictures, frames (`sprites*`) | Kind registration (`thing_kind`) |
 | Music and sound effects (`audio/*.json`) | The default songs and `bake`/`program` |
+| Rules the core vocabulary can say (`rules.json`) | Rules it cannot: the game's own systems |
 
 An agent asked to move, add or remove Things edits `content/level.json`; asked
 to change how a kind behaves, it edits Rust.
@@ -93,18 +95,21 @@ follows the game's own tunables), moves one Thing and removes one, and runs
 
 ## What the replay hashes
 
-Run content is the **level** and the **tunables**; presentation is not.
+Run content is the **level**, the **rules** and the **tunables**; presentation is not.
 
 - The replay header's `content` is `tunables::hash::content_of_bytes`: it
-  folds the level hash first, then every tunable start value and mid-run
-  change.
+  folds the run key first (`hash::with_rules(level hash, rules hash)`), then
+  every tunable start value and mid-run change. A file with no rules hashes
+  as 0, and `with_rules(level, 0)` is the level hash, so runs without rules
+  keep the hash they always had.
 - The level hash is the FNV-1a 64 of `content/level.json`'s raw bytes
   (`LevelHash`; `fnv1a64(b"test")` for `LevelSource::Test`).
 - `replay::level_source_for(replay, content_level)` picks the verifier's
   level: the content level, unless the replay's `content` equals what the
   test level would give and not what the content level gives (the selftest
   fixtures).
-- Sprites, `sprites.json`, songs and sfx never enter the sim or the hash.
+- Sprites, `sprites.json`, songs and sfx never enter the sim or the hash;
+  `rules.json` does.
   No sim system reads them.
 
 A leaderboard must accept a run only when it was played on the release's
@@ -116,6 +121,34 @@ with those defaults exactly. The website refuses a run unless both say it
 is the default. Editing the level or a saved
 tunable changes the default for the next release; it does not invalidate old
 releases' verifiers.
+
+## Rules as data
+
+`content/rules.json` holds rules a card can say: a trigger (`start`,
+`every`, `button`, `touch`, `counter`, `timer`), conditions (`compare`,
+`chance`) and actions (`add`, `set`, `remove`, `spawn`, `respawn`, `jump`,
+`move`, `sound`, `timer`, `end_run`). `src/game/rules/model.rs` checks a
+file whole, with one sentence per refusal ("This game has no counter called
+gems."); `run.rs` runs it in `SimSet` after physics and the game's own
+rules (`run_rules`), deterministically: file order, `SpawnOrder` pairs,
+`GameRng` draws, `RunClock` ticks, queued spawns and removals, a 4096-action
+cap per tick, counters and timers folded into the `Checksum`.
+
+A game declares what rules may name in `src/game/rule_table.rs` (its own
+file): `COUNTERS` (each a `GameData` field with a label and a range), `JUMP`
+and `STOP` (hooks into its physics; `jump` respects the game's grounded
+check), `HALF_SCREEN`, and `test_rules()`, the rules the selftest and the
+named checks run under `LevelSource::Test`. Kinds come from `thing_kind`
+and sounds from `SfxEvent`. Everything else in `src/game/rules/` is copied
+verbatim (`tools/frame-accept.sh --check-copies`), and the editor carries
+byte-identical copies of `model.rs` and `cases.json`, so the game, the
+editor and its server accept and refuse the same files.
+
+`content.set rules.json` checks the file whole and swaps it in: a run in
+progress keeps going on the new rules from the next tick (unchanged rules
+keep their edge memory; timers whose names are gone are dropped). The
+catalog's `rules` key carries the vocabulary the editor builds its
+dropdowns from.
 
 ## File hash and `content.set`
 

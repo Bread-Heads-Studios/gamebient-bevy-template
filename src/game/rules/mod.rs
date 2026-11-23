@@ -187,6 +187,65 @@ pub fn rules_catalog(world: &World) -> Json {
     })
 }
 
+/// A rules file at the limits for `tools/test_extreme_content.sh`: 64
+/// rules, each with 8 actions and a 200-character sentence, 16 timer
+/// actions over 8 timer names, every action the game has, and as many
+/// conditions as still fit in 32 KB. Every rule waits on a timer that no
+/// rule can start, so the file proves a save at the limits never breaks
+/// `cargo test` without making a test's run do anything.
+pub fn extreme_rules(v: &Vocab) -> String {
+    let c = v.counters.first().cloned().unwrap_or_default();
+    let k = v.kinds.last().cloned().unwrap_or_default();
+    let s = v.sounds.first().cloned().unwrap_or_default();
+    let mut acts = vec![
+        json!({ "add": [c, 1_000_000] }),
+        json!({ "set": [c, -1_000_000] }),
+        json!({ "remove": k }),
+        json!({ "spawn": [k, "random"] }),
+        json!({ "respawn": k }),
+        json!({ "move": [k, 1000, -1000] }),
+        json!({ "sound": s }),
+        json!({ "end_run": "lose" }),
+    ];
+    if v.actions.iter().any(|a| a == "jump") {
+        acts.push(json!({ "jump": k }));
+    }
+    for conds in (0..=model::MAX_IF).rev() {
+        let rules: Vec<Json> = (0..model::MAX_RULES)
+            .map(|i| {
+                let name = format!("t{}", i % model::MAX_TIMER_NAMES);
+                let mut r#do: Vec<Json> = (0..model::MAX_DO)
+                    .map(|j| acts[(i + j) % acts.len()].clone())
+                    .collect();
+                if i < model::MAX_TIMERS {
+                    r#do[0] = json!({ "timer": [name, 36000] });
+                }
+                let r#if: Vec<Json> = (0..conds)
+                    .map(|j| {
+                        if j % 2 == 0 {
+                            json!({ "chance": 100 })
+                        } else {
+                            json!({ "compare": [c, ">=", -1_000_000] })
+                        }
+                    })
+                    .collect();
+                json!({
+                    "id": format!("x{i}"),
+                    "when": { "timer": name },
+                    "if": r#if,
+                    "do": r#do,
+                    "source": "x".repeat(model::MAX_SOURCE),
+                })
+            })
+            .collect();
+        let text = model::canonical_text(&rules);
+        if text.len() <= model::MAX_BYTES {
+            return text;
+        }
+    }
+    model::canonical_text(&[])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,5 +351,45 @@ mod tests {
                 assert!(v.counters.contains(c), "{}", rule.id);
             }
         }
+    }
+
+    #[test]
+    fn extreme_rules_sit_at_every_limit_and_are_taken() {
+        let app = build_headless_app();
+        let v = vocab(app.world());
+        let text = extreme_rules(&v);
+        assert!(text.len() <= model::MAX_BYTES, "{} bytes", text.len());
+        let file = model::check_file(text.as_bytes(), &v).unwrap();
+        assert_eq!(file.rules.len(), model::MAX_RULES);
+        assert!(file.rules.iter().all(|r| r.acts.len() == model::MAX_DO));
+        assert!(
+            file.rules
+                .iter()
+                .all(|r| r.source.as_deref().map(|s| s.chars().count()) == Some(model::MAX_SOURCE))
+        );
+        let timers = file
+            .rules
+            .iter()
+            .flat_map(|r| &r.acts)
+            .filter(|a| matches!(a, model::Act::Timer(..)))
+            .count();
+        assert_eq!(timers, model::MAX_TIMERS);
+    }
+
+    /// Writes the rules file `tools/test_extreme_content.sh` saves:
+    /// `GX_EXTREME=max` the file at the limits, `min` an empty one.
+    #[test]
+    #[ignore = "run by tools/test_extreme_content.sh"]
+    fn write_extreme_rules() {
+        let out = std::env::var("GX_EXTREME_OUT").expect("GX_EXTREME_OUT names the file to write");
+        let app = build_headless_app();
+        let v = vocab(app.world());
+        let text = match std::env::var("GX_EXTREME").as_deref() {
+            Ok("max") => extreme_rules(&v),
+            Ok("min") => model::canonical_text(&[]),
+            other => panic!("GX_EXTREME must be max or min, not {other:?}"),
+        };
+        model::check_file(text.as_bytes(), &v).unwrap();
+        std::fs::write(out, text).unwrap();
     }
 }

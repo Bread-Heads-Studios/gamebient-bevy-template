@@ -407,6 +407,13 @@ def check_copies(game_arg):
     for f in ("chip.rs", "tracker.rs", "house.rs"):
         exact(f"src/game/audio/{f}", f"src/audio/{f}" if flat else f"src/game/audio/{f}")
     exact_tree("src/game/record", "src/record" if flat else "src/game/record")
+    # Rules as data: the interpreter, its checker and the shared cases are
+    # verbatim copies (a game owns only src/game/rule_table.rs). A game that
+    # has not taken rules yet has no folder and is not checked.
+    rules_dir = "src/rules" if flat else "src/game/rules"
+    if (game / rules_dir).is_dir():
+        exact_tree("src/game/rules", rules_dir)
+        exact("content/schema/rules.schema.json")
 
     # tests/display_shape.rs: the crate name only.
     name = lib_name(game)

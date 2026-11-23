@@ -573,3 +573,55 @@ impl Pass {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::rules::model::{Vocab, check_file};
+
+    fn vocab() -> Vocab {
+        Vocab {
+            triggers: crate::game::rules::model::TRIGGERS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            conditions: vec!["compare".into(), "chance".into()],
+            actions: vec!["add".into(), "timer".into()],
+            counters: vec!["score".into()],
+            kinds: vec![],
+            sounds: vec![],
+        }
+    }
+
+    #[test]
+    fn a_swap_keeps_unchanged_rules_and_drops_gone_timers() {
+        let old = check_file(br#"{"v":1,"rules":[{"id":"a","when":{"counter":["score",">",1]},"do":[{"timer":["t",9]}]},{"id":"b","when":{"counter":["score",">",2]},"do":[{"timer":["u",9]}]}]}"#, &vocab()).unwrap();
+        let new = check_file(br#"{"v":1,"rules":[{"id":"a","when":{"counter":["score",">",1]},"do":[{"timer":["t",9]}]},{"id":"b","when":{"counter":["score",">",3]},"do":[{"add":["score",1]}]}]}"#, &vocab()).unwrap();
+        let mut st = RunRules {
+            file: old,
+            memory: vec![true, true],
+            timers: [("t".to_string(), 3), ("u".to_string(), 4)]
+                .into_iter()
+                .collect(),
+            starts: BTreeMap::new(),
+            waiting: VecDeque::from([Firing {
+                rule: 1,
+                next: 0,
+                me: None,
+                other: None,
+            }]),
+        };
+        swap(&mut st, new.clone());
+        assert_eq!(
+            st.memory,
+            vec![true, false],
+            "a keeps its edge, the changed b starts fresh"
+        );
+        assert_eq!(
+            st.timers.keys().cloned().collect::<Vec<_>>(),
+            vec!["t".to_string()]
+        );
+        assert!(st.waiting.is_empty());
+        assert_eq!(st.file, new);
+    }
+}

@@ -353,3 +353,28 @@ fn nothing_panics_on_things_that_are_gone() {
     ticks(&mut app, 10);
     assert!(app.world().resource::<PendingRules>().0.is_none());
 }
+
+#[test]
+fn new_rules_land_on_the_next_tick_of_the_run_in_progress() {
+    let mut app = run(
+        r#"[{"id":"a","when":{"every":1},"do":[{"add":["score",1]}]}]"#,
+        &[FAR],
+    );
+    ticks(&mut app, 4);
+    assert_eq!(data(&app).score, 5);
+    let sum = app.world().resource::<Checksum>().0;
+    set_rules(
+        app.world_mut(),
+        br#"{"v":1,"rules":[{"id":"a","when":{"every":1},"do":[{"add":["score",10]}]}]}"#,
+    )
+    .unwrap();
+    assert!(app.world().resource::<PendingRules>().0.is_some());
+    assert_eq!(
+        app.world().resource::<Checksum>().0,
+        sum,
+        "nothing folds between ticks"
+    );
+    ticks(&mut app, 1);
+    assert_eq!(data(&app).score, 15);
+    assert!(app.world().resource::<PendingRules>().0.is_none());
+}

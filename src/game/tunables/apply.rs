@@ -221,7 +221,9 @@ mod tests {
     #[test]
     fn begin_run_copies_the_level_hash_into_the_log() {
         let mut app = build_headless_app();
-        app.insert_resource(LevelHash(42));
+        // No rules, whatever content/rules.json holds (the editor saves it).
+        app.insert_resource(LevelHash(42))
+            .insert_resource(RulesHash(0));
         app.world_mut().resource_mut::<PendingSeed>().0 = Some(seed_bytes(1));
         app.update();
         app.world_mut()
@@ -235,6 +237,7 @@ mod tests {
     fn begin_run_uses_zero_without_a_level_hash() {
         let mut app = build_headless_app();
         app.world_mut().remove_resource::<LevelHash>();
+        app.world_mut().remove_resource::<RulesHash>();
         app.update();
         app.world_mut()
             .resource_mut::<NextState<GameState>>()
