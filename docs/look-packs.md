@@ -588,8 +588,17 @@ pair chained), and the default string keeps its `fitted` size. The
 tables are an estimate, not the guarantee: a rule that reaches further
 (Inter's `<---` ligature, a five-character alternate chain such as
 `"$*[jU"`) can exceed them, and the runtime clamp then shrinks the line;
-`the_clamp_brings_estimate_overflows_inside_the_box` checks that, with a
-stand-in for Bevy's layout built on the same shaping. Why
+`the_clamp_brings_estimate_overflows_inside_the_box` checks that in
+Bevy's real UI layout, run headless (`MinimalPlugins` plus the asset,
+state, input, window, transform, camera, text, UI and picking plugins, a
+`Camera2d` and the embedded fonts): `"GO <--- HERE"` in a 300 px box
+and `"PRESS START <---"` in 400 px end on one line inside the box. The
+clamp sees a wrap as more than one visual line (distinct run tops in
+`TextLayoutInfo::run_geometry`), skips a node laid out with no width,
+and is for UI `Text` only (its query needs a `Node`; not `Text2d`).
+The headless app needs bevy's `bevy_picking` (on in native builds
+through Bevy's default features), because bevy_ui's picking systems
+read picking state. Why
 per-glyph widest advances and not a plain advance plus a sparse table of
 widening pairs: Inter's alternates reach through a run (`"**I"` widens
 both asterisks) and carry their own kerns (`"1)a"` widens though `")a"`
