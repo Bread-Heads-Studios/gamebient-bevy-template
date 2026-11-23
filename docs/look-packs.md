@@ -407,7 +407,7 @@ spawn and on every `LookChanged`, which `look.clear` and
 | A card (`card_with`) | `LookColour::new(fill)` + `LookBorder` + `LookGradient::two` | The roles' defaults must equal the `CardStyle` literals. |
 | A glow that is a multiple of the base | `LookColour::new(role).emissive(s)` | Emissive RGB = colour (linear) × s × `glow`. The material's emissive **alpha is kept** as built, so the stored `LinearRgba` round-trips exactly under the default look (Bevy 0.18 ignores that alpha; the exposure weight is `StandardMaterial::emissive_exposure_weight`). |
 | A glow that is **not** a multiple of the base | `LookColour::new(role)` + `LookGlow::new(role, game_emissive)`, **the same role on both** | Default look: exactly `game_emissive`. Pack: the pack's colour for the role × the game's emissive-to-default brightness ratio, × the pack's `glow` for the role, so one palette entry recolours base and glow together and one `glow` entry dims it. List the role in the contract's `glow`. 3D only (compiled out under `gx_look_no_pbr`). Never combine with `.emissive(s)` on one material. A separate glow role (`LookGlow::new("rail_glow", ..)`) is the exception, only for a part whose glow a pack should recolour independently of its body: the contract then lists `rail_glow` in `palette` and `glow`, and a pack must set and dim `rail_glow` itself (setting `rail` alone leaves the glow in the game's hue). |
-| A fitted line whose words a pack sets | `LookText(key)` + `face.look_fit(key, max)` or `face.look_fit_in(key, max, box_px)` + the face's `TextFont` | `refit_text` sets `font_size`: the game's own string keeps exactly its `face.fitted(default, max)` size (with `look_fit_in` too: the box never re-fits the default, even where the default overflows it); any other is sized by an upper bound on its **shaped width**: the sum of its glyphs from the face's `advances` table (95 values in ems for `' '..='~'`, each the widest advance that character takes when shaped as Bevy shapes it, kerning and contextual alternates included) plus the face's residual `kerns` (usually none), against the line (or box), never above the default's size. Ordinary pack words so land at or near the default's size, and any string up to `max_chars` still fits as drawn: the all-widest-glyph worst case and kerned strings (`"*LIMITED*"` in Inter, whose case-sensitive `*` is 0.12 em wider beside capitals) included. Only for a line whose whole text is `look.string(key)`: a composed line (`"OWN " + title`, a formatted score) gets the bare string's size and overflows, so size it from a game system. |
+| A fitted line whose words a pack sets | `LookText(key)` + `face.look_fit(key, max)` or `face.look_fit_in(key, max, box_px)` + the face's `TextFont` | `refit_text` sets `font_size`: the game's own string keeps exactly its `face.fitted(default, max)` size (with `look_fit_in` too: the box never re-fits the default, even where the default overflows it); any other is sized in two steps. **Estimate:** the sum of its glyphs from the face's `advances` table (95 values in ems for `' '..='~'`, each the widest advance that character takes when shaped as Bevy shapes it in any three-character context, kerning and contextual alternates included) plus the face's residual `kerns` (usually none), against the line (or box) less 1 px, never above the default's size; ordinary pack words so land at or near the default's size, kerned strings included (`"*LIMITED*"` in Inter, whose case-sensitive `*` is 0.12 em wider beside capitals). **Clamp:** after Bevy lays the line out, `clamp_fit` compares the laid-out width with the line; a pack line that is wider, or wrapped, shrinks (in proportion, or by a tenth when wrapped) and is laid out again until it fits, at worst a frame or two late. That is the guarantee, for rules no table can carry (Inter's `<---` arrow ligature is 0.6 em wider than its parts). It only shrinks, only while the look is unchanged, and never runs under the default look or on the game's own string. Only for a line whose whole text is `look.string(key)`: a composed line (`"OWN " + title`, a formatted score) gets the bare string's size and overflows, so size it from a game system. |
 | A light's colour | `LookLight(role)` on the `PointLight` / `SpotLight` / `DirectionalLight` / camera `AmbientLight` entity | Colour only: intensity, illuminance, brightness, range and shadows stay the game's, so an intensity animation keeps running. Written on every `LookChanged` (a clear restores the role default) and on spawn **only under a pack**: nothing is written at spawn under the default look. 3D only (not under `gx_look_no_pbr`). Not on a light whose colour a system animates (pattern 1). |
 | The global ambient light | `app.insert_resource(LookAmbient(role))` | `GlobalAmbientLight`'s colour, same rules. 3D only. |
 | The clear colour | `app.insert_resource(LookClearColour(role))` beside the game's `ClearColor` in `main.rs` | `ClearColor` (the letterbox bars, any uncovered gap), same rules; works in 2D. The role default should equal the game's clear colour. |
@@ -443,12 +443,12 @@ Every port review in the first wave found one of these. Check each.
    change, not through the tag.
 4. **Widest-glyph `max_chars`.** `max_chars` counts characters, and
    `Face::advance_em` is an average: twelve `W`s are far wider than twelve
-   average glyphs. `LookFit` sizes a pack's words by an upper bound on
-   their shaped width from `Face::advances` (every character the validator
-   accepts, so `@` and `%` count, not only A–Z and 0–9, and kerning
-   included), so `max_chars` of the widest glyph (`Face::widest_em`) and
-   kerned strings always fit and ordinary words stay near the default's
-   size. For a fixed-size line, set
+   average glyphs. `LookFit` estimates a pack's words' shaped width from
+   `Face::advances` (every character the validator accepts, so `@` and
+   `%` count, not only A–Z and 0–9, and kerning included) and clamps the
+   line after layout, so `max_chars` of the widest glyph
+   (`Face::widest_em`) and kerned or ligated strings fit while ordinary
+   words stay near the default's size. For a fixed-size line, set
    `max_chars` so `max_chars × widest_em × size` fits the box, and test it
    against the TTF.
 
@@ -581,10 +581,15 @@ const BODY_ADVANCES: Advances = [
 `font_metrics` shapes text with cosmic-text exactly as Bevy does and
 holds each table to the font: every advance is the widest that character
 takes in any three-character context (kerning and contextual alternates
-included, so Inter's case-sensitive punctuation counts), the bound holds
-for every three-character string and for random and kerned 24-character
+included, so Inter's case-sensitive punctuation counts), the estimate
+bounds every three-character string and random and kerned 24-character
 ones (`"*LIMITED*"`, `"SPONSORED BY FIZZIX*"`, the face's most-widening
-pair chained), and the default string keeps its `fitted` size. Why
+pair chained), and the default string keeps its `fitted` size. The
+tables are an estimate, not the guarantee: a rule that reaches further
+(Inter's `<---` ligature, a five-character alternate chain such as
+`"$*[jU"`) can exceed them, and the runtime clamp then shrinks the line;
+`the_clamp_brings_estimate_overflows_inside_the_box` checks that, with a
+stand-in for Bevy's layout built on the same shaping. Why
 per-glyph widest advances and not a plain advance plus a sparse table of
 widening pairs: Inter's alternates reach through a run (`"**I"` widens
 both asterisks) and carry their own kerns (`"1)a"` widens though `")a"`
