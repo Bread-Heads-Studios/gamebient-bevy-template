@@ -31,9 +31,11 @@ pub struct LookColour {
     pub alpha: Option<f32>,
     /// For a `StandardMaterial`: emissive RGB = the colour's linear RGB
     /// times this (times the pack's `glow` for the role, which can only dim
-    /// it). The emissive's **alpha is left as the material was built**:
-    /// Bevy reads emissive alpha as the exposure weight, not opacity, so
-    /// scaling it would change a weak glow's look under the default pack.
+    /// it). The emissive's **alpha is left as the material was built**, so
+    /// the stored `LinearRgba` round-trips exactly under the default look.
+    /// Bevy 0.18 ignores that alpha (the shader's exposure weight comes
+    /// from `StandardMaterial::emissive_exposure_weight`); the point is
+    /// that tagging changes nothing a test or snapshot compares.
     /// Ignored everywhere else (`ColorMaterial` has no emissive).
     pub emissive: Option<f32>,
 }
@@ -199,7 +201,7 @@ pub fn retint_material(
             let c = tag.resolve(&look);
             m.base_color = c;
             if let Some(s) = tag.emissive {
-                // RGB only: the authored alpha (exposure weight) stays.
+                // RGB only: the stored alpha stays as built (Bevy ignores it).
                 let alpha = m.emissive.alpha;
                 m.emissive = (LinearRgba::from(c) * s * look.glow(tag.role)).with_alpha(alpha);
             }
@@ -298,7 +300,7 @@ mod tests {
 
     /// Under the default look an emissive tag writes back exactly the
     /// `LinearRgba` the game built, alpha included: a weak glow (`0.05`,
-    /// attic-excavator's tier0) keeps its exposure weight, whichever way
+    /// attic-excavator's tier0) keeps its stored alpha, whichever way
     /// the game wrote that alpha.
     #[test]
     fn the_default_look_keeps_the_authored_emissive_alpha_included() {
