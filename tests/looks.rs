@@ -348,17 +348,28 @@ fn border_and_gradient_tags_follow_the_look_and_restore_on_clear() {
     );
 }
 
+/// A stand-in face for `look_fit_keeps_the_default_size_and_fits_any_pack_string`:
+/// every glyph 0.55 em but 'W' (1.1), the widest.
+static STAND_IN: look::refit::Advances = {
+    let mut a = [0.55; look::refit::PRINTABLE];
+    a['W' as usize - 0x20] = 1.1;
+    a
+};
+
 /// `LookFit` sizes every string key: the game's own string keeps its
-/// average-advance size exactly, any string a pack may set (up to
-/// `max_chars` of the widest glyph) fits the line, and the size follows a
-/// look change and a clear. The metrics are a stand-in face, so this holds
-/// the arithmetic for any game; `fonts::tests` holds each real face.
+/// average-advance size exactly, a string a pack may set is sized by its
+/// real width (never above the default's size) so ordinary words stay
+/// close to the default and the worst case (`max_chars` of the widest
+/// glyph) still fits the line, and the size follows a look change and a
+/// clear. The metrics are a stand-in face, so this holds the arithmetic
+/// for any game; `fonts::tests` holds each real face.
 #[test]
 fn look_fit_keeps_the_default_size_and_fits_any_pack_string() {
-    let (advance, widest) = (0.62, 1.1);
+    let advance = 0.62;
+    let widest = look::refit::widest_em(&STAND_IN);
     for s in theme::STRINGS {
         for line_px in [200.0, 648.0, 864.0] {
-            let fit = LookFit::new(s.key, 72.0, advance, widest, line_px);
+            let fit = LookFit::new(s.key, 72.0, advance, &STAND_IN, line_px);
             let own = look::refit::size_for_em(advance, s.default, 72.0, line_px);
             assert_eq!(fit.size_for(s.default, s.default), own, "{}", s.key);
             let worst = "W".repeat(s.max_chars);
@@ -370,13 +381,28 @@ fn look_fit_keeps_the_default_size_and_fits_any_pack_string() {
                 s.key,
                 s.max_chars
             );
+            // Ordinary letters as long as the default: at least the size
+            // the widest-glyph rule would give, and they fit.
+            let plain = "A".repeat(s.default.chars().count().min(s.max_chars));
+            let size = fit.size_for(&plain, s.default);
+            assert!(size <= own, "{}", s.key);
+            assert!(
+                size >= look::refit::size_for_em(widest, &plain, own, line_px),
+                "{}",
+                s.key
+            );
+            assert!(
+                size == 1.0 || look::refit::text_em(&STAND_IN, &plain) * size <= line_px,
+                "{}",
+                s.key
+            );
         }
     }
 
     let p = probe();
     let spec = theme::STRINGS.iter().find(|s| s.key == p.key).unwrap();
     let mut app = app_with(Selection::Default);
-    let fit = LookFit::new(p.key, 72.0, advance, widest, 300.0);
+    let fit = LookFit::new(p.key, 72.0, advance, &STAND_IN, 300.0);
     let line = app
         .world_mut()
         .spawn((
