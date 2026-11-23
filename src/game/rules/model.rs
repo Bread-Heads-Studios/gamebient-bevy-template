@@ -12,8 +12,14 @@
 //! How text is counted, on every side: the file's size is its UTF-8
 //! bytes; a sentence's length (`source`) and a name's 40-character cut in a
 //! sentence are Unicode code points (not UTF-16 units); unknown fields are
-//! sorted in code point order. Every number in a rules file is a whole
-//! number, so `canonical_text` and `JSON.stringify` write the same digits.
+//! sorted in code point order.
+//!
+//! Every number in a rules file is written as an integer of at most 7
+//! digits (`-?(0|[1-9][0-9]{0,6})`): `scan_numbers` reads the raw text
+//! before any JSON parser does, so no `.`, exponent or long literal ever
+//! reaches a float parser (serde_json's and `JSON.parse`'s can round long
+//! literals differently). So `canonical_text` and `JSON.stringify` write
+//! the same digits.
 
 use std::collections::BTreeSet;
 
@@ -87,6 +93,7 @@ pub const PLACE: &str = "A place must be start, random, self or {\"x\", \"y\"}."
 pub const PLACE_RANGE: &str =
     "A place must be a whole number of pixels from -100000 to 100000 in each direction.";
 pub const NUMBER: &str = "A number in a rule must be a whole number from -1000000 to 1000000.";
+pub const NUMBER_DIGITS: &str = "Numbers in a rules file are whole numbers of up to 7 digits.";
 
 /// A name as a sentence shows it: at most 40 code points.
 fn shown(s: &str) -> String {
@@ -328,6 +335,47 @@ fn first_unknown<'a>(o: &'a Map<String, Value>, known: &[&str]) -> Option<&'a st
     ks.first().copied()
 }
 
+/// Every number token outside a string is `-?(0|[1-9][0-9]{0,6})`. A
+/// token is a run of `0-9 + - . e E` that starts with `-` or a digit;
+/// string contents (with their `\` escapes) are skipped. Only ASCII bytes
+/// matter, so the TypeScript scan over UTF-16 units finds the same tokens.
+pub fn scan_numbers(bytes: &[u8]) -> Result<(), String> {
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'"' {
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'"' {
+                i += if bytes[i] == b'\\' { 2 } else { 1 };
+            }
+            i += 1;
+        } else if b == b'-' || b.is_ascii_digit() {
+            let start = i;
+            while i < bytes.len()
+                && matches!(bytes[i], b'0'..=b'9' | b'+' | b'-' | b'.' | b'e' | b'E')
+            {
+                i += 1;
+            }
+            if !integer_token(&bytes[start..i]) {
+                return Err(NUMBER_DIGITS.into());
+            }
+        } else {
+            i += 1;
+        }
+    }
+    Ok(())
+}
+
+/// `-?(0|[1-9][0-9]{0,6})`.
+fn integer_token(t: &[u8]) -> bool {
+    let d = t.strip_prefix(b"-").unwrap_or(t);
+    match d {
+        [b'0'] => true,
+        [b'1'..=b'9', rest @ ..] => rest.len() <= 6 && rest.iter().all(u8::is_ascii_digit),
+        _ => false,
+    }
+}
+
 fn depth(v: &Value) -> usize {
     match v {
         Value::Array(a) => 1 + a.iter().map(depth).max().unwrap_or(0),
@@ -341,6 +389,7 @@ pub fn check_file(bytes: &[u8], vocab: &Vocab) -> Result<RulesFile, String> {
     if bytes.len() > MAX_BYTES {
         return Err(TOO_BIG.into());
     }
+    scan_numbers(bytes)?;
     let v: Value = serde_json::from_slice(bytes).map_err(|_| UNREADABLE.to_string())?;
     if depth(&v) > MAX_DEPTH {
         return Err(UNREADABLE.into());
