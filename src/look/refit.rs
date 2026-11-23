@@ -109,6 +109,8 @@ pub fn text_em(advances: &Advances, kerns: &[Kern], text: &str) -> f32 {
     width
 }
 
+/// Fits a **UI** `Text` line (a `Node`) to the active pack's string; not
+/// for `Text2d`, which has no box and is laid out on another schedule.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct LookFit {
     /// The string key (the same as the line's `LookText`).
@@ -205,7 +207,8 @@ impl LookFit {
     }
 }
 
-/// Shrinks a pack string's `LookFit` line that Bevy's layout found wider
+/// Shrinks a pack string's `LookFit` line (UI `Text` only: the query needs
+/// a `Node`) that Bevy's layout found wider
 /// than `line_px`, or wrapped onto a second line (module docs, step 2).
 /// Runs in `PostUpdate` after `UiSystems::PostLayout`, so it reads this
 /// frame's layout of the current size; it acts only on a layout that
@@ -214,14 +217,15 @@ impl LookFit {
 /// default look, never on the game's own string.
 pub fn clamp_fit(
     look: Res<ActiveLook>,
-    mut q: Query<(&LookFit, &mut TextFont, Ref<TextLayoutInfo>)>,
+    mut q: Query<(&LookFit, &mut TextFont, Ref<TextLayoutInfo>, &ComputedNode), With<Node>>,
 ) {
     if look.manifest.is_none() {
         return;
     }
-    for (fit, mut font, layout) in &mut q {
-        // Not laid out yet (no font, empty text): nothing to measure.
-        if !layout.is_changed() || layout.size.x <= 0.0 {
+    for (fit, mut font, layout, node) in &mut q {
+        // Not laid out yet (no font, empty text), or laid out against no
+        // width (`Display::None`, a node not placed yet): nothing to measure.
+        if !layout.is_changed() || layout.size.x <= 0.0 || node.size().x <= 0.0 {
             continue;
         }
         let default = look.contract.default_string(fit.key).unwrap_or(fit.key);
@@ -236,9 +240,15 @@ pub fn clamp_fit(
     }
 }
 
-/// Whether the layout broke the line.
+/// Whether the layout broke the line onto more than one visual line: more
+/// than one distinct run top. (`PositionedGlyph::line_index` will not do:
+/// it is cosmic-text's hard-newline paragraph, always 0 for a pack string.)
 fn wrapped(layout: &TextLayoutInfo) -> bool {
-    layout.glyphs.iter().any(|g| g.line_index > 0)
+    let mut tops = layout.run_geometry.iter().map(|r| r.bounds.min.y);
+    let Some(first) = tops.next() else {
+        return false;
+    };
+    tops.any(|y| (y - first).abs() > 0.5)
 }
 
 /// The next size for a line laid out `width` UI px wide at `size`, against

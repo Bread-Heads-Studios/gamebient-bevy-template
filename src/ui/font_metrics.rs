@@ -7,7 +7,9 @@
 //! file into a game verbatim, with the dev-dependency
 //! `cosmic-text = { version = "=0.16.0", features = ["shape-run-cache"] }`
 //! (already in every game's lockfile through Bevy). It names only
-//! `ui::fonts::ALL`, `ui::fit` and `ui::theme::STRINGS`.
+//! `ui::fonts::ALL`, `ui::fit`, `ui::theme` and `ui::menu::TITLE`. Its
+//! clamp tests run Bevy's real UI layout headless, which needs bevy's
+//! `bevy_picking` feature (on in native builds through Bevy's defaults).
 //!
 //! When a game adds or changes a face, run
 //! `cargo test print_glyph_tables -- --ignored --nocapture` and paste the
@@ -445,137 +447,156 @@ fn a_realistic_pack_string_gets_close_to_the_default_size() {
     }
 }
 
-/// Stands in for Bevy's UI text layout (which needs a window and a
-/// renderer): whenever a `LookFit` line's text or font changes, it writes
-/// the line's width as Bevy measures it, the cosmic-text shaped width at
-/// that size rounded up to a whole pixel, into `TextLayoutInfo`. Runs
-/// where Bevy's `text_system` does: after the look's refit, before the
-/// clamp.
-fn stand_in_layout(
-    mut q: Query<
-        (&Text, Ref<TextFont>, &mut TextLayoutInfo),
-        bevy::prelude::With<crate::look::LookFit>,
-    >,
-) {
-    for (text, font, mut layout) in &mut q {
-        if font.is_changed() || layout.size.x <= 0.0 {
-            let face = ALL
-                .iter()
-                .find(|f| f.handle == font.font)
-                .expect("an embedded face");
-            layout.size.x = (real_advance_em(face, &text.0) * font.font_size).ceil();
-        }
-    }
-}
-
-use bevy::prelude::{App, DetectChanges, MinimalPlugins, Query, Ref, Text, TextFont};
+use bevy::prelude::{App, MinimalPlugins, Text, TextFont};
 use bevy::text::TextLayoutInfo;
 
-/// A `LookFit` line under `pack` (string `title` set to `text`), in a box
-/// `box_px` wide, laid out by `stand_in_layout` and, if `clamp`, clamped.
-/// Returns (the estimate's size, the size and laid-out width after a few
-/// frames).
-fn laid_out(face: &'static Face, text: Option<&str>, box_px: f32, clamp: bool) -> (f32, f32, f32) {
-    use crate::look::{self, ActiveLook, LookSet, LookText, Selection};
-    use bevy::prelude::{IntoScheduleConfigs, PostUpdate};
+/// A real, headless Bevy UI app: text shaping, layout and the clamp as a
+/// game runs them, with no window surface and no renderer. A `box_px`-wide
+/// parent holds one `LookFit` line under a pack setting `title` to `text`
+/// (or the default look for `None`). Returns (the size, the laid-out width,
+/// the number of visual lines) after `frames` frames.
+fn real_layout(
+    face: &'static Face,
+    text: Option<&str>,
+    box_px: f32,
+    frames: usize,
+) -> (f32, f32, usize) {
+    use crate::look::{self, ActiveLook, LookPlugin, LookText, Selection};
+    use bevy::asset::AssetApp;
     let mut app = App::new();
-    app.add_plugins(MinimalPlugins)
-        .add_message::<look::LookChanged>()
-        .insert_resource(match text {
-            Some(t) => {
-                let json = format!(
-                    r#"{{"v":1,"id":"p","name":"P","kind":"palette","strings":{{"title":"{t}"}}}}"#
-                );
-                let files = std::collections::BTreeMap::from([(
-                    look::manifest::MANIFEST_FILE.to_string(),
-                    json.into_bytes(),
-                )]);
-                ActiveLook::from_files(&crate::ui::theme::LOOK, files, Selection::Default, None)
-                    .expect("valid pack")
-            }
-            None => ActiveLook::default_for(&crate::ui::theme::LOOK),
-        })
-        .configure_sets(PostUpdate, LookSet)
-        .add_systems(
-            PostUpdate,
-            (look::apply::retext, look::refit::refit_text).in_set(LookSet),
-        )
-        .add_systems(PostUpdate, stand_in_layout.after(LookSet));
-    if clamp {
-        app.add_systems(PostUpdate, look::refit::clamp_fit.after(stand_in_layout));
+    app.add_plugins((
+        MinimalPlugins,
+        bevy::asset::AssetPlugin::default(),
+        bevy::state::app::StatesPlugin,
+        bevy::input::InputPlugin,
+        bevy::window::WindowPlugin::default(),
+        bevy::transform::TransformPlugin,
+        bevy::camera::CameraPlugin,
+        bevy::text::TextPlugin,
+        bevy::ui::UiPlugin,
+    ))
+    .init_asset::<bevy::image::Image>()
+    .init_asset::<bevy::image::TextureAtlasLayout>()
+    .init_asset::<bevy::mesh::Mesh>()
+    .init_asset::<bevy::sprite_render::ColorMaterial>()
+    // bevy_ui's picking backend and `viewport_picking` (always on with
+    // bevy_ui's `bevy_picking` feature) need picking's own plugins.
+    .add_plugins(bevy::picking::DefaultPickingPlugins)
+    .insert_resource(Selection::Default)
+    .add_plugins(LookPlugin {
+        contract: &crate::ui::theme::LOOK,
+    });
+    {
+        let mut fonts = app
+            .world_mut()
+            .resource_mut::<bevy::asset::Assets<bevy::text::Font>>();
+        for f in ALL {
+            fonts
+                .insert(
+                    f.handle.id(),
+                    bevy::text::Font::try_from_bytes(f.bytes.to_vec()).unwrap(),
+                )
+                .unwrap();
+        }
     }
-    let default = crate::ui::menu::TITLE;
-    let fit = face.look_fit_in("title", 88.0, box_px);
-    let e = app
+    if let Some(t) = text {
+        let json = format!(
+            r#"{{"v":1,"id":"p","name":"P","kind":"palette","strings":{{"title":"{t}"}}}}"#
+        );
+        let files = std::collections::BTreeMap::from([(
+            look::manifest::MANIFEST_FILE.to_string(),
+            json.into_bytes(),
+        )]);
+        app.insert_resource(
+            ActiveLook::from_files(&crate::ui::theme::LOOK, files, Selection::Default, None)
+                .expect("valid pack"),
+        );
+    }
+    app.world_mut().spawn(bevy::prelude::Camera2d);
+    let line = app
         .world_mut()
         .spawn((
-            Text::new(default),
+            Text::new(crate::ui::menu::TITLE),
             face.font(10.0),
             LookText("title"),
-            fit,
-            TextLayoutInfo::default(),
+            face.look_fit_in("title", 88.0, box_px),
         ))
         .id();
-    app.update();
-    let estimate = app.world().get::<TextFont>(e).unwrap().font_size;
-    for _ in 0..6 {
+    app.world_mut()
+        .spawn((bevy::prelude::Node {
+            width: bevy::prelude::Val::Px(box_px),
+            ..Default::default()
+        },))
+        .add_child(line);
+    for _ in 0..frames {
         app.update();
     }
     let w = app.world();
+    let layout = w.get::<TextLayoutInfo>(line).unwrap();
+    let mut tops: Vec<f32> = layout.run_geometry.iter().map(|r| r.bounds.min.y).collect();
+    tops.dedup_by(|a, b| (*a - *b).abs() <= 0.5);
     (
-        estimate,
-        w.get::<TextFont>(e).unwrap().font_size,
-        w.get::<TextLayoutInfo>(e).unwrap().size.x,
+        w.get::<TextFont>(line).unwrap().font_size,
+        layout.size.x,
+        tops.len(),
     )
 }
 
-/// The clamp is the fit guarantee. Strings whose shaping rules reach past
-/// the tables' three-character contexts (Inter's `<---` arrow ligature,
-/// 0.6 em wider than its parts; the five-character `$*[jU` alternate
-/// chain) overflow the estimate; after a few frames of layout and clamp
-/// every one fits its box. Without the clamp the arrow overflows (asserted
-/// here, so this test fails if the tables ever change in a way that hides
-/// the case it exists for).
+/// The clamp is the fit guarantee, in Bevy's real UI layout. Strings
+/// whose shaping rules reach past the tables' three-character contexts
+/// (Inter's `<---` arrow ligature, 0.6 em wider than its parts; the
+/// five-character `$*[jU` alternate chain) overflow the estimate: a single
+/// word runs past its box, a multi-word line wraps. After a few frames
+/// every one sits on one line within its box. The estimate alone (frame 1)
+/// is asserted to wrap or overflow for the arrow lines, so this test fails
+/// if the tables ever change in a way that hides the case it exists for.
 #[test]
 fn the_clamp_brings_estimate_overflows_inside_the_box() {
     let body = &crate::ui::fonts::BODY;
-    let mut overflowed_without_clamp = false;
-    for text in ["PRESS START <---", "GO <--- HERE", "$*[jU", "<----->"] {
-        for box_px in (60..=900).step_by(29).map(|b| b as f32) {
-            let (_, size, width) = laid_out(body, Some(text), box_px, true);
+    let mut estimate_failed = false;
+    for (text, boxes) in [
+        ("GO <--- HERE", &[300.0, 250.0, 420.0][..]),
+        ("PRESS START <---", &[400.0, 330.0, 520.0][..]),
+        ("<---", &[120.0, 200.0][..]),
+        ("<----->", &[150.0, 260.0][..]),
+        ("$*[jU", &[90.0, 140.0, 230.0][..]),
+    ] {
+        for &box_px in boxes {
+            let (estimate, first_width, first_lines) = real_layout(body, Some(text), box_px, 1);
+            let (size, width, lines) = real_layout(body, Some(text), box_px, 8);
             assert!(
-                size == 1.0 || width <= box_px,
-                "{text:?} in {box_px}: {width} px at {size} after the clamp"
+                lines == 1 && width <= box_px,
+                "{text:?} in {box_px}: {lines} line(s), {width} px at {size} after the clamp"
             );
-            let (estimate, _, unclamped) = laid_out(body, Some(text), box_px, false);
             assert!(size <= estimate, "{text:?}: the clamp grew a line");
-            overflowed_without_clamp |= unclamped > box_px && text.contains("<---");
+            if text.contains("<---") && (first_lines > 1 || first_width > box_px) {
+                estimate_failed = true;
+            }
         }
     }
     assert!(
-        overflowed_without_clamp,
-        "the arrow ligature no longer overflows the estimate: this test proves nothing"
+        estimate_failed,
+        "the arrow ligature no longer defeats the estimate: this test proves nothing"
     );
 }
 
 /// The game's own string keeps exactly its `fitted` size: under the
 /// default look the clamp never runs, even where the default overflows a
-/// narrow box (a default-look bug the clamp must not paper over).
+/// narrow box (a default-look bug the clamp must not paper over), and a
+/// pack that sets the key to the default string changes nothing either.
 #[test]
 fn the_clamp_never_touches_the_default() {
     for face in ALL {
+        let fitted = face.fitted(crate::ui::menu::TITLE, 88.0).font_size;
         for box_px in [80.0, 300.0, 900.0] {
-            let (estimate, size, _) = laid_out(face, None, box_px, true);
-            let fitted = face.fitted(crate::ui::menu::TITLE, 88.0).font_size;
+            let (size, _, _) = real_layout(face, None, box_px, 6);
+            assert_eq!(size, fitted, "{} in {box_px}", face.name);
+            let (size, _, _) = real_layout(face, Some(crate::ui::menu::TITLE), box_px, 6);
             assert_eq!(
-                (estimate, size),
-                (fitted, fitted),
-                "{} in {box_px}",
+                size, fitted,
+                "{} in {box_px}, a pack's default string",
                 face.name
             );
-            // A pack that sets the key to the default string: the same.
-            let (_, size, _) = laid_out(face, Some(crate::ui::menu::TITLE), box_px, true);
-            assert_eq!(size, fitted, "{} in {box_px}", face.name);
         }
     }
 }
