@@ -155,6 +155,16 @@ impl ActiveLook {
             .map_or(1.0, |g| g.clamp(0.0, 1.0))
     }
 
+    /// The colour `t` (clamped to `0..=1`) of the way from role `from` to
+    /// role `to`, mixed in sRGB: a game system that paints from state (combo
+    /// heat, a charge bar, a timer going red) reads its ramp here, so a pack
+    /// recolours both ends. At `t = 0` it is exactly `colour(from)`'s sRGB.
+    pub fn mix(&self, from: &str, to: &str, t: f32) -> Color {
+        let a = Srgba::from(self.colour(from));
+        let b = Srgba::from(self.colour(to));
+        Color::Srgba(a.mix(&b, t.clamp(0.0, 1.0)))
+    }
+
     pub fn string<'a>(&'a self, key: &'a str) -> &'a str {
         self.manifest
             .as_ref()
@@ -221,5 +231,16 @@ mod tests {
         assert_eq!(dim.glow("glow"), 0.25);
         // A role the pack leaves alone keeps its glow.
         assert_eq!(dim.glow("ink"), 1.0);
+    }
+
+    #[test]
+    fn mix_runs_from_one_role_to_the_other_and_clamps() {
+        let l = ActiveLook::default_for(&C);
+        let ink = Color::Srgba(Srgba::from(l.colour("ink")));
+        let glow = Color::Srgba(Srgba::from(l.colour("glow")));
+        assert_eq!(l.mix("ink", "glow", 0.0), ink);
+        assert_eq!(l.mix("ink", "glow", 1.0), glow);
+        assert_eq!(l.mix("ink", "glow", 7.0), glow);
+        assert_eq!(l.mix("ink", "glow", -1.0), ink);
     }
 }
