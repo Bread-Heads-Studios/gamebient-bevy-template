@@ -46,6 +46,8 @@ pub use crate::ui::fit::Face;
 
 /// `DISPLAY`'s advance per printable ASCII glyph, ems, `' '..='~'`
 /// (measured from the TTF; `fonts::tests` holds it).
+// Measured advances, not maths constants (0.3010 is not log10 2).
+#[allow(clippy::approx_constant)]
 const DISPLAY_ADVANCES: Advances = [
     0.2540, 0.2980, 0.5140, 0.6360, 0.6060, 0.7580, 0.5910, 0.2940, 0.3980, 0.3900, 0.5400, 0.6200,
     0.2940, 0.4320, 0.2980, 0.3880, 0.6480, 0.4520, 0.5940, 0.6080, 0.6360, 0.6000, 0.6180, 0.5540,
@@ -72,6 +74,8 @@ pub const DISPLAY: Face = Face {
 
 /// `BODY`'s advance per printable ASCII glyph, ems, `' '..='~'`
 /// (measured from the TTF; `fonts::tests` holds it).
+// Measured advances, not maths constants (0.3010 is not log10 2).
+#[allow(clippy::approx_constant)]
 const BODY_ADVANCES: Advances = [
     0.2520, 0.3213, 0.5230, 0.6436, 0.6504, 1.0044, 0.6626, 0.3257, 0.3731, 0.3731, 0.5396, 0.6729,
     0.3189, 0.4654, 0.3189, 0.3790, 0.6597, 0.4229, 0.6231, 0.6363, 0.6661, 0.6124, 0.6397, 0.5762,
@@ -98,6 +102,8 @@ pub const BODY: Face = Face {
 
 /// `STUDIO`'s advance per printable ASCII glyph, ems, `' '..='~'`
 /// (measured from the TTF; `fonts::tests` holds it).
+// Measured advances, not maths constants (0.3010 is not log10 2).
+#[allow(clippy::approx_constant)]
 const STUDIO_ADVANCES: Advances = [
     0.1845, 0.3270, 0.4385, 0.6635, 0.6125, 0.8285, 0.9795, 0.2155, 0.3700, 0.3675, 0.5850, 0.5365,
     0.3105, 0.3525, 0.3025, 0.4495, 0.6975, 0.4735, 0.6395, 0.5925, 0.6620, 0.6045, 0.6460, 0.5575,
@@ -125,6 +131,8 @@ pub const STUDIO: Face = Face {
 
 /// `STUDIO_ITALIC`'s advance per printable ASCII glyph, ems, `' '..='~'`
 /// (measured from the TTF; `fonts::tests` holds it).
+// Measured advances, not maths constants (0.3010 is not log10 2).
+#[allow(clippy::approx_constant)]
 const STUDIO_ITALIC_ADVANCES: Advances = [
     0.2040, 0.3170, 0.3385, 0.6535, 0.5860, 0.7565, 0.6985, 0.1630, 0.3650, 0.3635, 0.6240, 0.5650,
     0.2560, 0.4085, 0.2455, 0.4520, 0.6470, 0.4355, 0.5915, 0.5345, 0.5680, 0.5550, 0.5930, 0.5295,
@@ -364,7 +372,8 @@ mod tests {
 
     /// Prints each face's table in the form `fonts.rs` declares it. A game
     /// adding a face runs `cargo test print_advance_tables -- --ignored
-    /// --nocapture` and pastes the rows.
+    /// --nocapture` and pastes the rows (into a const carrying
+    /// `#[allow(clippy::approx_constant)]`: a measured 0.3010 trips it).
     #[test]
     #[ignore = "a measuring tool, not a check"]
     fn print_advance_tables() {

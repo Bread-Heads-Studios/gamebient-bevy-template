@@ -556,7 +556,8 @@ comment, rather than writing its own boot test.
 
 Recopying `src/ui/fit.rs` means each `Face` in `fonts.rs` needs its
 `advances` table: copy the template's `fonts::tests`, run `cargo test
-print_advance_tables -- --ignored --nocapture`, paste the rows, and
+print_advance_tables -- --ignored --nocapture`, paste the rows (the
+table const carries `#[allow(clippy::approx_constant)]`), and
 `declared_advances_match_every_printable_ascii_glyph` holds them to the
 TTFs from then on.
 
