@@ -4,7 +4,7 @@
 //! | Direction   | Name             | Data                                              |
 //! |-------------|------------------|---------------------------------------------------|
 //! | host → game | `tunables.list`  | —                                                 |
-//! | game → host | `tunables`       | the catalog: groups, tunables with values, checks, sounds, content, level, looks |
+//! | game → host | `tunables`       | the catalog: groups, tunables with values, checks, sounds, content, level, rules, looks |
 //! | host → game | `tunables.set`   | `{ "<path>": value, … }`                          |
 //! | game → host | `tunable`        | `{ path, value, applied: "tick"\|"now", tick }` or `{ path, error }` |
 //! | host → game | `checks.run`     | `{ "names": [ … ] }`                              |
@@ -27,7 +27,9 @@
 //!
 //! `content.set` files: `level.json` (applies at the next run start; send
 //! `run.restart`), `tunables.json` (through `PendingTunes`, all or nothing),
-//! `sprites.json`, `sprites/<Kind>.png`, `audio/songs.json`, `audio/sfx.json`.
+//! `sprites.json`, `sprites/<Kind>.png`, `audio/songs.json`, `audio/sfx.json`,
+//! `rules.json` (checked whole: the next run starts with it and a run in
+//! progress takes it at the next tick).
 //! While Editing, `level.json` respawns the shown level at once and no restart is needed.
 //! The catalog's `files` maps every content file the game runs to its hash.
 //!
@@ -283,6 +285,7 @@ pub fn catalog_json(world: &World) -> Json {
     if let Some(level) = level_catalog(world) {
         j["level"] = level;
     }
+    j["rules"] = crate::game::rules::rules_catalog(world);
     if let Some(looks) = crate::look::editor::looks_catalog(world) {
         j["looks"] = looks;
     }
@@ -375,7 +378,12 @@ fn set_content(world: &mut World, file: &str, data: &Json) -> Result<u64, String
     let is_png = file.starts_with("sprites/") && file.ends_with(".png");
     let known = matches!(
         file,
-        "level.json" | "tunables.json" | "sprites.json" | "audio/songs.json" | "audio/sfx.json"
+        "level.json"
+            | "tunables.json"
+            | "sprites.json"
+            | "audio/songs.json"
+            | "audio/sfx.json"
+            | "rules.json"
     );
     if !known && !is_png {
         let shown: String = file.chars().take(40).collect();
@@ -414,6 +422,9 @@ fn set_content(world: &mut World, file: &str, data: &Json) -> Result<u64, String
         "sprites.json" => e(sprites::set_sprites_meta(world, &bytes))?,
         "audio/songs.json" => e(audio::set_songs(world, &bytes))?,
         "audio/sfx.json" => e(audio::set_sfx(world, &bytes))?,
+        // Checked whole; the next run starts with it, and a run in progress
+        // takes it at the next tick (`rules::PendingRules`).
+        "rules.json" => crate::game::rules::set_rules(world, &bytes)?,
         "tunables.json" => {
             let parsed = TunablesFile::parse(&bytes).map_err(|e| e.0)?;
             let idx = world.resource::<TunableIndex>().clone();
@@ -1309,5 +1320,88 @@ mod tests {
             j["looks"],
             crate::look::editor::looks_catalog(app.world()).unwrap()
         );
+    }
+
+    #[test]
+    fn content_set_rules_applies_to_the_run_in_progress() {
+        use crate::game::content::files;
+        use crate::game::rules::Rules;
+        use crate::game::rules::run::RunRules;
+        use crate::game::scoring::GameData;
+        let mut app = build_headless_app();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        drain_custom(&mut app);
+        let text = r#"{"v":1,"rules":[{"id":"a","when":{"every":1},"do":[{"add":["score",1]}]}]}"#;
+        send(
+            &mut app,
+            "content.set",
+            &json!({ "file": "rules.json", "text": text }).to_string(),
+        );
+        app.update();
+        let r = content_replies(&mut app);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0]["ok"], true);
+        assert_eq!(r[0]["file"], "rules.json");
+        assert_eq!(r[0]["hash"], files::hex(files::fnv1a64(text.as_bytes())));
+        let score = app.world().resource::<GameData>().score;
+        app.update();
+        app.update();
+        assert!(
+            app.world().resource::<GameData>().score >= score + 2,
+            "the run in progress follows the new rules"
+        );
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::Playing
+        );
+        assert_eq!(
+            app.world().resource::<RunRules>().file,
+            app.world().resource::<Rules>().0
+        );
+        assert_eq!(
+            catalog_json(app.world())["files"]["rules.json"],
+            files::hex(files::fnv1a64(text.as_bytes()))
+        );
+    }
+
+    #[test]
+    fn content_set_refuses_a_rules_file_with_its_sentence() {
+        let mut app = build_headless_app();
+        app.update();
+        drain_custom(&mut app);
+        let before = catalog_json(app.world())["files"]["rules.json"].clone();
+        send(
+            &mut app,
+            "content.set",
+            &json!({ "file": "rules.json", "text": r#"{"v":1,"rules":[{"id":"a","when":{"start":true},"do":[{"add":["gems",1]}]}]}"# }).to_string(),
+        );
+        app.update();
+        let r = content_replies(&mut app);
+        assert_eq!(r[0]["ok"], false);
+        assert_eq!(
+            r[0]["error"],
+            "Rule 1: This game has no counter called gems."
+        );
+        assert_eq!(r[0]["hash"], before);
+        assert_eq!(catalog_json(app.world())["files"]["rules.json"], before);
+    }
+
+    #[test]
+    fn the_catalog_carries_the_rules_vocabulary() {
+        let app = build_headless_app();
+        let j = catalog_json(app.world());
+        assert_eq!(j["rules"], crate::game::rules::rules_catalog(app.world()));
+        assert!(
+            j["rules"]["kinds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|k| k == "Player")
+        );
+        assert_eq!(j["rules"]["triggers"].as_array().unwrap().len(), 6);
     }
 }

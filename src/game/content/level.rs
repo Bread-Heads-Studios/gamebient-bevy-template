@@ -9,6 +9,7 @@
 //! ([`LevelSource::Test`]), so editing `content/level.json` never
 //! invalidates the fixtures.
 
+use bevy::ecs::system::SystemState;
 use bevy::prelude::*;
 
 use super::files::fnv1a64;
@@ -108,31 +109,106 @@ pub fn spawn_level(
     } else {
         &level.0
     };
+    let sources = ArtSources {
+        art: art.as_deref(),
+        sprite_art: sprite_art.as_deref(),
+        sprite_images: sprite_images.as_deref(),
+    };
     for placed in &file.things {
         let Some(kind) = kinds.index(&placed.kind) else {
             continue;
         };
         let props = kinds.props(kind).expect("index came from kinds");
         let size = placed_size(placed, props);
-        let mut e = commands.spawn((
-            Thing { kind },
-            ThingId(placed.id.clone()),
-            Size(size),
-            GameEntity,
-            spawn.stamp(),
-            Transform::from_xyz(placed.at[0], placed.at[1], 0.0),
-            Visibility::default(),
-        ));
-        if let Some(on_spawn) = props.on_spawn {
-            on_spawn(&mut e);
-        }
+        spawn_one(
+            &mut commands,
+            &kinds,
+            &mut spawn,
+            &sources,
+            Spot {
+                kind,
+                id: Some(&placed.id),
+                at: Vec2::from(placed.at),
+                size,
+            },
+        );
+    }
+}
+
+/// Spawns one `kind` at `at` with its default size, from a `&mut World`
+/// (the rules interpreter's spawn). `None` for a kind that is not
+/// registered. The commands are applied before it returns.
+pub fn spawn_thing(world: &mut World, kind: &str, at: Vec2) -> Option<Entity> {
+    let mut state: SystemState<(
+        Commands,
+        Res<Kinds>,
+        ResMut<SpawnCounter>,
+        Option<Res<ThingArt>>,
+        Option<Res<SpriteArt>>,
+        Option<Res<SpriteImages>>,
+    )> = SystemState::new(world);
+    let id = {
+        let (mut commands, kinds, mut spawn, art, sprite_art, sprite_images) = state.get_mut(world);
+        let k = kinds.index(kind)?;
+        let size = kinds.props(k)?.size;
         let sources = ArtSources {
             art: art.as_deref(),
             sprite_art: sprite_art.as_deref(),
             sprite_images: sprite_images.as_deref(),
         };
-        spawn_art_child(&mut e, &sources, &kinds, kind, size, ());
+        spawn_one(
+            &mut commands,
+            &kinds,
+            &mut spawn,
+            &sources,
+            Spot {
+                kind: k,
+                id: None,
+                at,
+                size,
+            },
+        )
+    };
+    state.apply(world);
+    Some(id)
+}
+
+/// What and where one spawned Thing is.
+pub struct Spot<'a> {
+    pub kind: u16,
+    /// The level file's id; things spawned during a run have none.
+    pub id: Option<&'a str>,
+    pub at: Vec2,
+    pub size: Vec2,
+}
+
+/// Spawns one Thing: the kit's components, the next `SpawnOrder`, the
+/// kind's `on_spawn` and its art child. Shared by [`spawn_level`] and
+/// [`spawn_thing`], so both build the same entity.
+fn spawn_one(
+    commands: &mut Commands,
+    kinds: &Kinds,
+    spawn: &mut SpawnCounter,
+    sources: &ArtSources,
+    spot: Spot,
+) -> Entity {
+    let props = kinds.props(spot.kind).expect("index came from kinds");
+    let mut e = commands.spawn((
+        Thing { kind: spot.kind },
+        Size(spot.size),
+        GameEntity,
+        spawn.stamp(),
+        Transform::from_xyz(spot.at.x, spot.at.y, 0.0),
+        Visibility::default(),
+    ));
+    if let Some(id) = spot.id {
+        e.insert(ThingId(id.to_string()));
     }
+    if let Some(on_spawn) = props.on_spawn {
+        on_spawn(&mut e);
+    }
+    spawn_art_child(&mut e, sources, kinds, spot.kind, spot.size, ());
+    e.id()
 }
 
 /// A placed Thing's size: its own `size`, else its kind's default.
@@ -294,5 +370,27 @@ mod tests {
         set_level(app.world_mut(), b).unwrap();
         assert_ne!(app.world().resource::<LevelHash>().0, ha);
         assert_eq!(app.world().resource::<Level>().0.things[0].at, [0.0, 1.0]);
+    }
+
+    #[test]
+    fn spawn_thing_stamps_the_next_order_and_the_kind() {
+        let mut app = build_headless_app();
+        app.update();
+        let e = spawn_thing(app.world_mut(), "Coin", Vec2::new(2.0, -1.0)).unwrap();
+        let w = app.world();
+        assert_eq!(
+            w.get::<Thing>(e).map(|t| t.kind),
+            w.resource::<Kinds>().index("Coin")
+        );
+        assert_eq!(
+            w.get::<Transform>(e).unwrap().translation.truncate(),
+            Vec2::new(2.0, -1.0)
+        );
+        assert!(w.get::<SpawnOrder>(e).is_some());
+        assert!(
+            w.get::<ThingId>(e).is_none(),
+            "things spawned during a run have no id"
+        );
+        assert!(spawn_thing(app.world_mut(), "Ghost", Vec2::ZERO).is_none());
     }
 }

@@ -350,7 +350,7 @@ pub fn use_builtin_content(app: &mut App) {
 
 /// This build's release default content, captured by [`build_verify_app`]
 /// before the replay's own start values are staged: the embedded level's
-/// hash and every non-cosmetic tunable's start value as `ContentPlugin`
+/// and rules' key and every non-cosmetic tunable's start value as `ContentPlugin`
 /// left it. It comes from the verifier itself (the module the site loads
 /// for the replay's `build`), never from the replay.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
@@ -364,7 +364,12 @@ impl ReleaseDefault {
     /// before anything has changed a tunable or the level.
     pub fn capture(world: &World) -> Self {
         Self {
-            level: world.get_resource::<LevelHash>().map_or(0, |h| h.0),
+            level: hash::with_rules(
+                world.get_resource::<LevelHash>().map_or(0, |h| h.0),
+                world
+                    .get_resource::<crate::game::rules::RulesHash>()
+                    .map_or(0, |h| h.0),
+            ),
             starts: run_starts(world)
                 .into_iter()
                 .map(|(id, v)| (id, v.to_bytes()))
@@ -435,7 +440,7 @@ pub fn build_verify_app(replay: &Replay) -> App {
 /// invalidates them. Such a run's content hash is never a release's
 /// default, so the website refuses it for a leaderboard, as it does any run
 /// whose verdict says `is_default_content: false`.
-/// `content_level` is the app's `LevelHash`.
+/// `content_level` is the app's run key (`ReleaseDefault::level`).
 pub fn level_source_for(replay: &Replay, content_level: u64) -> LevelSource {
     let with_level = |level: u64| {
         hash::content_of_bytes(
@@ -448,7 +453,11 @@ pub fn level_source_for(replay: &Replay, content_level: u64) -> LevelSource {
         )
     };
     if replay.content != with_level(content_level)
-        && replay.content == with_level(test_level_hash())
+        && replay.content
+            == with_level(hash::with_rules(
+                test_level_hash(),
+                crate::game::rules::test_rules_hash(),
+            ))
     {
         LevelSource::Test
     } else {
@@ -738,7 +747,7 @@ mod tests {
             .collect();
         r.tunes.clear();
         r.content = hash::content_of_bytes(
-            test_level_hash(),
+            hash::with_rules(test_level_hash(), crate::game::rules::test_rules_hash()),
             r.starts.iter().map(|(id, b)| (*id, b.as_slice())),
             [],
         );

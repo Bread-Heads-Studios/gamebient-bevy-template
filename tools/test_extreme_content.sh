@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Proves the content kit's promise: a data save to content/ never breaks
 # `cargo test`. Copies the repo to a scratch folder, saves every tunable at
-# its max (then, in a second run, at its min) and edits content/level.json
+# its max (then, in a second run, at its min), saves content/rules.json at
+# the limits (then, in the min run, empty) and edits content/level.json
 # (one Thing moved, one removed), then runs the full test suite there.
 #
 # The tunables file comes from the ignored unit test
@@ -57,6 +58,9 @@ for end in "${ends[@]}"; do
   (cd "$root" && GX_EXTREME="$end" GX_EXTREME_OUT="$copy/content/tunables.json" \
     cargo test --lib --all-features -- --ignored --exact \
     game::content::saved::tests::write_extreme_tunables --quiet)
+  (cd "$root" && GX_EXTREME="$end" GX_EXTREME_OUT="$copy/content/rules.json" \
+    cargo test --lib --all-features -- --ignored --exact \
+    game::rules::tests::write_extreme_rules --quiet)
   (cd "$copy" && CARGO_TARGET_DIR="$copy_target" cargo test --all-targets --all-features)
 done
 echo "extreme content: cargo test passed for: ${ends[*]}"
