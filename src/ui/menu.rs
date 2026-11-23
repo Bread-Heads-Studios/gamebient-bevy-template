@@ -52,7 +52,8 @@ pub fn best_label(best: u32) -> String {
 ///
 /// The title comes from the active Look Pack (`LookText`) and is refitted
 /// whenever the look changes (`LookFit`): the template's own title keeps
-/// its `fitted` size; a pack's is sized at the face's widest glyph.
+/// its `fitted` size; a pack's is sized by its real width
+/// (`Face::advances`), never above that.
 ///
 /// TEMPLATE NOTE: artwork variant: if your game has full-bleed title art
 /// (logotype baked in), replace the lockup's text with an `ImageNode` and

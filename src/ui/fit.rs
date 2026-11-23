@@ -9,12 +9,14 @@
 //!
 //! Average-advance fitting is right for the game's own fixed strings,
 //! which `fonts::tests` measures. A string a pack supplies can be any
-//! printable ASCII up to the key's `max_chars`, and an all-`W` (or all-`@`)
-//! line is far wider than the average, so pack-swappable lines fit on each
-//! face's `widest_em` instead: build a `look::LookFit` with
-//! [`Face::look_fit`] / [`Face::look_fit_in`]. The game's own string keeps
-//! exactly its `fitted` size there; any other word is sized at the widest
-//! glyph (`look/refit.rs`).
+//! printable ASCII up to the key's `max_chars`, so pack-swappable lines
+//! fit on each face's per-glyph `advances` table (and residual `kerns`)
+//! instead: build a `look::LookFit` with [`Face::look_fit`] /
+//! [`Face::look_fit_in`]. The game's own string keeps exactly its `fitted`
+//! size there; any other string is sized from an estimate of its shaped
+//! width from the tables, never larger than the default's size, then
+//! clamped after layout so it fits (`look/refit.rs`). `widest_em` is the
+//! table's widest glyph, for `max_chars` worst-case checks.
 
 use bevy::prelude::*;
 
@@ -38,9 +40,21 @@ pub struct Face {
     pub advance_em: f32,
     /// The widest single glyph's advance, in ems, over printable ASCII
     /// (`' '..='~'`, every character the Look Pack validator accepts in a
-    /// string). Measured from the TTF and checked by `fonts::tests`; it is
-    /// what makes any pack string up to `max_chars` fit (`LookFit`).
+    /// string): the largest of `advances`. Checked by `ui::font_metrics`; it
+    /// is the worst case for a pack string of `max_chars`.
     pub widest_em: f32,
+    /// Every printable ASCII character's advance, in ems, `' '..='~'` in
+    /// order (index `c as usize - 0x20`): the widest its glyph takes when
+    /// shaped as Bevy shapes it in any three-character context, kerning and
+    /// contextual alternates included: a close estimate of the drawn line
+    /// (`look::refit::clamp_fit` corrects the rare longer-range case after
+    /// layout). Measured and checked by `ui::font_metrics`; `LookFit` sizes
+    /// a pack's string by it.
+    pub advances: &'static crate::look::refit::Advances,
+    /// Residual widening pairs (a ligature wider than its parts), in ems,
+    /// sorted by `(left, right)`; usually `&[]`. Measured and checked by
+    /// `ui::font_metrics`.
+    pub kerns: &'static [crate::look::refit::Kern],
 }
 
 impl Face {
@@ -62,14 +76,16 @@ impl Face {
 
     /// A `LookFit` for string `key` set in this face on one line of the
     /// game's UI width (the line `fitted` fits): the game's own string gets
-    /// exactly `fitted(default, max_size)`'s size, any other the size at
-    /// which `max_chars` widest glyphs still fit.
+    /// exactly `fitted(default, max_size)`'s size, any other the largest
+    /// size, no larger than that, at which its estimated width (`advances`
+    /// + `kerns`) fits the line, clamped after layout if Bevy finds it wider.
     pub fn look_fit(&self, key: &'static str, max_size: f32) -> crate::look::LookFit {
         crate::look::LookFit::new(
             key,
             max_size,
             self.advance_em,
-            self.widest_em,
+            self.advances,
+            self.kerns,
             ui_width() * MAX_LINE_SHARE,
         )
     }
@@ -126,6 +142,8 @@ mod tests {
         weight: FontWeight::NORMAL,
         advance_em: 0.6,
         widest_em: 0.6,
+        advances: &[0.6; crate::look::refit::PRINTABLE],
+        kerns: &[],
     };
 
     #[test]
@@ -198,6 +216,7 @@ mod tests {
         let wide = Face {
             advance_em: 0.63,
             widest_em: 1.02,
+            advances: &[1.02; crate::look::refit::PRINTABLE],
             ..MONO
         };
         for text in ["A", "GAMEBIENT GAME", "GRAND THEFT AUTO-REPLY", "W"] {
