@@ -32,6 +32,7 @@ pub mod refit;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod reload;
 pub mod runtime;
+pub mod scene;
 pub mod select;
 pub mod shape;
 pub mod shapes_apply;
@@ -54,6 +55,9 @@ pub use manifest::{
 pub use node::{LookBorder, LookGradient, LookTint};
 pub use refit::LookFit;
 pub use runtime::ActiveLook;
+pub use scene::LookClearColour;
+#[cfg(not(gx_look_no_pbr))]
+pub use scene::{LookAmbient, LookLight};
 pub use select::Selection;
 pub use shape::{DEFAULT_DETAIL, DETAIL_RANGE, build_mesh, primitive_transform, vertex_count};
 pub use shapes_apply::ShapeTargets;
@@ -140,6 +144,23 @@ impl Plugin for LookPlugin {
                     .in_set(LookSet)
                     .before(bevy::asset::AssetEventSystems),
             );
+        // ClearColor follows a role once the game inserts `LookClearColour`.
+        app.add_systems(
+            PostUpdate,
+            scene::sync_clear_colour
+                .in_set(LookSet)
+                .run_if(resource_exists::<scene::LookClearColour>),
+        );
+        // Light colours (`LookLight`, `LookAmbient`); needs bevy_light.
+        #[cfg(not(gx_look_no_pbr))]
+        app.add_systems(
+            PostUpdate,
+            (
+                scene::retint_lights,
+                scene::sync_ambient.run_if(resource_exists::<scene::LookAmbient>),
+            )
+                .in_set(LookSet),
+        );
         // After `retint_material`, so a `LookGlow` emissive wins (glow.rs).
         #[cfg(not(gx_look_no_pbr))]
         app.add_systems(
