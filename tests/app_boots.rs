@@ -3,13 +3,21 @@
 //! and `LookPlugin`), headless, with no OS window and no GPU, under the
 //! default look and under every built-in pack.
 //!
-//! Bevy validates a system's queries and parameters when its schedule is
-//! initialised, and a conflicting query (B0001) or a missing resource
-//! panics there. The unit tests build systems one at a time, so such a
-//! panic in the assembled app otherwise first shows in a browser. This
-//! test runs a few frames, initialises **every** schedule (each state's
-//! `OnEnter` / `OnExit` included, which the frames never reach), and then
-//! runs a few frames of a run.
+//! What it catches, exactly:
+//!
+//! - **A conflicting query (B0001) anywhere**: Bevy checks a system's
+//!   queries when its schedule is initialised, and this test initialises
+//!   **every** schedule, each state's `OnEnter` / `OnExit` included, after
+//!   a few frames.
+//! - **A missing resource only in the systems the frames run**: `Res<T>`
+//!   is checked when a system runs, not when it is initialised. The frames
+//!   run boot (the studio logo or menu), a stretch of `Playing` and a
+//!   stretch of `GameOver`, with each state's `OnEnter` / `OnExit` and
+//!   `Update` systems; a system only some other state runs (a pause card,
+//!   a demo-end card) is checked for B0001 only.
+//!
+//! The unit tests build systems one at a time, so such a panic in the
+//! assembled app otherwise first shows in a browser.
 //!
 //! Copy this file into a game unchanged except for the crate name
 //! (`gamebient_game` below). It names only modules every template game
@@ -98,17 +106,17 @@ fn boots(selection: Selection) {
         "the state machine did not start"
     );
     app.world().resource::<ActiveLook>();
-    // Into a run: the gameplay schedules and the HUD run for real.
-    app.world_mut()
-        .resource_mut::<NextState<GameState>>()
-        .set(GameState::Playing);
-    for _ in 0..8 {
-        app.update();
+    // Into a run, then its end: the gameplay schedules, the HUD and the
+    // game-over screen run for real (their missing resources show here).
+    for state in [GameState::Playing, GameState::GameOver] {
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(state);
+        for _ in 0..8 {
+            app.update();
+        }
+        assert_eq!(*app.world().resource::<State<GameState>>().get(), state);
     }
-    assert_eq!(
-        *app.world().resource::<State<GameState>>().get(),
-        GameState::Playing
-    );
 }
 
 #[test]

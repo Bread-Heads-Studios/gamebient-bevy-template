@@ -12,8 +12,9 @@
 //! range and shadows stay the game's, so an intensity animation (a
 //! flickering lamp, a pulsing spot) keeps running under every pack. They
 //! write on every `LookChanged` (a clear included, which restores the role
-//! default), and on the frame the tag spawns or the resource is inserted
-//! **only under a pack**: under the default look nothing is written at
+//! default), and on the frame the tag spawns, the light component is
+//! inserted (after its tag, say) or the resource is inserted **only under
+//! a pack**: under the default look nothing is written at
 //! spawn, so tagging a light can never change the default look, even where
 //! the game's light colour is not exactly its role's default. Each compares
 //! before it writes.
@@ -100,27 +101,32 @@ mod lights {
         let all = changed.read().count() > 0;
         let spawn = paint_on_spawn(&look);
         for (tag, point, spot, sun, ambient) in &mut q {
-            if !(all || (tag.is_added() && spawn)) {
-                continue;
-            }
             let c = look.colour(tag.0);
-            // Deref only to write: an untouched light is not marked changed.
+            // A light is painted on every look change and, under a pack,
+            // when the tag or the light itself is new (a light inserted
+            // after its tag). Deref only to write: an untouched light is
+            // not marked changed.
+            let due = |added: bool| all || (spawn && (tag.is_added() || added));
             if let Some(mut l) = point
+                && due(l.is_added())
                 && l.color != c
             {
                 l.color = c;
             }
             if let Some(mut l) = spot
+                && due(l.is_added())
                 && l.color != c
             {
                 l.color = c;
             }
             if let Some(mut l) = sun
+                && due(l.is_added())
                 && l.color != c
             {
                 l.color = c;
             }
             if let Some(mut l) = ambient
+                && due(l.is_added())
                 && l.color != c
             {
                 l.color = c;
@@ -354,6 +360,26 @@ mod tests {
             app.update();
             assert_eq!(colours(&app, e), [LAMP; 4]);
             assert_eq!(app.world().resource::<GlobalAmbientLight>().color, LAMP);
+        }
+
+        #[test]
+        fn a_light_inserted_after_its_tag_is_painted_under_a_pack_only() {
+            for (look, painted) in [(pack(), true), (ActiveLook::default_for(&C), false)] {
+                let mut app = app(look);
+                let e = app.world_mut().spawn(LookLight("lamp")).id();
+                app.update();
+                app.world_mut().entity_mut(e).insert(PointLight {
+                    color: OFF,
+                    ..default()
+                });
+                app.update();
+                let want = if painted {
+                    app.world().resource::<ActiveLook>().colour("lamp")
+                } else {
+                    OFF
+                };
+                assert_eq!(app.world().get::<PointLight>(e).unwrap().color, want);
+            }
         }
 
         #[test]
