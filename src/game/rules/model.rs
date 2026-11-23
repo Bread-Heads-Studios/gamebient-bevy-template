@@ -8,6 +8,12 @@
 //! This file uses nothing but `std` and `serde_json`, so it can be copied
 //! as is. Checks run in a fixed order and the first failure is the answer;
 //! the TypeScript model runs them in the same order.
+//!
+//! How text is counted, on every side: the file's size is its UTF-8
+//! bytes; a sentence's length (`source`) and a name's 40-character cut in a
+//! sentence are Unicode code points (not UTF-16 units); unknown fields are
+//! sorted in code point order. Every number in a rules file is a whole
+//! number, so `canonical_text` and `JSON.stringify` write the same digits.
 
 use std::collections::BTreeSet;
 
@@ -69,7 +75,8 @@ pub const ADD: &str = "\"add\" must be [counter, number].";
 pub const SET: &str = "\"set\" must be [counter, number].";
 pub const SPAWN: &str = "\"spawn\" must be [kind, place].";
 pub const MOVE: &str = "\"move\" must be [target, dx, dy].";
-pub const MOVE_RANGE: &str = "A move must be from -1000 to 1000 in each direction.";
+pub const MOVE_RANGE: &str =
+    "A move must be a whole number of pixels from -1000 to 1000 in each direction.";
 pub const SOUND: &str = "\"sound\" must name a sound.";
 pub const TIMER: &str = "\"timer\" must be [name, ticks].";
 pub const TICKS: &str = "A timer must run from 1 to 36000 ticks.";
@@ -77,10 +84,11 @@ pub const END_RUN: &str = "\"end_run\" must be \"win\" or \"lose\".";
 pub const TARGET: &str = "A target must be self, other or a kind.";
 pub const SELF_TOUCH: &str = "\"self\" and \"other\" work only in a rule that starts with a touch.";
 pub const PLACE: &str = "A place must be start, random, self or {\"x\", \"y\"}.";
-pub const PLACE_RANGE: &str = "A place must be from -100000 to 100000 in each direction.";
+pub const PLACE_RANGE: &str =
+    "A place must be a whole number of pixels from -100000 to 100000 in each direction.";
 pub const NUMBER: &str = "A number in a rule must be a whole number from -1000000 to 1000000.";
 
-/// A name as a sentence shows it: at most 40 characters.
+/// A name as a sentence shows it: at most 40 code points.
 fn shown(s: &str) -> String {
     s.chars().take(40).collect()
 }
@@ -288,10 +296,9 @@ fn whole(v: &Value, lo: f64, hi: f64) -> Option<i64> {
     (f.fract() == 0.0 && f >= lo && f <= hi).then_some(f as i64)
 }
 
-/// Any number from `lo` to `hi`.
-fn number(v: &Value, lo: f64, hi: f64) -> Option<f32> {
-    let f = v.as_f64()?;
-    (f.is_finite() && f >= lo && f <= hi).then_some(f as f32)
+/// A whole number of pixels from `lo` to `hi`, as the sim stores it.
+fn pixels(v: &Value, lo: f64, hi: f64) -> Option<f32> {
+    whole(v, lo, hi).map(|n| n as f32)
 }
 
 /// `^[a-z0-9-]{1,32}$`: a rule id or a timer name.
@@ -584,8 +591,8 @@ fn place(x: &Value, touch: bool) -> Result<Place, String> {
             if !px.is_number() || !py.is_number() {
                 return Err(PLACE.into());
             }
-            let px = number(px, -MAX_PLACE, MAX_PLACE).ok_or(PLACE_RANGE)?;
-            let py = number(py, -MAX_PLACE, MAX_PLACE).ok_or(PLACE_RANGE)?;
+            let px = pixels(px, -MAX_PLACE, MAX_PLACE).ok_or(PLACE_RANGE)?;
+            let py = pixels(py, -MAX_PLACE, MAX_PLACE).ok_or(PLACE_RANGE)?;
             Ok(Place::At(px, py))
         }
         _ => Err(PLACE.into()),
@@ -636,8 +643,8 @@ fn check_act(v: &Value, vocab: &Vocab, touch: bool) -> Result<Act, String> {
                 .filter(|a| a.len() == 3 && a[1].is_number() && a[2].is_number())
                 .ok_or(MOVE)?;
             let t = target(&a[0], vocab, touch)?;
-            let dx = number(&a[1], -MAX_MOVE, MAX_MOVE).ok_or(MOVE_RANGE)?;
-            let dy = number(&a[2], -MAX_MOVE, MAX_MOVE).ok_or(MOVE_RANGE)?;
+            let dx = pixels(&a[1], -MAX_MOVE, MAX_MOVE).ok_or(MOVE_RANGE)?;
+            let dy = pixels(&a[2], -MAX_MOVE, MAX_MOVE).ok_or(MOVE_RANGE)?;
             Act::Move(t, dx, dy)
         }
         "sound" => {
@@ -671,7 +678,9 @@ fn check_act(v: &Value, vocab: &Vocab, touch: bool) -> Result<Act, String> {
 /// The editor's way of writing a rules file, byte for byte (`writeRules`
 /// in the editor's `src/rules/model.ts`): one rule per line; each rule's
 /// keys in `RULE_KEYS` order; every object inside a rule with its keys
-/// sorted; whole numbers without a fraction.
+/// sorted; whole numbers without a fraction. Every number a checked file
+/// holds is whole, so this agrees with `JSON.stringify` on every file the
+/// checker takes.
 pub fn canonical_text(rules: &[Value]) -> String {
     if rules.is_empty() {
         return "{\n  \"v\": 1,\n  \"rules\": []\n}\n".into();
@@ -729,8 +738,8 @@ mod tests {
 
     const CASES: &str = include_str!("cases.json");
 
-    /// The text a case names: its `text`, padded to `pad_to` bytes, or
-    /// `many` generated rules.
+    /// The text a case names: its `text`, padded with spaces to `pad_to`
+    /// UTF-8 bytes, or `many` generated rules.
     pub(crate) fn case_text(case: &Value) -> String {
         if let Some(n) = case["many"].as_u64() {
             let rules: Vec<String> = (1..=n)
@@ -755,11 +764,16 @@ mod tests {
     #[test]
     fn every_shared_case_is_accepted_or_refused_with_its_sentence() {
         let all: Value = serde_json::from_str(CASES).unwrap();
-        let vocab = Vocab::from_json(&all["vocab"]);
+        let shared = Vocab::from_json(&all["vocab"]);
         let cases = all["cases"].as_array().unwrap();
         assert!(cases.len() > 80);
         for case in cases {
             let text = case_text(case);
+            // A case may carry its own `vocab`, which replaces the shared one.
+            let vocab = match case.get("vocab") {
+                Some(v) => Vocab::from_json(v),
+                None => shared.clone(),
+            };
             let got = check_file(text.as_bytes(), &vocab).err();
             let want = case["error"].as_str().map(str::to_string);
             assert_eq!(got, want, "{}", case["name"]);
@@ -779,7 +793,7 @@ mod tests {
     fn a_checked_file_comes_back_typed() {
         let all: Value = serde_json::from_str(CASES).unwrap();
         let vocab = Vocab::from_json(&all["vocab"]);
-        let text = br#"{"v":1,"rules":[{"id":"spike-hurts","when":{"touch":["Player","Spike"]},"if":[{"chance":50}],"do":[{"add":["lives",-1]},{"respawn":"Player"},{"move":["self",2.5,0]},{"spawn":["Coin",{"x":1,"y":-2}]},{"end_run":"win"}],"source":"x","off":true}]}"#;
+        let text = br#"{"v":1,"rules":[{"id":"spike-hurts","when":{"touch":["Player","Spike"]},"if":[{"chance":50}],"do":[{"add":["lives",-1]},{"respawn":"Player"},{"move":["self",2,0]},{"jump":"Player"},{"spawn":["Coin",{"x":1,"y":-2}]},{"end_run":"win"}],"source":"x","off":true}]}"#;
         let file = check_file(text, &vocab).unwrap();
         assert_eq!(
             file.rules[0],
@@ -790,7 +804,8 @@ mod tests {
                 acts: vec![
                     Act::Add("lives".into(), -1),
                     Act::Respawn(Target::Kind("Player".into())),
-                    Act::Move(Target::Me, 2.5, 0.0),
+                    Act::Move(Target::Me, 2.0, 0.0),
+                    Act::Jump(Target::Kind("Player".into())),
                     Act::Spawn("Coin".into(), Place::At(1.0, -2.0)),
                     Act::EndRun(true),
                 ],

@@ -30,8 +30,8 @@
           "additionalProperties": false,
           "required": ["x", "y"],
           "properties": {
-            "x": { "type": "number", "minimum": -100000, "maximum": 100000 },
-            "y": { "type": "number", "minimum": -100000, "maximum": 100000 }
+            "x": { "type": "integer", "minimum": -100000, "maximum": 100000 },
+            "y": { "type": "integer", "minimum": -100000, "maximum": 100000 }
           }
         }
       ]
@@ -95,8 +95,8 @@
               "type": "array",
               "prefixItems": [
                 { "$ref": "#/$defs/name" },
-                { "type": "number", "minimum": -1000, "maximum": 1000 },
-                { "type": "number", "minimum": -1000, "maximum": 1000 }
+                { "type": "integer", "minimum": -1000, "maximum": 1000 },
+                { "type": "integer", "minimum": -1000, "maximum": 1000 }
               ],
               "minItems": 3,
               "maxItems": 3
