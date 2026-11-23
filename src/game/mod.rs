@@ -12,6 +12,7 @@ pub mod player;
 #[cfg(feature = "record")]
 pub mod record;
 pub mod replay;
+pub mod rules;
 pub mod scoring;
 pub mod sim;
 pub mod states;

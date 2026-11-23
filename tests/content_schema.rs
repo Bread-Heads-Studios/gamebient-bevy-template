@@ -28,7 +28,7 @@ fn agree<T, E>(name: &str, parse: fn(&[u8]) -> Result<T, E>, valid: &[&str], inv
 
 #[test]
 fn schema_files_are_valid_schemas() {
-    for n in ["level", "tunables", "sprites", "songs", "sfx"] {
+    for n in ["level", "tunables", "sprites", "songs", "sfx", "rules"] {
         schema(n);
     }
 }
@@ -225,4 +225,40 @@ fn built_in_songs_written_as_data_fit_the_songs_schema() {
             .map(|e| e.to_string())
             .collect::<Vec<_>>()
     );
+}
+
+/// The schema the editor's server checks saves against says yes to every
+/// file the game takes (the editor can always save what the game runs),
+/// and gives the verdict each shared case records.
+#[test]
+fn rules_schema_agrees_with_the_shared_cases() {
+    let v = schema("rules");
+    let all: serde_json::Value =
+        serde_json::from_str(include_str!("../src/game/rules/cases.json")).unwrap();
+    for case in all["cases"].as_array().unwrap() {
+        let Some(want) = case["schema"].as_bool() else {
+            continue;
+        };
+        if case["error"].is_null() {
+            assert!(
+                want,
+                "{}: a file the game takes must pass the schema",
+                case["name"]
+            );
+        }
+        let text = if let Some(n) = case["many"].as_u64() {
+            let rules: Vec<String> = (1..=n)
+                .map(|i| {
+                    format!(
+                        r#"{{"id":"r{i}","when":{{"start":true}},"do":[{{"add":["score",1]}}]}}"#
+                    )
+                })
+                .collect();
+            format!(r#"{{"v":1,"rules":[{}]}}"#, rules.join(","))
+        } else {
+            case["text"].as_str().unwrap().to_string()
+        };
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v.is_valid(&json), want, "{}", case["name"]);
+    }
 }
