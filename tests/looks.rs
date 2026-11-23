@@ -369,7 +369,7 @@ fn look_fit_keeps_the_default_size_and_fits_any_pack_string() {
     let widest = look::refit::widest_em(&STAND_IN);
     for s in theme::STRINGS {
         for line_px in [200.0, 648.0, 864.0] {
-            let fit = LookFit::new(s.key, 72.0, advance, &STAND_IN, line_px);
+            let fit = LookFit::new(s.key, 72.0, advance, &STAND_IN, &[], line_px);
             let own = look::refit::size_for_em(advance, s.default, 72.0, line_px);
             assert_eq!(fit.size_for(s.default, s.default), own, "{}", s.key);
             let worst = "W".repeat(s.max_chars);
@@ -392,7 +392,7 @@ fn look_fit_keeps_the_default_size_and_fits_any_pack_string() {
                 s.key
             );
             assert!(
-                size == 1.0 || look::refit::text_em(&STAND_IN, &plain) * size <= line_px,
+                size == 1.0 || look::refit::text_em(&STAND_IN, &[], &plain) * size <= line_px,
                 "{}",
                 s.key
             );
@@ -402,7 +402,7 @@ fn look_fit_keeps_the_default_size_and_fits_any_pack_string() {
     let p = probe();
     let spec = theme::STRINGS.iter().find(|s| s.key == p.key).unwrap();
     let mut app = app_with(Selection::Default);
-    let fit = LookFit::new(p.key, 72.0, advance, &STAND_IN, 300.0);
+    let fit = LookFit::new(p.key, 72.0, advance, &STAND_IN, &[], 300.0);
     let line = app
         .world_mut()
         .spawn((

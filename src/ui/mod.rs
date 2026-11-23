@@ -5,6 +5,8 @@ pub mod backdrop;
 pub mod card;
 pub mod demo_end;
 pub mod fit;
+#[cfg(test)]
+mod font_metrics;
 pub mod fonts;
 pub mod how_to_play;
 pub mod hud;

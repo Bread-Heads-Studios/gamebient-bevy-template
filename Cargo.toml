@@ -158,6 +158,10 @@ wasm-bindgen = { version = "=0.2.108", optional = true }
 # `advance_em` to the real glyph advances. Already in the lockfile through
 # Bevy's text stack; pinned to that version so it adds nothing.
 ttf-parser = "=0.25.1"
+# Shapes text exactly as bevy_text does (same version and features) in
+# `ui::font_metrics`, so the fit tables are held to what Bevy draws,
+# kerning included. Already in the lockfile through bevy_text.
+cosmic-text = { version = "=0.16.0", features = ["shape-run-cache"] }
 # Checks the content schemas in content/schema/ against the Rust parsers
 # (tests/content_schema.rs). Dev-only; no network or resolver features.
 jsonschema = { version = "0.30", default-features = false }

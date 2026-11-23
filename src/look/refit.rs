@@ -15,14 +15,20 @@
 //!   max_size)`, floored, the same arithmetic in the same order. This holds
 //!   for a boxed line too (`in_box`): the box never re-fits the default,
 //!   so tagging a line can never change the default look.
-//! - **Any other string** is sized by its real width: the sum of its
-//!   glyphs' advances from the face's per-glyph table (`advances`, one
-//!   value in ems for each printable ASCII character `' '..='~'`, measured
-//!   from the TTF), the largest whole size at which that width fits
-//!   `line_px`, and never larger than the default's size. A pack tagline
-//!   of ordinary words so comes out close to the default's size, and any
-//!   string a pack may set, up to the key's `max_chars`, still fits
-//!   `line_px` (the worst case, `max_chars` of the widest glyph, included).
+//! - **Any other string** is sized by its real width: an upper bound on
+//!   its shaped width, the sum of its glyphs' advances from the face's
+//!   per-glyph table (`advances`, one value in ems for each printable ASCII
+//!   character `' '..='~'`: the widest advance that character's glyph takes
+//!   when shaped as Bevy shapes it, in any three-character context,
+//!   **kerning and contextual alternates included**), plus any pair in the
+//!   face's residual table (`kerns`, for a ligature wider than its parts;
+//!   empty for the template's faces). The size is the largest whole size at
+//!   which that width fits `line_px`, and never larger than the default's
+//!   size. A pack tagline of ordinary words so comes out close to the
+//!   default's size, and any string a pack may set, up to the key's
+//!   `max_chars`, still fits `line_px` shaped (the worst case, `max_chars`
+//!   of the widest glyph, included). `ui::font_metrics` holds the tables to
+//!   the font and checks the bound on every three-character string.
 //!   A character outside the table (the validator rejects them) counts as
 //!   the widest glyph.
 //!
@@ -30,7 +36,7 @@
 //! share of the view (`Face::look_fit` in `ui/fit.rs`) or a container's
 //! interior (`Face::look_fit_in`), never the view when the line sits in a
 //! narrower box. This file names no face; `ui/fit.rs` builds the tag from
-//! a `Face`, whose table is a `&'static [f32; 95]` the tag points at.
+//! a `Face`, whose tables are `&'static` data the tag points at.
 //!
 //! **Only for a line whose whole text is `look.string(key)`.** The size is
 //! worked out from the key's string, not from the `Text`, so a composed
@@ -66,10 +72,34 @@ pub fn widest_em(advances: &Advances) -> f32 {
     advances.iter().copied().fold(0.0, f32::max)
 }
 
-/// The real width of `text` in a face with these `advances`, in ems (no
-/// kerning: kerning only tightens a line).
-pub fn text_em(advances: &Advances, text: &str) -> f32 {
-    text.chars().map(|c| glyph_em(advances, c)).sum()
+/// One residual widening pair: the left and right characters and how much
+/// more the pair takes, shaped, than their two `advances`, in ems (a
+/// ligature wider than its parts). A face's table is sorted by
+/// `(left, right)` and is usually empty: ordinary kerning is already in
+/// `advances`.
+pub type Kern = (char, char, f32);
+
+/// How much the pair `a` `b` widens a line in a face with these `kerns`,
+/// in ems: 0 unless the table lists it.
+pub fn pair_kern_em(kerns: &[Kern], a: char, b: char) -> f32 {
+    kerns
+        .binary_search_by(|k| (k.0, k.1).cmp(&(a, b)))
+        .map_or(0.0, |i| kerns[i].2)
+}
+
+/// An upper bound on the shaped width of `text` in a face with these
+/// `advances` and `kerns`, in ems: every advance plus every listed pair.
+pub fn text_em(advances: &Advances, kerns: &[Kern], text: &str) -> f32 {
+    let mut width = 0.0;
+    let mut prev = None;
+    for c in text.chars() {
+        width += glyph_em(advances, c);
+        if let Some(p) = prev {
+            width += pair_kern_em(kerns, p, c);
+        }
+        prev = Some(c);
+    }
+    width
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
@@ -84,6 +114,8 @@ pub struct LookFit {
     /// The face's per-glyph advances, ems (`Face::advances`). Sizes any
     /// other string.
     pub advances: &'static Advances,
+    /// The face's residual widening pairs, ems (`Face::kerns`), sorted.
+    pub kerns: &'static [Kern],
     /// Width a pack's word may take, UI pixels.
     pub line_px: f32,
     /// Width the game's own string is fitted against, UI pixels: the line
@@ -113,6 +145,7 @@ impl LookFit {
         max_size: f32,
         advance_em: f32,
         advances: &'static Advances,
+        kerns: &'static [Kern],
         line_px: f32,
     ) -> Self {
         Self {
@@ -120,6 +153,7 @@ impl LookFit {
             max_size,
             advance_em,
             advances,
+            kerns,
             line_px,
             default_px: line_px,
         }
@@ -149,7 +183,7 @@ impl LookFit {
         if text == default {
             return own;
         }
-        size_for_width(text_em(self.advances, text), own, self.line_px)
+        size_for_width(text_em(self.advances, self.kerns, text), own, self.line_px)
     }
 
     /// The size under `look`. A key the contract lacks counts as its own
@@ -188,7 +222,9 @@ mod tests {
         a
     }
     static ADVANCES: Advances = stand_in();
-    const FIT: LookFit = LookFit::new("title", 88.0, 0.63, &ADVANCES, 864.0);
+    /// 'I' then 'W' widens by 0.1 em; 'W' 'W' by 0.05.
+    static KERNS: [Kern; 2] = [('I', 'W', 0.1), ('W', 'W', 0.05)];
+    const FIT: LookFit = LookFit::new("title", 88.0, 0.63, &ADVANCES, &KERNS, 864.0);
 
     #[test]
     fn the_table_reads_by_character() {
@@ -200,7 +236,12 @@ mod tests {
         assert_eq!(glyph_em(&ADVANCES, '\u{e9}'), 1.02);
         assert_eq!(widest_em(&ADVANCES), 1.02);
         assert_eq!(FIT.widest_em(), 1.02);
-        assert!((text_em(&ADVANCES, "WIW") - 2.34).abs() < 1e-6);
+        assert!((text_em(&ADVANCES, &[], "WIW") - 2.34).abs() < 1e-6);
+        // 'I' 'W' widens; 'W' 'I' is not listed.
+        assert!((text_em(&ADVANCES, &KERNS, "WIW") - 2.44).abs() < 1e-6);
+        assert!((text_em(&ADVANCES, &KERNS, "WW") - 2.09).abs() < 1e-6);
+        assert_eq!(pair_kern_em(&KERNS, 'W', 'I'), 0.0);
+        assert_eq!(pair_kern_em(&KERNS, 'I', 'W'), 0.1);
     }
 
     #[test]
@@ -218,7 +259,8 @@ mod tests {
             let size = FIT.size_for(&w, "GAMEBIENT GAME");
             assert!(size <= 88.0);
             if size > 1.0 {
-                assert!(n as f32 * 1.02 * size <= FIT.line_px, "{n}");
+                let kerned = n as f32 * 1.02 + (n - 1) as f32 * 0.05;
+                assert!(kerned * size <= FIT.line_px, "{n}");
             }
         }
         // Narrow glyphs are not sized as wide ones: 40 I's (12 em) get
@@ -230,9 +272,9 @@ mod tests {
         let boxed = FIT.in_box(200.0);
         assert_eq!(boxed.size_for("GAMEBIENT GAME", "GAMEBIENT GAME"), 88.0);
         let w = "W".repeat(14);
-        assert!(14.0 * 1.02 * boxed.size_for(&w, "GAMEBIENT GAME") <= 200.0);
+        assert!((14.0 * 1.02 + 13.0 * 0.05) * boxed.size_for(&w, "GAMEBIENT GAME") <= 200.0);
         // A short word does not outgrow the default's size.
-        let shrunk = LookFit::new("k", 88.0, 0.63, &ADVANCES, 300.0);
+        let shrunk = LookFit::new("k", 88.0, 0.63, &ADVANCES, &KERNS, 300.0);
         let own = shrunk.default_size("A FAIRLY LONG ONE");
         assert!(own < 88.0);
         assert_eq!(shrunk.size_for("HI", "A FAIRLY LONG ONE"), own);
