@@ -144,6 +144,11 @@ impl Plugin for LookPlugin {
                     .in_set(LookSet)
                     .before(bevy::asset::AssetEventSystems),
             );
+        // The fit guarantee: a pack string's line, as laid out, fits.
+        app.add_systems(
+            PostUpdate,
+            refit::clamp_fit.after(bevy::ui::UiSystems::PostLayout),
+        );
         // ClearColor follows a role once the game inserts `LookClearColour`.
         app.add_systems(
             PostUpdate,

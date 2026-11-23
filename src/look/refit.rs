@@ -15,22 +15,27 @@
 //!   max_size)`, floored, the same arithmetic in the same order. This holds
 //!   for a boxed line too (`in_box`): the box never re-fits the default,
 //!   so tagging a line can never change the default look.
-//! - **Any other string** is sized by its real width: an upper bound on
-//!   its shaped width, the sum of its glyphs' advances from the face's
-//!   per-glyph table (`advances`, one value in ems for each printable ASCII
-//!   character `' '..='~'`: the widest advance that character's glyph takes
-//!   when shaped as Bevy shapes it, in any three-character context,
-//!   **kerning and contextual alternates included**), plus any pair in the
-//!   face's residual table (`kerns`, for a ligature wider than its parts;
-//!   empty for the template's faces). The size is the largest whole size at
-//!   which that width fits `line_px`, and never larger than the default's
-//!   size. A pack tagline of ordinary words so comes out close to the
-//!   default's size, and any string a pack may set, up to the key's
-//!   `max_chars`, still fits `line_px` shaped (the worst case, `max_chars`
-//!   of the widest glyph, included). `ui::font_metrics` holds the tables to
-//!   the font and checks the bound on every three-character string.
-//!   A character outside the table (the validator rejects them) counts as
-//!   the widest glyph.
+//! - **Any other string** is sized in two steps.
+//!   1. **Estimate** (`refit_text`, before layout): the sum of its glyphs'
+//!      advances from the face's per-glyph table (`advances`, one value in
+//!      ems for each printable ASCII character `' '..='~'`: the widest
+//!      advance that character's glyph takes when shaped as Bevy shapes
+//!      it in any three-character context, kerning and contextual
+//!      alternates included) plus the face's residual pairs (`kerns`),
+//!      against `line_px - 1` (Bevy rounds a measured line up to a whole
+//!      pixel), never larger than the default's size. This is right for
+//!      nearly every string, so ordinary pack words land close to the
+//!      default's size, but a font rule that reaches further than three
+//!      characters can exceed it (Inter's `<---` arrow ligature is 0.6 em
+//!      wider than its parts).
+//!   2. **Clamp** (`clamp_fit`, after Bevy's text layout): the line as
+//!      Bevy actually laid it out is compared with `line_px`; a pack line
+//!      that is wider, or that wrapped, is shrunk (in proportion, or by a
+//!      tenth when it wrapped) and laid out again, until it fits. Only
+//!      ever down, only while the look is unchanged (a `LookChanged`
+//!      starts again from the estimate), and never under the default look
+//!      or for the game's own string. **This is the guarantee**: a pack
+//!      string fits its line or box, at worst a frame or two late.
 //!
 //! `line_px` is the width a pack's word may take, in UI pixels: the line
 //! share of the view (`Face::look_fit` in `ui/fit.rs`) or a container's
@@ -46,6 +51,8 @@
 //! animates (a score pop): every `LookChanged` would reset it.
 
 use bevy::prelude::*;
+
+use bevy::text::TextLayoutInfo;
 
 use super::apply::LookChanged;
 use super::runtime::ActiveLook;
@@ -183,7 +190,11 @@ impl LookFit {
         if text == default {
             return own;
         }
-        size_for_width(text_em(self.advances, self.kerns, text), own, self.line_px)
+        size_for_width(
+            text_em(self.advances, self.kerns, text),
+            own,
+            (self.line_px - 1.0).max(1.0),
+        )
     }
 
     /// The size under `look`. A key the contract lacks counts as its own
@@ -192,6 +203,58 @@ impl LookFit {
         let default = look.contract.default_string(self.key).unwrap_or(self.key);
         self.size_for(look.string(self.key), default)
     }
+}
+
+/// Shrinks a pack string's `LookFit` line that Bevy's layout found wider
+/// than `line_px`, or wrapped onto a second line (module docs, step 2).
+/// Runs in `PostUpdate` after `UiSystems::PostLayout`, so it reads this
+/// frame's layout of the current size; it acts only on a layout that
+/// changed (a fresh measurement), only ever shrinks, at least 1 px a step,
+/// so it settles in a few frames and cannot oscillate. Never under the
+/// default look, never on the game's own string.
+pub fn clamp_fit(
+    look: Res<ActiveLook>,
+    mut q: Query<(&LookFit, &mut TextFont, Ref<TextLayoutInfo>)>,
+) {
+    if look.manifest.is_none() {
+        return;
+    }
+    for (fit, mut font, layout) in &mut q {
+        // Not laid out yet (no font, empty text): nothing to measure.
+        if !layout.is_changed() || layout.size.x <= 0.0 {
+            continue;
+        }
+        let default = look.contract.default_string(fit.key).unwrap_or(fit.key);
+        if look.string(fit.key) == default {
+            continue;
+        }
+        let size = font.font_size;
+        let next = clamped_size(size, layout.size.x, wrapped(&layout), fit.line_px);
+        if next < size {
+            font.font_size = next;
+        }
+    }
+}
+
+/// Whether the layout broke the line.
+fn wrapped(layout: &TextLayoutInfo) -> bool {
+    layout.glyphs.iter().any(|g| g.line_index > 0)
+}
+
+/// The next size for a line laid out `width` UI px wide at `size`, against
+/// `line_px`: unchanged if it fits on one line, else smaller by at least
+/// 1 (in proportion to the overflow; by a tenth when it wrapped, whose
+/// width says nothing). At least 1.
+pub fn clamped_size(size: f32, width: f32, wrapped: bool, line_px: f32) -> f32 {
+    if !wrapped && width <= line_px {
+        return size;
+    }
+    let scaled = if wrapped || width <= 0.0 {
+        size * 0.9
+    } else {
+        size * line_px / width
+    };
+    scaled.floor().min(size - 1.0).max(1.0)
 }
 
 pub fn refit_text(
@@ -278,6 +341,27 @@ mod tests {
         let own = shrunk.default_size("A FAIRLY LONG ONE");
         assert!(own < 88.0);
         assert_eq!(shrunk.size_for("HI", "A FAIRLY LONG ONE"), own);
+    }
+
+    #[test]
+    fn the_clamp_only_shrinks_and_settles() {
+        assert_eq!(clamped_size(40.0, 300.0, false, 300.0), 40.0);
+        assert_eq!(clamped_size(40.0, 330.0, false, 300.0), 36.0);
+        // A hair over still drops a whole size.
+        assert_eq!(clamped_size(40.0, 300.1, false, 300.0), 39.0);
+        assert_eq!(clamped_size(40.0, 100.0, true, 300.0), 36.0);
+        assert_eq!(clamped_size(1.0, 900.0, false, 300.0), 1.0);
+        // Iterating on a width proportional to the size converges.
+        let (mut size, mut steps) = (88.0f32, 0);
+        loop {
+            let next = clamped_size(size, size * 10.37, false, 600.0);
+            if next == size {
+                break;
+            }
+            size = next;
+            steps += 1;
+        }
+        assert!(size * 10.37 <= 600.0 && steps <= 3, "{size} after {steps}");
     }
 
     #[test]
