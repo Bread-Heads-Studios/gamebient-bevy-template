@@ -200,6 +200,14 @@ Things in `content/level.json` on the running game.
 - While Editing, `content.set` of `level.json` respawns the shown level at
   once. Outside Editing it still applies at the next run start.
 
+## Time travel
+
+In editor builds (`--features editor`), `src/game/time/` lets the editor pause a run, step it, scrub back through it and "Try again from here". It has no save-states. A seek starts the run again in place (the `BeginRun` schedule, on the run's own start values, level, rules and seed) and re-simulates the recording, 2000 ticks a frame, with nothing drawn or played until it lands. Two edit rules follow from that:
+- A setting or rules change made while paused applies on the next tick played, and is recorded there.
+- A level edit becomes the run's level from its first tick. A branch replays the earlier moves on it, and the editor is told if they played out differently (`time.diverged`).
+
+A game lists the counters its timeline marks in `rule_table::MARKS` (the template: `lives` falling). The folder is copied verbatim: `tools/frame-accept.sh --check-copies` checks it. Any use of the timeline marks the run edited, and an edited run never reaches a leaderboard (docs/replay-verification.md, "Edited runs").
+
 ## Porting a game to the kit
 
 1. Cues and layers: constructors take a name first

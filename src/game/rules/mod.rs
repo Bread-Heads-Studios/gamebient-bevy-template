@@ -49,6 +49,23 @@ pub struct CounterDef {
     pub set: fn(&mut GameData, i64),
 }
 
+/// When a counter makes a time-travel mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkWhen {
+    Falls,
+    Rises,
+}
+
+/// A counter whose changes the editor's timeline marks
+/// (`rule_table::MARKS`; `game::time::marks`).
+pub struct MarkDef {
+    /// A `COUNTERS` name.
+    pub counter: &'static str,
+    pub when: MarkWhen,
+    /// What the timeline says ("Lost a life"; the editor adds "at 9.2 s").
+    pub label: &'static str,
+}
+
 /// The rules the next run starts with (`LevelSource::Content`).
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub struct Rules(pub RulesFile);
@@ -296,6 +313,20 @@ mod tests {
             .set(GameState::Playing);
         app.update();
         app
+    }
+
+    #[test]
+    fn every_mark_names_a_counter() {
+        for m in crate::game::rule_table::MARKS {
+            assert!(
+                crate::game::rule_table::COUNTERS
+                    .iter()
+                    .any(|c| c.name == m.counter),
+                "{}",
+                m.counter
+            );
+            assert!(!m.label.is_empty());
+        }
     }
 
     #[test]

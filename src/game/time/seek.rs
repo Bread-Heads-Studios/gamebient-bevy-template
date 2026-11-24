@@ -130,21 +130,31 @@ fn shown_rules_swap(world: &World) -> Option<RulesSwap> {
     })
 }
 
-/// `time.seek` (and an undo: `before_branch`). A seek asked for while one
-/// runs waits for it.
-pub fn start_seek(world: &mut World, tick: u32, before_branch: bool) {
+/// Why a `time.seek` was not taken (the `time` answer's `refused`).
+pub const NO_RUN: &str = "There is no run to seek in.";
+pub const NO_UNDO: &str = "There is no branch to undo.";
+pub const NOTHING_RECORDED: &str = "Nothing is recorded yet.";
+
+/// `time.seek` (and an undo: `before_branch`), in `Playing` or after the
+/// run ended (`GameOver`), which enters `Playing` again first. A seek
+/// asked for while one runs waits for it. `Err` says why it was not taken.
+pub fn start_seek(world: &mut World, tick: u32, before_branch: bool) -> Result<(), &'static str> {
     if let Some(mut s) = world.get_resource_mut::<Seek>() {
         s.next = Some(tick);
-        return;
+        return Ok(());
     }
-    if !in_playing(world) {
-        return;
+    let playing = in_playing(world);
+    let over = world
+        .get_resource::<State<GameState>>()
+        .is_some_and(|s| *s.get() == GameState::GameOver);
+    if !playing && !over {
+        return Err(NO_RUN);
     }
     if before_branch {
         if !restore_before(world) {
-            return;
+            return Err(NO_UNDO);
         }
-    } else {
+    } else if playing {
         refresh_recording(world);
     }
     let ready = {
@@ -152,18 +162,32 @@ pub fn start_seek(world: &mut World, tick: u32, before_branch: bool) {
         tt.start.is_some() && tt.recording.is_some()
     };
     if !ready {
-        return;
+        return Err(NOTHING_RECORDED);
     }
     let target = tick.min(max_seek(world));
-    let forward = !before_branch
+    let phase = if !playing {
+        Phase::Reenter
+    } else if !before_branch
         && world.contains_resource::<PlaybackFeeder>()
-        && target >= world.resource::<SimTick>().0;
-    let held = HeldEdits::take(world, Vec::new(), false);
-    hold(world);
+        && target >= world.resource::<SimTick>().0
+    {
+        Phase::Feed
+    } else {
+        Phase::Restart
+    };
+    let edits = if playing {
+        Vec::new()
+    } else {
+        super::run::value_edits(world)
+    };
+    let held = HeldEdits::take(world, edits, false);
+    if playing {
+        hold(world);
+    }
     world.insert_resource(Seek {
         target,
         kind: SeekKind::Plain,
-        phase: if forward { Phase::Feed } else { Phase::Restart },
+        phase,
         held,
         compare: None,
         live: None,
@@ -171,6 +195,10 @@ pub fn start_seek(world: &mut World, tick: u32, before_branch: bool) {
         send_marks: before_branch,
         next: None,
     });
+    if phase == Phase::Reenter {
+        request_playing(world);
+    }
+    Ok(())
 }
 
 /// The run as it was before the last branch becomes the run again.
@@ -274,10 +302,18 @@ pub fn finish(world: &mut World, seek: Seek) {
     } else {
         answer(world);
     }
-    if let Some(next) = next {
-        start_seek(world, next, false);
+    if let Some(next) = next
+        && let Err(reason) = start_seek(world, next, false)
+    {
+        super::answer_refused(world, reason);
     }
 }
+
+/// Present while [`run_ticks`] runs a batch (a seek's or a `time.step`'s):
+/// the 30-tick `time` update stays quiet, so only the batch's own answer
+/// says where it stopped (`Paused` reads false inside the batch).
+#[derive(Resource, Debug)]
+pub struct RunningTicks;
 
 /// Runs `n` sim ticks now, inside this frame, by calling `FixedMain` the way
 /// `run_fixed_main_schedule` does (the generic `Time` is the fixed step for
@@ -296,6 +332,7 @@ pub fn run_ticks(world: &mut World, n: u32) -> u32 {
     let executors = set_fixed_executors(world, ExecutorKind::SingleThreaded);
     let was = world.resource::<Paused>().0;
     world.resource_mut::<Paused>().bypass_change_detection().0 = false;
+    world.insert_resource(RunningTicks);
     let mut fixed = Time::<()>::default();
     let mut ran = 0;
     world.schedule_scope(FixedMain, |world, schedule| {
@@ -312,6 +349,7 @@ pub fn run_ticks(world: &mut World, n: u32) -> u32 {
     let virt = world.resource::<Time<Virtual>>().as_generic();
     *world.resource_mut::<Time>() = virt;
     world.resource_mut::<Paused>().bypass_change_detection().0 = was;
+    world.remove_resource::<RunningTicks>();
     for (label, kind) in executors {
         if let Some(s) = world.resource_mut::<Schedules>().get_mut(label) {
             s.set_executor_kind(kind);

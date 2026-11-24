@@ -8,12 +8,13 @@
 //! `COUNTERS`, give `JUMP` a function when the game has bodies that can
 //! jump (it must respect the game's own grounded check), and `STOP` one
 //! that stops a thing's motion (`respawn` calls it). `test_rules()` is
-//! built in Rust so a data save never changes the fixtures.
+//! built in Rust so a data save never changes the fixtures. List the
+//! counters whose changes the editor's timeline marks in `MARKS`.
 
 use bevy::prelude::*;
 
-use super::rules::CounterDef;
 use super::rules::model::RulesFile;
+use super::rules::{CounterDef, MarkDef, MarkWhen};
 use super::scoring::GameData;
 
 fn set_score(d: &mut GameData, v: i64) {
@@ -43,6 +44,13 @@ pub const COUNTERS: &[CounterDef] = &[
         set: |d, v| d.lives = v as u32,
     },
 ];
+
+/// The counter changes the editor's timeline marks.
+pub const MARKS: &[MarkDef] = &[MarkDef {
+    counter: "lives",
+    when: MarkWhen::Falls,
+    label: "Lost a life",
+}];
 
 /// The template's player has no body to jump with: no `jump` action.
 pub const JUMP: Option<fn(&mut World, Entity)> = None;

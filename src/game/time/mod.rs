@@ -27,12 +27,13 @@
 //! | host → game | `time.seek`     | `{ tick, before_branch? }`: clamped to the recording; `before_branch` seeks in the run as it was before the last branch (undo) |
 //! | host → game | `time.branch`   | — : drop the recording after this tick, re-simulate to it, play on live |
 //! | host → game | `time.speed`    | `{ x }`: 0.5, 1 or 2 |
-//! | game → host | `time`          | `{ tick, of, paused, speed, seeking, edited, run }`, plus `marks` after a branch or an undo; `{ seeking: true, tick }` during a seek |
+//! | game → host | `time`          | `{ tick, of, paused, speed, seeking, edited, run, over }`, plus `marks` after a branch or an undo and `refused` (a sentence) for a command not taken; `{ seeking: true, tick }` during a seek. `over`: the run is not in `Playing` (sent once as it leaves); a seek still takes a run that ended back in |
 //! | game → host | `time.mark`     | `{ tick, kind, label }` |
 //! | game → host | `time.diverged` | `{ tick }` |
 
 pub mod branch;
 pub mod commands;
+pub mod marks;
 pub mod run;
 pub mod seek;
 
@@ -232,6 +233,7 @@ pub fn time_json(world: &World) -> Json {
         "seeking": world.contains_resource::<Seek>(),
         "edited": world.resource::<RunEdited>().0,
         "run": tt.run,
+        "over": !in_playing(world),
     })
 }
 
@@ -244,6 +246,14 @@ pub fn custom(name: &str, data: Json) -> HostEvent {
 
 pub fn answer(world: &mut World) {
     let j = time_json(world);
+    world.write_message(custom("time", j));
+}
+
+/// The `time` answer to a command the game did not take, with the reason
+/// (`refused`), so the editor never takes it for a late update.
+pub fn answer_refused(world: &mut World, reason: &str) {
+    let mut j = time_json(world);
+    j["refused"] = reason.into();
     world.write_message(custom("time", j));
 }
 
@@ -335,6 +345,7 @@ impl Plugin for TimePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TimeTravel>()
             .init_resource::<commands::TimeCommands>()
+            .init_resource::<marks::MarkWatch>()
             .add_systems(
                 Update,
                 (
@@ -356,17 +367,26 @@ impl Plugin for TimePlugin {
             )
             .add_systems(
                 FixedUpdate,
-                commands::report_every
+                (marks::detect_marks, commands::report_every)
+                    .chain()
                     .in_set(sim::SimSet)
                     .after(crate::game::replay::recorder::record_tick),
             )
             .add_systems(
+                crate::game::BeginRun,
+                marks::reset_mark_watch.after(crate::game::rules::begin_run_rules),
+            )
+            .add_systems(
                 OnEnter(GameState::Playing),
-                run::on_run_start.after(crate::game::run_begin_run),
+                (
+                    run::prepare_reentry.before(crate::game::run_begin_run),
+                    run::on_run_start.after(crate::game::run_begin_run),
+                ),
             )
             .add_systems(
                 OnExit(GameState::Playing),
                 run::on_run_exit.before(crate::game::replay::recorder::seal_run),
-            );
+            )
+            .add_systems(OnEnter(GameState::Editing), run::note_edit_return);
     }
 }

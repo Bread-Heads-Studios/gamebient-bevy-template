@@ -20,13 +20,13 @@ use gamebient_game::game::replay::{
 };
 use gamebient_game::game::rules::{Rules, RulesLog, set_rules};
 use gamebient_game::game::scoring::GameData;
-use gamebient_game::game::sim::{Checksum, PendingSeed, SimTick, SpawnOrder};
+use gamebient_game::game::sim::{Checksum, PendingSeed, RunSeed, SimTick, SpawnOrder};
 use gamebient_game::game::states::{GameState, Paused, QuietPause};
 use gamebient_game::game::time::TimeTravel;
 use gamebient_game::game::time::branch::branch_seek;
 use gamebient_game::game::time::seek::{Phase, PlaybackFeeder, Seek};
 use gamebient_game::game::tunables::{
-    PendingTunes, TunableIndex, TuneChange, TuneLog, Value, read,
+    PendingTunes, TunableIndex, TuneChange, TuneLog, Value, read, write,
 };
 use gamebient_input::{Buttons, HostCommand, HostEvent, VirtualInput};
 use serde_json::{Value as Json, json};
@@ -330,7 +330,9 @@ fn every_command_is_answered_and_play_sends_an_update_every_30_ticks() {
     play_to(&mut app, 10);
     command(&mut app, "time.pause", json!({}));
     let a = last_answer(&app);
-    for key in ["tick", "of", "paused", "speed", "seeking", "edited", "run"] {
+    for key in [
+        "tick", "of", "paused", "speed", "seeking", "edited", "run", "over",
+    ] {
         assert!(a.get(key).is_some(), "{key} in {a}");
     }
     assert_eq!(a["paused"], true);
@@ -799,14 +801,28 @@ fn a_branch_that_enters_playing_again_keeps_its_timeline_and_held_edits() {
         .resource_mut::<PendingTunes>()
         .0
         .push((id, v.clone()));
-    // What Task 6's `prepare_reentry` stages: the run's own seed.
-    app.world_mut().resource_mut::<PendingSeed>().0 = Some(selftest::SELFTEST_SEED);
+    // The game-over screen left the run's seed and a start value behind:
+    // `prepare_reentry` must stage the run's own.
+    let starts = app.world().resource::<TuneLog>().starts.clone();
+    let (sid, sv) = an_edit(&app);
+    write_value(app.world_mut(), sid, &sv);
+    app.world_mut().resource_mut::<PendingSeed>().0 = Some([7; 32]);
     let seek = branch_seek(app.world_mut(), n, Some(sum), Phase::Reenter, Vec::new())
         .expect("a timeline to branch");
     app.world_mut().insert_resource(seek);
     settle(&mut app);
 
     assert_eq!(tick(&app), n);
+    assert_eq!(
+        app.world().resource::<TuneLog>().starts,
+        starts,
+        "the run's own start values"
+    );
+    assert_eq!(
+        app.world().resource::<RunSeed>().bytes,
+        selftest::SELFTEST_SEED,
+        "the run's own seed"
+    );
     let tt = app.world().resource::<TimeTravel>();
     assert_eq!(tt.run, 1, "the same run, not a fresh one");
     assert!(
@@ -857,7 +873,6 @@ fn a_branched_run_that_enters_playing_again_and_ends_posts_nothing() {
             .expect("sealed")
     };
     assert!(leave(&mut app).edited);
-    app.world_mut().resource_mut::<PendingSeed>().0 = Some(selftest::SELFTEST_SEED);
     let seek = branch_seek(app.world_mut(), n, Some(sum), Phase::Reenter, Vec::new())
         .expect("a timeline to branch");
     app.world_mut().insert_resource(seek);
@@ -869,4 +884,281 @@ fn a_branched_run_that_enters_playing_again_and_ends_posts_nothing() {
     assert!(r.edited, "sealed edited");
     assert_eq!(app.world().resource::<Heard>().runs, 0, "never submitted");
     assert_eq!(verify_bytes(&r.encode()), Err(Refused::Edited));
+}
+
+const LOSE_A_LIFE: &str =
+    r#"{"v":1,"rules":[{"id":"ouch","when":{"every":30},"do":[{"add":["lives",-1]}]}]}"#;
+const END_AT_120: &str =
+    r#"{"v":1,"rules":[{"id":"end","when":{"every":120},"do":[{"end_run":"lose"}]}]}"#;
+
+fn marks(app: &App) -> Vec<Json> {
+    heard(app, "time.mark")
+}
+
+fn state(app: &App) -> GameState {
+    *app.world().resource::<State<GameState>>().get()
+}
+
+fn play_until_over(app: &mut App) {
+    for _ in 0..1000 {
+        if state(app) != GameState::Playing {
+            return;
+        }
+        app.update();
+    }
+    panic!("the run never ended");
+}
+
+#[test]
+fn a_lost_life_is_marked_on_its_tick() {
+    let mut app = on_rules(LOSE_A_LIFE, &[FAR], false);
+    play_to(&mut app, 100);
+    let lost = |t: u32| json!({ "tick": t, "kind": "lives", "label": "Lost a life" });
+    assert_eq!(marks(&app), vec![lost(30), lost(60), lost(90)]);
+}
+
+#[test]
+fn the_end_of_the_run_is_marked() {
+    let mut app = on_rules(END_AT_120, &[FAR], false);
+    play_until_over(&mut app);
+    assert_eq!(
+        marks(&app),
+        vec![json!({ "tick": 120, "kind": "end", "label": "Lost the run" })]
+    );
+}
+
+#[test]
+fn an_applied_change_and_a_rules_swap_are_marked() {
+    let mut app = on_rules(ADD_1, &[FAR], false);
+    play_to(&mut app, 20);
+    let (id, v) = an_edit(&app);
+    app.world_mut()
+        .resource_mut::<PendingTunes>()
+        .0
+        .push((id, v));
+    play_to(&mut app, 40);
+    set_rules(app.world_mut(), ADD_10.as_bytes()).unwrap();
+    play_to(&mut app, 50);
+    assert_eq!(
+        marks(&app),
+        vec![
+            json!({ "tick": 21, "kind": "edit", "label": "Changed a setting" }),
+            json!({ "tick": 41, "kind": "edit", "label": "Changed the rules" }),
+        ]
+    );
+}
+
+#[test]
+fn playback_after_a_seek_repeats_no_mark() {
+    let mut app = on_rules(LOSE_A_LIFE, &[FAR], false);
+    play_to(&mut app, 100);
+    command(&mut app, "time.pause", json!({}));
+    forget(&mut app);
+    command(&mut app, "time.seek", json!({ "tick": 10 }));
+    settle(&mut app);
+    command(&mut app, "time.resume", json!({}));
+    play_to(&mut app, 100);
+    assert!(marks(&app).is_empty(), "{:?}", marks(&app));
+    assert_eq!(app.world().resource::<TimeTravel>().marks.len(), 3);
+}
+
+#[test]
+fn the_catalog_offers_time_travel() {
+    let app = scripted();
+    let j = gamebient_game::game::tunables::protocol::catalog_json(app.world());
+    assert_eq!(j["time"], gamebient_game::game::time::catalog());
+    assert_eq!(j["time"]["step_max"], 600);
+    assert_eq!(j["time"]["update_every"], 30);
+    assert_eq!(j["time"]["progress_every"], 2000);
+    assert_eq!(j["time"]["speeds"], json!([0.5, 1.0, 2.0]));
+}
+
+#[test]
+fn a_seek_after_the_run_ended_goes_back_into_it() {
+    let mut app = on_rules(END_AT_120, &[FAR], false);
+    play_until_over(&mut app);
+    assert_eq!(state(&app), GameState::GameOver);
+    let run = last_answer(&app)["run"].clone();
+    command(&mut app, "time.seek", json!({ "tick": 60 }));
+    settle(&mut app);
+    assert_eq!(state(&app), GameState::Playing);
+    assert_eq!(tick(&app), 60);
+    assert!(app.world().resource::<Paused>().0);
+    assert_eq!(last_answer(&app)["run"], run, "the same timeline");
+    // A run that ended: the furthest seek is one tick before its end.
+    command(&mut app, "time.seek", json!({ "tick": 500 }));
+    settle(&mut app);
+    assert_eq!(tick(&app), 119);
+    assert_eq!(state(&app), GameState::Playing);
+}
+
+#[test]
+fn a_level_edit_made_in_the_level_editor_returns_into_a_branch() {
+    let mut app = on_rules(NO_RULES, ONE_COIN, true);
+    play_to(&mut app, 150);
+    command(&mut app, "time.pause", json!({}));
+    let n = tick(&app);
+    let run = last_answer(&app)["run"].clone();
+    app.world_mut()
+        .resource_mut::<NextState<GameState>>()
+        .set(GameState::Editing);
+    app.update();
+    assert_eq!(state(&app), GameState::Editing);
+    app.world_mut().resource_mut::<Level>().0.things[1].at = [-8.0, 6.0];
+    app.world_mut()
+        .resource_mut::<NextState<GameState>>()
+        .set(GameState::Playing);
+    app.update();
+    settle(&mut app);
+    assert_eq!(state(&app), GameState::Playing);
+    assert_eq!(tick(&app), n, "back at the tick the edit was made from");
+    assert!(!app.world().resource::<Paused>().0, "and playing on");
+    assert_eq!(app.world().resource::<GameData>().score, 0);
+    assert_eq!(heard(&app, "time.diverged"), vec![json!({ "tick": n })]);
+    assert_eq!(last_answer(&app)["run"], run);
+}
+
+#[test]
+fn restarting_from_the_level_editor_starts_a_fresh_run() {
+    let mut app = on_rules(NO_RULES, ONE_COIN, true);
+    play_to(&mut app, 60);
+    command(&mut app, "time.pause", json!({}));
+    app.world_mut()
+        .resource_mut::<NextState<GameState>>()
+        .set(GameState::Editing);
+    app.update();
+    command(&mut app, "run.restart", Json::Null);
+    for _ in 0..3 {
+        app.update();
+    }
+    assert_eq!(state(&app), GameState::Playing);
+    assert_eq!(last_answer(&app)["run"], 2);
+    assert!(!app.world().resource::<Paused>().0);
+    assert!(tick(&app) < 10);
+}
+
+/// Writes `v` into tunable `id` directly, as a game-over screen edit would.
+fn write_value(world: &mut World, id: u16, v: &Value) {
+    let idx = world.resource::<TunableIndex>().clone();
+    let entry = idx.by_id(id).expect("a registered tunable");
+    assert!(write(world, entry, v), "a value in range");
+}
+
+#[test]
+fn the_editor_hears_when_the_run_is_over() {
+    let mut app = on_rules(END_AT_120, &[FAR], false);
+    play_to(&mut app, 60);
+    assert_eq!(last_answer(&app)["over"], false, "{}", last_answer(&app));
+    play_until_over(&mut app);
+    let a = last_answer(&app);
+    assert_eq!(a["over"], true, "{a}");
+    assert_eq!(a["seeking"], false);
+    assert_eq!(a["tick"], 120);
+    // Still rewindable: a seek is taken and the run is back in `Playing`.
+    command(&mut app, "time.seek", json!({ "tick": 30 }));
+    assert_eq!(last_answer(&app)["seeking"], true);
+    assert!(last_answer(&app).get("refused").is_none());
+    settle(&mut app);
+    let a = last_answer(&app);
+    assert_eq!(
+        (a["over"].clone(), a["tick"].clone()),
+        (json!(false), json!(30))
+    );
+}
+
+#[test]
+fn a_refused_command_says_why_and_edits_nothing() {
+    let mut app = scripted();
+    play_to(&mut app, 40);
+    let refused = |app: &mut App, name: &str, data: Json| {
+        forget(app);
+        command(app, name, data);
+        let a = last_answer(app);
+        a["refused"]
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| panic!("{name}: {a}"))
+    };
+    assert_eq!(
+        refused(&mut app, "time.speed", json!({ "x": 3 })),
+        "The speed is 0.5, 1 or 2."
+    );
+    assert_eq!(refused(&mut app, "time.branch", json!({})), "Pause first.");
+    assert_eq!(
+        refused(
+            &mut app,
+            "time.seek",
+            json!({ "tick": 5, "before_branch": true })
+        ),
+        "There is no branch to undo."
+    );
+    assert!(!app.world().resource::<RunEdited>().0, "nothing was taken");
+    assert_eq!(last_answer(&app)["edited"], false);
+    // A taken command carries no `refused`.
+    command(&mut app, "time.pause", json!({}));
+    assert!(last_answer(&app).get("refused").is_none());
+    assert_eq!(last_answer(&app)["edited"], true);
+    // During a seek, only another seek is taken.
+    send(&mut app, "time.seek", json!({ "tick": 0 }));
+    send(&mut app, "time.resume", json!({}));
+    forget(&mut app);
+    app.update();
+    let answers = heard(&app, "time");
+    assert!(
+        answers
+            .iter()
+            .any(|a| a["refused"] == "A seek is still running."),
+        "{answers:?}"
+    );
+    settle(&mut app);
+    // Outside a run there is nothing to command.
+    app.world_mut()
+        .resource_mut::<NextState<GameState>>()
+        .set(GameState::Menu);
+    app.update();
+    assert_eq!(
+        refused(&mut app, "time.pause", json!({})),
+        "No run is playing."
+    );
+    assert_eq!(
+        refused(&mut app, "time.seek", json!({ "tick": 5 })),
+        "There is no run to seek in."
+    );
+}
+
+#[test]
+fn a_step_across_an_update_tick_sends_only_its_paused_answer() {
+    let mut app = scripted();
+    play_to(&mut app, 50);
+    command(&mut app, "time.pause", json!({}));
+    let at = tick(&app);
+    forget(&mut app);
+    command(&mut app, "time.step", json!({ "n": 45 }));
+    assert_eq!(tick(&app), at + 45, "the step crossed ticks 60 and 90");
+    let answers = heard(&app, "time");
+    assert_eq!(answers.len(), 1, "{answers:?}");
+    assert_eq!(answers[0]["paused"], true);
+    assert_eq!(answers[0]["tick"], at + 45);
+}
+
+#[test]
+fn a_seek_after_the_run_ended_runs_on_its_own_rules_and_keeps_the_editors() {
+    const SCORE_THEN_END: &str = r#"{"v":1,"rules":[{"id":"a","when":{"every":1},"do":[{"add":["score",1]}]},{"id":"end","when":{"every":120},"do":[{"end_run":"lose"}]}]}"#;
+    let mut app = on_rules(SCORE_THEN_END, &[FAR], false);
+    play_until_over(&mut app);
+    set_rules(app.world_mut(), ADD_10.as_bytes()).unwrap();
+    let shown = app.world().resource::<Rules>().clone();
+    command(&mut app, "time.seek", json!({ "tick": 60 }));
+    settle(&mut app);
+    assert_eq!(tick(&app), 60);
+    assert_eq!(
+        app.world().resource::<GameData>().score,
+        60,
+        "re-simulated on the run's own rules"
+    );
+    assert_eq!(
+        *app.world().resource::<Rules>(),
+        shown,
+        "the editor's rules are back for what follows"
+    );
 }

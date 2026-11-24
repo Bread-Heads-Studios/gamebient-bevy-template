@@ -27,14 +27,16 @@ magic    b"GXR2"
 build    u8 len + UTF-8            GX_BUILD_ID of the game that recorded it
 tick_hz  u16
 seed     [u8; 32]
-origin   u8                        0 host, 1 local
-content  u64                       hash of the level, then the tune log (start values + mid-run changes)
+origin   u8                        0 host, 1 local; bit 0x80 set: edited in the editor
+content  u64                       hash of the level, then the tune log (start values + changes)
 ticks    u32                       total sim ticks
 score    u64                       claimed
 checksum u64                       claimed
-starts   u16 count, then [id u16, len u8, bytes]           every tunable's start value, index order
-tunes    u32 count, then [tick u32, id u16, len u8, bytes]  mid-run tunable changes, in apply order
+starts   u16 count, then [id u16, len u8, bytes]        every non-cosmetic tunable's start value, index order
+tunes    u32 count, then [tick u32, id u16, len u8, bytes]  mid-run changes, in apply order
 runs     u32 count, then [held u16, latched u16, ax i8, ay i8, count u16]
+sections zero or more [tag [u8; 4], len u32, body]
+         b"RULE": u16 count, then [tick u32, len u32, bytes]   mid-run rules swaps, in apply order
 ```
 
 `starts` and `tunes` are the game's **tunables** (`src/game/tunables/`,
@@ -48,6 +50,10 @@ test level and not the content level. The selftest and the named checks
 reset tunables to the Rust defaults and use `LevelSource::Test`, so editing
 `content/` never invalidates the fixtures. See `docs/content-kit.md`. A `GXR1` file no longer decodes; every build verifies only replays
 recorded by the same build id, so no mixed-format case exists.
+
+**Trailing sections.** After `runs` come zero or more `[tag [u8; 4], len u32, body]` sections. A reader stops after `runs` unless it knows a section, and skips a tag it doesn't know. `RULE` holds the run's mid-run rules swaps: `u16 count`, then `[tick u32, len u32, bytes]`, at most 64 swaps of at most 32 KB each. The verifier's feeder hands each swap to `rules::run_rules` on its tick, exactly as the editor's `content.set rules.json` did. A run with no swaps writes no section, so its bytes are what they were before sections existed, and `replay::decode_prefix` (the older reader) reads it whole.
+
+**Edited runs.** A run the editor's time travel paused, stepped, rewound, branched or sped up (`game::time`, `RunEdited`) sets bit `0x80` in `origin`. It is never posted (`seal_run` drops it) and the verifier refuses it before simulating: `{"error": "This run was edited in the editor."}`. The content hash never folds `origin`, so a run that wasn't edited keeps its bytes and its hash. A build older than sections refuses an edited file as `BadOrigin`.
 
 Saved values (`content/tunables.json`, `src/game/content/saved.rs`) are
 start values: `ContentPlugin` writes them over the Rust defaults when it is
@@ -492,7 +498,8 @@ const json = verify(new Uint8Array(bytes));
 
 `json` parses to
 `{score, checksum, content, default_content, is_default_content, ticks, ended: "gameover"|"input_exhausted"|"cap", matches}`
-or `{"error": "..."}` if the bytes don't decode as `GXR2`. `score` and
+or `{"error": "..."}` if the bytes don't decode as `GXR2`, or if the run
+was edited. An edited run answers `{"error": "This run was edited in the editor."}`. `score` and
 `ticks` are numbers; **`checksum`, `content` and `default_content` are decimal strings**
 (`"checksum":"15390901594743611022"`) because it is a u64 and JSON numbers
 are doubles in JavaScript — parsing it as a number would round it. Compare
@@ -512,6 +519,17 @@ transition is queued, and a queued `NextState` is therefore checked *before*
 still live — a quit-to-title, or a selftest replay whose script simply
 stopped. `cap` means the sim outran `ticks + 60` without ending, which is a
 determinism failure dressed as a timeout.
+
+## Time travel's re-simulation budget
+
+The editor's timeline seeks by re-simulating from tick 0 (`game::time::seek`). `tests/seek_budget.rs::re_simulating_10800_ticks_takes_under_500_ms` measures 10800 ticks (three minutes of play) headless natively, and fails over 500 ms. It is its own test binary so it never runs beside the rest of the suite, whose contention doubled the time.
+
+`seek::run_ticks` puts `FixedMain` and the schedules it runs on the single-threaded executor for each batch, then gives them back their own. Dispatching a tick's handful of small systems to the thread pool cost about 50 µs a tick against 1 µs of work: 10800 ticks took 533–562 ms on the multi-threaded executor and take about 15 ms on the single-threaded one. The system order is the same either way, so the checksum is too.
+
+| Game | Build | 10800 ticks |
+|---|---|---|
+| Template | `cargo test` (dev profile: crate opt 1, dependencies opt 3) | 12–16 ms (about 15 ms) |
+| Template | `--release` | 8–12 ms |
 
 ## Two fixtures, and which one is the gate
 

@@ -15,14 +15,17 @@ use crate::game::tunables::Value;
 /// The mark a branch onto an edited level leaves on its tick.
 pub const LEVEL_EDITED: &str = "Edited the level";
 
+/// Why a `time.branch` was not taken (the `time` answer's `refused`).
+pub const NO_TIMELINE: &str = "There is nothing to try again from.";
+
 /// `time.branch` while paused in `Playing`.
-pub fn start_branch(world: &mut World) {
+pub fn start_branch(world: &mut World) -> Result<(), &'static str> {
     refresh_recording(world);
     let n = world.resource::<SimTick>().0;
     let sum = world.resource::<Checksum>().0;
-    if let Some(seek) = branch_seek(world, n, Some(sum), Phase::Restart, Vec::new()) {
-        world.insert_resource(seek);
-    }
+    let seek = branch_seek(world, n, Some(sum), Phase::Restart, Vec::new()).ok_or(NO_TIMELINE)?;
+    world.insert_resource(seek);
+    Ok(())
 }
 
 /// The seek a branch at `n` runs: the recording cut at `n`, the run's start

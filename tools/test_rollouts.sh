@@ -14,7 +14,8 @@
 #   (e) rollout-aspect.sh on a scratch clone of games/pack-the-ripper (skipped
 #       when that checkout is not beside this template);
 #   (f) frame-accept.sh --check-copies passes on (d) and (e) and fails after a
-#       comment is appended to a copied src/frame/layout.rs;
+#       comment is appended to a copied src/frame/layout.rs, src/game/time/seek.rs
+#       or src/game/states.rs;
 #   (g) rollout-record.sh inserts `record` after a capture-aware autopilot line;
 #   (h) frame-accept.sh --shots passes synthetic captures, fails a bad gap, and
 #       says so when --frame off leaves no bars;
@@ -168,6 +169,15 @@ git -C "$T/d" checkout -q src/frame/driver.rs
 perl -0pi -e 's/^#\[cfg\(test\)\]/\/\/ drift\n#[cfg(test)]/m' "$T/d/src/frame/driver.rs"
 if "$HERE/tools/frame-accept.sh" --check-copies "$T/d" > /dev/null 2>&1; then echo "FAIL f: an edit above driver.rs's test module was allowed"; exit 1; fi
 git -C "$T/d" checkout -q src/frame/driver.rs
+# Time travel: src/game/time/ and the shared pieces it rests on are copies.
+for f in src/game/time/seek.rs src/game/states.rs; do
+  echo "// drift" >> "$T/d/$f"
+  if "$HERE/tools/frame-accept.sh" --check-copies "$T/d" > "$T/f4.out" 2>&1; then
+    echo "FAIL f: --check-copies passed a modified $f"; exit 1
+  fi
+  grep -q "^$f: differs" "$T/f4.out" || { echo "FAIL f: the failure does not name $f"; cat "$T/f4.out"; exit 1; }
+  git -C "$T/d" checkout -q "$f"
+done
 
 # (g)
 mkdir -p "$T/g/src"
