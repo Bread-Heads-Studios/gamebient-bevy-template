@@ -193,7 +193,8 @@ pub fn game_over_card_width() -> f32 {
 /// width, which is the parent's width less its padding and border. Here the
 /// game-over card less `card_node`'s `S4` padding and `CARD`'s border on each
 /// side. **A game writes this one function** for its own game-over card
-/// (dive-rise: its `GAME_OVER_CARD_W`, already the inner width); the
+/// (dive-rise: its `GAME_OVER_CARD_W` less the border `card_with` adds on
+/// each side); the
 /// copyable `look_contract_tests` call it to hold `end_card_style()` to it.
 pub fn end_card_slot_width() -> f32 {
     game_over_card_width() - 2.0 * (crate::ui::card::S4 + CARD.border_px)
