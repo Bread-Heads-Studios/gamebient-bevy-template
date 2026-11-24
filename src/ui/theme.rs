@@ -184,23 +184,28 @@ pub const LOOK: Contract = Contract {
 };
 
 /// Outer width of the game-over card (a `max_width`: the card is as wide as
-/// its content up to this). The end card's slot sits inside it.
+/// its content up to this).
 pub fn game_over_card_width() -> f32 {
     crate::ui::fit::ui_width() * 0.9
 }
 
-/// Width the end card's slot gets inside the game-over card: the card less
-/// its horizontal padding (`card_node`: `S4` a side).
-pub fn game_over_slot_width() -> f32 {
-    game_over_card_width() - 2.0 * crate::ui::card::S4
+/// The width the end card's `EndCardSlot` is given: its parent's content
+/// width, which is the parent's width less its padding and border. Here the
+/// game-over card less `card_node`'s `S4` padding and `CARD`'s border on each
+/// side. **A game writes this one function** for its own game-over card
+/// (dive-rise: its `GAME_OVER_CARD_W`, already the inner width); the
+/// copyable `look_contract_tests` call it to hold `end_card_style()` to it.
+pub fn end_card_slot_width() -> f32 {
+    game_over_card_width() - 2.0 * (crate::ui::card::S4 + CARD.border_px)
 }
 
-/// Width of the end card's text column in a card `card_w` wide: the outer
-/// width of the box the `EndCardSlot` sits in (not the view: a game's card
-/// may be narrower or wider than the template's). What is left of it beside
-/// the widest image, the gap and the card's own padding, up to 480.
-pub fn end_card_text_width(card_w: f32) -> f32 {
-    (card_w - crate::look::end_card::IMAGE_MAX_WIDTH - 16.0 - 32.0).min(480.0)
+/// Width of the end card's text column in a slot `slot_w` wide, where
+/// `slot_w` is the width the slot is given (its parent's content width, see
+/// `end_card_slot_width`). What is left of it beside the end card's own
+/// widest image (`IMAGE_MAX_WIDTH`), its gap (16) and its own padding (2 x
+/// `end_card::PAD` = 32), up to 480.
+pub fn end_card_text_width(slot_w: f32) -> f32 {
+    (slot_w - crate::look::end_card::IMAGE_MAX_WIDTH - 16.0 - 32.0).min(480.0)
 }
 
 /// The end card's fonts and sizes (`look::end_card`).
@@ -210,7 +215,7 @@ pub fn end_card_style() -> crate::look::EndCardStyle {
         body: fonts::BODY.font(18.0),
         display_advance_em: fonts::DISPLAY.advance_em,
         body_advance_em: fonts::BODY.advance_em,
-        text_width: end_card_text_width(game_over_slot_width()),
+        text_width: end_card_text_width(end_card_slot_width()),
         headline_size: 28.0,
         body_size: 18.0,
         url_size: 16.0,
@@ -219,8 +224,9 @@ pub fn end_card_style() -> crate::look::EndCardStyle {
 
 /// The look contract's tests every game needs. Games copy this module
 /// unchanged: it uses only `crate::look`, this file (`PALETTE`, `STRINGS`,
-/// `end_card_text_width`, `end_card_style`). A game that recopies it keeps its
-/// own `end_card_style`, which passes its card's width to `end_card_text_width`.
+/// `end_card_text_width`, `end_card_style`, `end_card_slot_width`). A game that
+/// recopies it writes its own `end_card_slot_width()` (the width its
+/// `EndCardSlot` is given) and builds `end_card_style()` from it.
 #[cfg(test)]
 mod look_contract_tests {
     use super::*;
@@ -237,19 +243,32 @@ mod look_contract_tests {
 
     #[test]
     fn the_end_card_column_fits_beside_its_image() {
-        // `card_w` is the outer width of the box the slot sits in.
-        for card_w in [520.0, 560.0, 648.0, 864.0] {
-            let text = end_card_text_width(card_w);
+        // `slot_w` is the width the slot is given.
+        for slot_w in [520.0, 560.0, 648.0, 864.0] {
+            let text = end_card_text_width(slot_w);
             let row = crate::look::end_card::IMAGE_MAX_WIDTH + 16.0 + text + 2.0 * 16.0;
-            assert!(row <= card_w + 0.001, "{card_w}: {row}");
-            assert!(text >= 200.0, "{card_w}: {text}");
-            assert!(text <= 480.0, "{card_w}: {text}");
+            assert!(row <= slot_w + 0.001, "{slot_w}: {row}");
+            assert!(text >= 200.0, "{slot_w}: {text}");
+            assert!(text <= 480.0, "{slot_w}: {text}");
         }
-        // A narrow card gets a narrow column; a wide one is capped.
+        // A narrow slot gets a narrow column; a wide one is capped.
         assert!(end_card_text_width(560.0) < end_card_text_width(648.0));
         assert_eq!(end_card_text_width(2000.0), 480.0);
+    }
+
+    /// The game's style follows the game's own slot: a style built from the
+    /// view (or any other width) overflows a narrower card under a sponsor
+    /// pack. The game provides `end_card_slot_width()`.
+    #[test]
+    fn the_end_card_style_follows_the_slot_and_fits_inside_it() {
+        let slot_w = end_card_slot_width();
         let s = end_card_style();
-        assert!((200.0..=480.0).contains(&s.text_width), "{}", s.text_width);
+        assert_eq!(s.text_width, end_card_text_width(slot_w));
+        let row = crate::look::end_card::IMAGE_MAX_WIDTH + 16.0 + s.text_width + 2.0 * 16.0;
+        assert!(
+            row <= slot_w + 0.001,
+            "row {row} wider than the slot {slot_w}"
+        );
     }
 
     #[test]
@@ -274,14 +293,10 @@ mod look_contract_game_tests {
     use super::*;
     use crate::game::audio::{MUSIC, SfxEvent};
 
-    /// The template's card width is the one `end_card_style` is built from.
+    /// The template's slot sits inside its game-over card.
     #[test]
-    fn the_end_card_style_follows_the_game_over_card() {
-        assert_eq!(
-            end_card_style().text_width,
-            end_card_text_width(game_over_slot_width())
-        );
-        assert!(game_over_slot_width() <= game_over_card_width());
+    fn the_slot_is_narrower_than_the_card() {
+        assert!(end_card_slot_width() < game_over_card_width());
     }
 
     #[test]

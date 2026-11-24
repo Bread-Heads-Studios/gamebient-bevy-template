@@ -124,7 +124,7 @@ To test against a local website, build with
 "end_card": { "headline": "REFUEL WITH ACME", "body": "Use code ARCADE", "url": "https://example.com", "image": "qr.png" }
 ```
 
-The game inserts `EndCardStyle` (`theme::end_card_style()`, from `UiPlugin`) and spawns `(Node::default(), look::EndCardSlot)` in its game-over card. `theme::end_card_text_width(card_w)` sizes the text column from `card_w`, **the outer width of the box the slot sits in** (the template passes the game-over card's width less its padding, `theme::game_over_slot_width()`; a game with a 560 px card passes 560 less its padding), never the view. A slot without a style logs one warning and shows nothing (`EndCardStyleMissing`); `tests/app_boots.rs` fails if a contract that declares the four `endcard*` roles never inserts the style.
+The game inserts `EndCardStyle` (`theme::end_card_style()`, from `UiPlugin`) and spawns `(Node::default(), look::EndCardSlot)` in its game-over card. `theme::end_card_text_width(slot_w)` sizes the text column from `slot_w`, **the width the slot is given: its parent's content width (the parent's width less its padding and border)**. The 224 / 16 / 32 it subtracts are the end card's own image, gap and padding. A game writes one function, `theme::end_card_slot_width()`, for its game-over card (the template: the card's `max_width` less `S4` padding and the `CARD` border each side; dive-rise: `GAME_OVER_CARD_W`, already the inner width) and builds `end_card_style()` from it, never from the view. The copyable `look_contract_tests` call it and fail if the style's `text_width` is not `end_card_text_width(end_card_slot_width())`; a slot under ~472 px fails the copied `text >= 200` check. A slot without a style logs one warning and shows nothing (`EndCardStyleMissing`); `tests/app_boots.rs` fails if a contract that declares the four `endcard*` roles never inserts the style.
 
 Only `headline` is required. The URL is shown as text; the game never opens it. Set the `endcard` palette role to give the card its own plate (transparent by default). See `docs/sponsor-kit/` for the sponsor kit.
 
@@ -628,9 +628,9 @@ game's own `fitted()` rows and the tests over them.
 
 Copy `look_contract_tests` from the template's `src/ui/theme.rs`
 unchanged (end-card roles, end-card column fit, string defaults); it uses
-only `crate::look` and `theme`. The game's own `end_card_style()` passes the
-width of its game-over card (the box the slot sits in, less padding) to
-`end_card_text_width(card_w)`. The template's
+only `crate::look` and `theme`, plus the game's own `end_card_slot_width()`
+(the width its `EndCardSlot` is given); a recopy without that function fails to
+compile, by design. The game's `end_card_style()` is built from it. The template's
 `look_contract_game_tests` (every sound is a cue a pack can override) reads
 the template's own audio module: write a game's own version against its
 sound list, or leave it out while `AUDIO_CUES` is empty.
