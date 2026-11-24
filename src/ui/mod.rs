@@ -27,7 +27,13 @@ impl Plugin for UiPlugin {
             .insert_resource(transition::ScreenFade::boot())
             .insert_resource(theme::end_card_style())
             .add_systems(Startup, transition::spawn_fade_overlay)
-            .add_systems(Update, (transition::update_fade, transition::pulse_text))
+            .add_systems(Update, transition::update_fade)
+            // After `LookSet`: a look change retints `TextColor` there and
+            // would otherwise overwrite this frame's pulse alpha for a frame.
+            .add_systems(
+                PostUpdate,
+                transition::pulse_text.after(crate::look::LookSet),
+            )
             // Card entrances and the title backdrop's drift (presentation).
             .add_systems(Update, (card::animate_card_intro, backdrop::drift_grid))
             // Studio logo boot screen

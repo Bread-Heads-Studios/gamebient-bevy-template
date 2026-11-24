@@ -93,6 +93,32 @@ fn initialise_every_schedule(app: &mut App) {
     app.world_mut().insert_resource(schedules);
 }
 
+/// A game that declares the end card roles shows sponsor end cards, and
+/// `look::end_card` fills nothing without the style.
+fn assert_end_card_style(app: &App) {
+    if look::end_card::ROLES
+        .iter()
+        .all(|r| ui::theme::LOOK.palette.iter().any(|(role, _)| role == r))
+    {
+        assert!(
+            app.world().get_resource::<look::EndCardStyle>().is_some(),
+            "the contract declares the end card roles but the app never inserted \
+             EndCardStyle (insert theme::end_card_style() from UiPlugin)"
+        );
+    }
+}
+
+/// An `EndCardSlot` with no `EndCardStyle` stays empty: `LookPlugin` marks
+/// it (`EndCardStyleMissing`) the first frame it sees one.
+fn assert_no_slot_without_style(app: &App) {
+    assert!(
+        app.world()
+            .get_resource::<look::EndCardStyleMissing>()
+            .is_none(),
+        "an EndCardSlot exists but there is no EndCardStyle"
+    );
+}
+
 fn boots(selection: Selection) {
     let mut app = app(selection);
     app.finish();
@@ -117,6 +143,9 @@ fn boots(selection: Selection) {
         }
         assert_eq!(*app.world().resource::<State<GameState>>().get(), state);
     }
+    // After `GameOver` has run: its end card slot exists by now.
+    assert_end_card_style(&app);
+    assert_no_slot_without_style(&app);
 }
 
 #[test]
@@ -129,4 +158,30 @@ fn the_real_app_boots_under_every_built_in_pack() {
     for id in look::pack::embedded_ids() {
         boots(Selection::Embedded(id.to_string()));
     }
+}
+
+/// The slot check can fail: a slot spawned with no style trips it.
+#[test]
+#[should_panic(expected = "an EndCardSlot exists but there is no EndCardStyle")]
+fn a_slot_without_a_style_fails_the_boot_check() {
+    let mut app = app(Selection::Default);
+    app.finish();
+    app.cleanup();
+    app.update();
+    app.world_mut().remove_resource::<look::EndCardStyle>();
+    app.world_mut().spawn((Node::default(), look::EndCardSlot));
+    app.update();
+    assert_no_slot_without_style(&app);
+}
+
+/// And so does a contract that declares the roles but has no style.
+#[test]
+#[should_panic(expected = "never inserted")]
+fn a_missing_style_fails_the_role_check() {
+    let mut app = app(Selection::Default);
+    app.finish();
+    app.cleanup();
+    app.update();
+    app.world_mut().remove_resource::<look::EndCardStyle>();
+    assert_end_card_style(&app);
 }
