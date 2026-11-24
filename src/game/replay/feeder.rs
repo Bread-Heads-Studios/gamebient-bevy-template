@@ -118,6 +118,8 @@ mod tests {
             starts: Vec::new(),
             tunes: Vec::new(),
             runs: Vec::new(),
+            rules: Vec::new(),
+            edited: false,
         };
         r.push_tick(1, 0, 0, 0);
         r.push_tick(1, 0, 0, 0);
@@ -159,6 +161,8 @@ mod tests {
                 bytes: entry.default.to_bytes(),
             }],
             runs: Vec::new(),
+            rules: Vec::new(),
+            edited: false,
         };
         for _ in 0..3 {
             r.push_tick(0, 0, 0, 0);

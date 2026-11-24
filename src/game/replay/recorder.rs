@@ -38,6 +38,8 @@ fn empty(seed: RunSeed) -> Replay {
         starts: Vec::new(),
         tunes: Vec::new(),
         runs: Vec::new(),
+        rules: Vec::new(),
+        edited: false,
     }
 }
 

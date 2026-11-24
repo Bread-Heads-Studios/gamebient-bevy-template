@@ -11,7 +11,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     use gamebient_game::game::replay::selftest::record_scripted_run;
-    use gamebient_game::game::replay::{Replay, verify};
+    use gamebient_game::game::replay::verify;
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("--selftest") => {
@@ -31,15 +31,19 @@ fn main() {
             std::process::exit(if v.matches { 0 } else { 1 });
         }
         Some(path) => {
+            use gamebient_game::game::replay::{Refused, verify_bytes};
             let bytes = std::fs::read(path).expect("read replay");
-            match Replay::decode(&bytes) {
-                Ok(r) => {
-                    let v = verify(&r);
+            match verify_bytes(&bytes) {
+                Ok(v) => {
                     println!("{}", v.to_json());
                     std::process::exit(if v.matches { 0 } else { 1 });
                 }
-                Err(e) => {
+                Err(Refused::Decode(e)) => {
                     eprintln!("decode error: {e:?}");
+                    std::process::exit(2);
+                }
+                Err(e @ Refused::Edited) => {
+                    eprintln!("{}", e.sentence());
                     std::process::exit(2);
                 }
             }
@@ -57,10 +61,10 @@ fn main() {}
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn verify(bytes: &[u8]) -> String {
-    use gamebient_game::game::replay::{Replay, verify};
-    match Replay::decode(bytes) {
-        Ok(r) => verify(&r).to_json(),
-        Err(e) => format!("{{\"error\":\"{e:?}\"}}"),
+    use gamebient_game::game::replay::verify_bytes;
+    match verify_bytes(bytes) {
+        Ok(v) => v.to_json(),
+        Err(e) => serde_json::json!({ "error": e.sentence() }).to_string(),
     }
 }
 
