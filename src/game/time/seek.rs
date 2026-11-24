@@ -242,12 +242,15 @@ pub fn drive_seek(world: &mut World) {
     finish(world, seek);
 }
 
-/// The seek is over: playback stays for what is left of the recording,
-/// held edits go back in the queue, and the editor hears where it landed.
+/// The seek is over: playback stays for what is left of the recording (a
+/// branch plays live), a branch says whether it diverged, held edits go
+/// back in the queue, and the editor hears where it landed.
 pub fn finish(world: &mut World, seek: Seek) {
     let Seek {
         kind,
         held,
+        compare,
+        level_edited,
         send_marks,
         next,
         ..
@@ -257,6 +260,9 @@ pub fn finish(world: &mut World, seek: Seek) {
         .is_some_and(|f| f.0.remaining == 0);
     if exhausted || kind == SeekKind::Branch {
         world.remove_resource::<PlaybackFeeder>();
+    }
+    if kind == SeekKind::Branch {
+        super::branch::settle(world, compare, level_edited);
     }
     held.restore(world);
     match kind {

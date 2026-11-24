@@ -3,16 +3,39 @@
 
 use bevy::prelude::*;
 
-use super::seek::{PlaybackFeeder, Seek};
-use super::{RunStart, TimeTravel, answer, refresh_recording};
-use crate::game::sim::RunOver;
+use super::seek::{Phase, PlaybackFeeder, Seek};
+use super::{RunStart, TimeTravel, answer, hold, refresh_recording};
+use crate::game::sim::{RunOver, RunSeed};
 use crate::game::states::{Paused, QuietPause};
 use crate::game::tunables::snapshot;
 
-/// `OnEnter(Playing)`, after the run-start chain: a fresh run gets a new
-/// timeline (its start captured, speed 1). `BeginRun` has already cleared
-/// `RunEdited` (`replay::recorder::begin_recording`).
+/// `OnEnter(Playing)`, after the run-start chain. A seek or a branch that
+/// re-enters `Playing` (`Phase::Reenter`) is the same run: its timeline
+/// (the recording, the run before a branch, the held edits in the seek)
+/// stays, and the seek takes over from here, still paused. A fresh run
+/// gets a new timeline (its start captured, speed 1). `BeginRun` has
+/// already cleared `RunEdited` (`replay::recorder::begin_recording`).
 pub fn on_run_start(world: &mut World) {
+    let reentering = world
+        .get_resource::<Seek>()
+        .is_some_and(|s| s.phase == Phase::Reenter);
+    if reentering {
+        let live = world.resource_mut::<Seek>().live.take();
+        if let Some(live) = live {
+            live.put(world);
+        }
+        let origin = world
+            .resource::<TimeTravel>()
+            .start
+            .as_ref()
+            .map(|s| s.seed.origin);
+        if let Some(origin) = origin {
+            world.resource_mut::<RunSeed>().origin = origin;
+        }
+        world.resource_mut::<Seek>().phase = Phase::Feed;
+        hold(world);
+        return;
+    }
     world.remove_resource::<PlaybackFeeder>();
     let start = RunStart::capture(world);
     let run = world.resource::<TimeTravel>().run + 1;

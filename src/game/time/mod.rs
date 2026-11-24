@@ -31,6 +31,7 @@
 //! | game → host | `time.mark`     | `{ tick, kind, label }` |
 //! | game → host | `time.diverged` | `{ tick }` |
 
+pub mod branch;
 pub mod commands;
 pub mod run;
 pub mod seek;

@@ -7,10 +7,11 @@ use serde_json::Value as Json;
 
 use super::seek::{self, Seek};
 use super::{
-    SPEEDS, STEP_MAX, TimeTravel, UPDATE_EVERY, answer, hold, in_playing, mark_edited,
+    SPEEDS, STEP_MAX, TimeTravel, UPDATE_EVERY, answer, branch, hold, in_playing, mark_edited,
     refresh_recording, unhold,
 };
 use crate::game::sim::SimTick;
+use crate::game::states::Paused;
 
 /// `time.*` commands read this frame, applied by `apply_time_commands`.
 #[derive(Resource, Default)]
@@ -71,6 +72,11 @@ pub fn apply(world: &mut World, name: &str, data: &Json) {
                 .map_or(0, |t| u32::try_from(t).unwrap_or(u32::MAX));
             let before = data.get("before_branch").and_then(Json::as_bool) == Some(true);
             seek::start_seek(world, tick, before);
+        }
+        "time.branch" => {
+            if free && world.resource::<Paused>().0 {
+                branch::start_branch(world);
+            }
         }
         "time.speed" => {
             let x = data.get("x").and_then(Json::as_f64);

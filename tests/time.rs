@@ -22,7 +22,8 @@ use gamebient_game::game::scoring::GameData;
 use gamebient_game::game::sim::{Checksum, PendingSeed, SimTick, SpawnOrder};
 use gamebient_game::game::states::{GameState, Paused, QuietPause};
 use gamebient_game::game::time::TimeTravel;
-use gamebient_game::game::time::seek::{PlaybackFeeder, Seek};
+use gamebient_game::game::time::branch::branch_seek;
+use gamebient_game::game::time::seek::{Phase, PlaybackFeeder, Seek};
 use gamebient_game::game::tunables::{
     PendingTunes, TunableIndex, TuneChange, TuneLog, Value, read,
 };
@@ -111,6 +112,9 @@ const ADD_1: &str = r#"{"v":1,"rules":[{"id":"a","when":{"every":1},"do":[{"add"
 const ADD_10: &str =
     r#"{"v":1,"rules":[{"id":"a","when":{"every":1},"do":[{"add":["score",10]}]}]}"#;
 const FAR: (&str, f32, f32) = ("Player", -9.0, -7.0);
+const NO_RULES: &str = r#"{"v":1,"rules":[]}"#;
+/// The player in the middle and a coin the script's RIGHT runs through.
+const ONE_COIN: &[(&str, f32, f32)] = &[("Player", 0.0, 0.0), ("Coin", 3.0, 0.0)];
 
 fn tick(app: &App) -> u32 {
     app.world().resource::<SimTick>().0
@@ -535,5 +539,250 @@ fn quiet_pause_clears_whenever_the_player_or_host_pauses() {
     assert!(
         !app.world().resource::<QuietPause>().0,
         "a host pause shows the overlay"
+    );
+}
+
+#[test]
+fn a_branch_drops_everything_after_the_tick_and_plays_on_live() {
+    let mut app = on_rules(ADD_1, &[FAR], false);
+    play_to(&mut app, 40);
+    set_rules(app.world_mut(), ADD_10.as_bytes()).unwrap();
+    play_to(&mut app, 59);
+    let (id, v) = an_edit(&app);
+    app.world_mut()
+        .resource_mut::<PendingTunes>()
+        .0
+        .push((id, v));
+    play_to(&mut app, 100);
+    command(&mut app, "time.pause", json!({}));
+    command(&mut app, "time.seek", json!({ "tick": 30 }));
+    settle(&mut app);
+    command(&mut app, "time.branch", json!({}));
+    settle(&mut app);
+    assert_eq!(tick(&app), 30);
+    let rec = app
+        .world()
+        .resource::<TimeTravel>()
+        .recording
+        .clone()
+        .unwrap();
+    assert_eq!(rec.ticks, 30);
+    assert!(rec.tunes.is_empty(), "the change at 60 is gone");
+    assert!(rec.rules.is_empty(), "the swap at 41 is gone");
+    assert_eq!(app.world().resource::<ReplayRecorder>().replay.ticks, 30);
+    assert!(!app.world().resource::<Paused>().0, "a branch plays on");
+    assert!(
+        !app.world().contains_resource::<PlaybackFeeder>(),
+        "live, not playback"
+    );
+    assert!(
+        app.world().resource::<TimeTravel>().before.is_some(),
+        "kept for undo"
+    );
+    app.update();
+    assert_eq!(tick(&app), 31);
+    assert_eq!(
+        app.world().resource::<RulesLog>().0,
+        vec![RulesRecord {
+            tick: 31,
+            bytes: ADD_10.as_bytes().to_vec()
+        }],
+        "the run goes on under the rules the editor shows"
+    );
+    assert!(heard(&app, "time.diverged").is_empty());
+}
+
+#[test]
+fn an_edit_made_while_paused_lands_on_the_tick_after_a_branch() {
+    let mut app = scripted();
+    play_to(&mut app, 100);
+    command(&mut app, "time.pause", json!({}));
+    let n = tick(&app);
+    let (id, v) = an_edit(&app);
+    let path = app
+        .world()
+        .resource::<TunableIndex>()
+        .by_id(id)
+        .unwrap()
+        .path
+        .clone();
+    let mut set = serde_json::Map::new();
+    set.insert(path, v.to_json());
+    command(&mut app, "tunables.set", Json::Object(set));
+    command(&mut app, "time.branch", json!({}));
+    settle(&mut app);
+    assert_eq!(tick(&app), n);
+    assert!(
+        heard(&app, "time.diverged").is_empty(),
+        "nothing up to the tick changed"
+    );
+    app.update();
+    assert_eq!(
+        app.world().resource::<TuneLog>().changes,
+        vec![TuneChange {
+            tick: n + 1,
+            id,
+            value: v
+        }]
+    );
+}
+
+#[test]
+fn a_rules_change_while_paused_does_not_diverge_and_applies_from_the_next_tick() {
+    let mut app = on_rules(ADD_1, &[FAR], false);
+    play_to(&mut app, 50);
+    command(&mut app, "time.pause", json!({}));
+    let n = tick(&app);
+    let score = app.world().resource::<GameData>().score;
+    set_rules(app.world_mut(), ADD_10.as_bytes()).unwrap();
+    command(&mut app, "time.branch", json!({}));
+    settle(&mut app);
+    assert_eq!(tick(&app), n);
+    assert_eq!(
+        app.world().resource::<GameData>().score,
+        score,
+        "ticks up to N played as before"
+    );
+    assert!(heard(&app, "time.diverged").is_empty());
+    app.update();
+    assert_eq!(app.world().resource::<GameData>().score, score + 10);
+}
+
+#[test]
+fn a_level_edit_replays_the_earlier_moves_on_it_and_says_they_diverged() {
+    let mut app = on_rules(NO_RULES, ONE_COIN, true);
+    play_to(&mut app, 150);
+    assert_eq!(
+        app.world().resource::<GameData>().score,
+        1,
+        "RIGHT ran through the coin"
+    );
+    command(&mut app, "time.pause", json!({}));
+    let n = tick(&app);
+    app.world_mut().resource_mut::<Level>().0.things[1].at = [-8.0, 6.0];
+    command(&mut app, "time.branch", json!({}));
+    settle(&mut app);
+    assert_eq!(tick(&app), n);
+    assert_eq!(
+        app.world().resource::<GameData>().score,
+        0,
+        "the coin is out of reach now"
+    );
+    assert_eq!(heard(&app, "time.diverged"), vec![json!({ "tick": n })]);
+    let answer = last_answer(&app);
+    assert!(
+        answer["marks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["label"] == "Edited the level" && m["tick"] == n),
+        "{answer}"
+    );
+}
+
+#[test]
+fn a_plain_branch_changes_nothing_before_the_tick() {
+    let mut app = scripted();
+    play_to(&mut app, 200);
+    command(&mut app, "time.pause", json!({}));
+    let n = tick(&app);
+    let want = print(&mut app);
+    command(&mut app, "time.branch", json!({}));
+    settle(&mut app);
+    assert_eq!(tick(&app), n);
+    assert_eq!(print(&mut app), want);
+    assert!(heard(&app, "time.diverged").is_empty());
+}
+
+#[test]
+fn undo_puts_the_run_before_the_branch_back() {
+    let mut app = scripted();
+    play_to(&mut app, 200);
+    command(&mut app, "time.pause", json!({}));
+    let of = tick(&app);
+    let mut original = scripted();
+    play_to(&mut original, of);
+    let want = print(&mut original);
+
+    command(&mut app, "time.seek", json!({ "tick": 100 }));
+    settle(&mut app);
+    command(&mut app, "time.branch", json!({}));
+    settle(&mut app);
+    play_to(&mut app, 130);
+    command(&mut app, "time.pause", json!({}));
+    command(
+        &mut app,
+        "time.seek",
+        json!({ "tick": 100, "before_branch": true }),
+    );
+    settle(&mut app);
+    assert_eq!(tick(&app), 100);
+    let answer = last_answer(&app);
+    assert_eq!(answer["of"], of);
+    assert!(
+        answer["marks"].is_array(),
+        "the editor gets the run's marks back"
+    );
+    assert!(app.world().resource::<TimeTravel>().before.is_none());
+    command(&mut app, "time.resume", json!({}));
+    play_to(&mut app, of);
+    assert_eq!(print(&mut app), want, "the pre-branch inputs play back");
+}
+
+#[test]
+fn a_branch_that_enters_playing_again_keeps_its_timeline_and_held_edits() {
+    // `on_run_start` runs on every entry to `Playing`; a re-entering
+    // branch (from the game-over screen or the level editor) is the same
+    // run and must not get a fresh timeline.
+    let mut app = scripted();
+    play_to(&mut app, 100);
+    command(&mut app, "time.pause", json!({}));
+    let n = tick(&app);
+    let mut straight = scripted();
+    play_to(&mut straight, n);
+    let want = print(&mut straight);
+    let sum = app.world().resource::<Checksum>().0;
+    app.world_mut()
+        .resource_mut::<NextState<GameState>>()
+        .set(GameState::GameOver);
+    app.update();
+    assert!(app.world().resource::<State<GameState>>().get() == &GameState::GameOver);
+
+    let (id, v) = an_edit(&app);
+    app.world_mut()
+        .resource_mut::<PendingTunes>()
+        .0
+        .push((id, v.clone()));
+    // What Task 6's `prepare_reentry` stages: the run's own seed.
+    app.world_mut().resource_mut::<PendingSeed>().0 = Some(selftest::SELFTEST_SEED);
+    let seek = branch_seek(app.world_mut(), n, Some(sum), Phase::Reenter, Vec::new())
+        .expect("a timeline to branch");
+    app.world_mut().insert_resource(seek);
+    settle(&mut app);
+
+    assert_eq!(tick(&app), n);
+    let tt = app.world().resource::<TimeTravel>();
+    assert_eq!(tt.run, 1, "the same run, not a fresh one");
+    assert!(
+        tt.before.is_some(),
+        "the run before the branch is kept for undo"
+    );
+    assert_eq!(tt.recording.as_ref().map(|r| r.ticks), Some(n));
+    assert_eq!(print(&mut app), want, "the recording played back to N");
+    assert!(heard(&app, "time.diverged").is_empty());
+    assert_eq!(
+        app.world().resource::<PendingTunes>().0,
+        vec![(id, v.clone())],
+        "the held edit is queued again"
+    );
+    assert!(!app.world().resource::<Paused>().0, "a branch plays on");
+    app.update();
+    assert_eq!(
+        app.world().resource::<TuneLog>().changes,
+        vec![TuneChange {
+            tick: n + 1,
+            id,
+            value: v
+        }]
     );
 }
