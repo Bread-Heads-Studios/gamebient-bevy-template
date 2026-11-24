@@ -9,8 +9,9 @@ use crate::ui::theme::PAPER;
 #[derive(Component)]
 pub struct ScoreText;
 
-/// Spawns the HUD when entering `Playing`. Marked `GameEntity` so it is cleaned
-/// up automatically when the run ends.
+/// Spawns the HUD in `BeginRun`: the start of every run, and again after a
+/// time-travel seek. Marked `GameEntity` so it is cleaned up automatically
+/// when the run ends.
 pub fn spawn_hud(mut commands: Commands) {
     commands.spawn((
         GameEntity,
