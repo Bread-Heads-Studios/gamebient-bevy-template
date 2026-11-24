@@ -69,6 +69,7 @@ impl Plugin for GamePlugin {
             .init_resource::<sim::RunOver>()
             .init_resource::<sim::SpawnCounter>()
             .init_resource::<replay::recorder::ReplayRecorder>()
+            .init_resource::<replay::recorder::RunEdited>()
             .init_resource::<content::edit::EditView>()
             .init_resource::<content::edit::CanvasProbe>()
             .add_message::<scoring::ScoreEvent>()

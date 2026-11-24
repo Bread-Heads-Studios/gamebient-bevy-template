@@ -24,15 +24,16 @@ use bevy::prelude::*;
 use rand::RngCore;
 
 use super::model::{Act, Btn, Cond, Edge, Place, Rule, RulesFile, Target, Trigger};
-use super::{CounterDef, Outcome, PendingRules, Rules, RunEnd};
+use super::{CounterDef, Outcome, PendingRules, Rules, RulesLog, RunEnd};
 use crate::game::audio::SfxEvent;
 use crate::game::content::files::fnv1a64;
 use crate::game::content::kit::{Kinds, Size, Thing};
 use crate::game::content::level::{LevelSource, spawn_thing};
 use crate::game::content::model::LEVEL_MAX_THINGS;
+use crate::game::replay::RulesRecord;
 use crate::game::rule_table;
 use crate::game::scoring::GameData;
-use crate::game::sim::{self, Checksum, GameRng, RunClock, RunOver, SpawnOrder};
+use crate::game::sim::{self, Checksum, GameRng, RunClock, RunOver, SimTick, SpawnOrder};
 use crate::game::states::GameState;
 use crate::ui::transition::ScreenFade;
 
@@ -152,6 +153,7 @@ pub fn begin_run_rules(world: &mut World) {
         waiting: VecDeque::new(),
     });
     world.insert_resource(PendingRules::default());
+    world.insert_resource(RulesLog::default());
     world.insert_resource(RunEnd::default());
 }
 
@@ -197,10 +199,19 @@ pub fn run_rules(world: &mut World) {
     let Some(mut state) = world.remove_resource::<RunRules>() else {
         return;
     };
-    if let Some((file, hash)) = swapped {
-        swap(&mut state, file);
+    if let Some(incoming) = swapped {
+        // Logged with the tick it lands on, so a replay (and a seek) can
+        // hand the same bytes to the same tick.
+        let tick = world.get_resource::<SimTick>().map_or(0, |t| t.0);
+        if let Some(mut log) = world.get_resource_mut::<RulesLog>() {
+            log.0.push(RulesRecord {
+                tick,
+                bytes: incoming.bytes,
+            });
+        }
+        swap(&mut state, incoming.file);
         if let Some(mut sum) = world.get_resource_mut::<Checksum>() {
-            sum.fold(hash);
+            sum.fold(incoming.hash);
         }
     }
     if !state.file.rules.is_empty() || !state.waiting.is_empty() {

@@ -33,7 +33,8 @@
 //! played on the release's default content: the verdict reports
 //! `default_content` (the hash this build's own embedded content gives) and
 //! `is_default_content` (the run's level, start values and changes compared
-//! exactly with those defaults, not by hash), and the website refuses a
+//! exactly with those defaults, not by hash, and no mid-run rules swap),
+//! and the website refuses a
 //! ranked run unless both say so.
 
 pub mod feeder;
@@ -506,9 +507,12 @@ impl ReleaseDefault {
     }
 
     /// Whether `log` (a finished run's) is exactly these defaults: the same
-    /// level, the same start values byte for byte, and no mid-run change.
-    pub fn matches(&self, log: &TuneLog) -> bool {
+    /// level, the same start values byte for byte, no mid-run change, and
+    /// no mid-run rules swap (`rules`, the replay's `RULE` section: its
+    /// swaps never fold into `content`, so any swap is never default).
+    pub fn matches(&self, log: &TuneLog, rules: &[RulesRecord]) -> bool {
         log.level == self.level
+            && rules.is_empty()
             && log.changes.is_empty()
             && log.starts.len() == self.starts.len()
             && log
@@ -686,7 +690,7 @@ pub fn run_verify_app(app: &mut App, replay: &Replay) -> Verdict {
         .get_resource::<ReleaseDefault>()
         .expect("run_verify_app needs an app from build_verify_app (ReleaseDefault)");
     let default_content = defaults.content();
-    let is_default_content = defaults.matches(log);
+    let is_default_content = defaults.matches(log, &replay.rules);
     let ticks = app.world().resource::<SimTick>().0;
     Verdict {
         score,
@@ -1488,6 +1492,14 @@ mod tests {
     }
 
     #[test]
+    fn the_committed_wasm_fixture_re_encodes_byte_for_byte() {
+        let fixture: &[u8] = include_bytes!("../../../tests/fixtures/selftest-wasm.gxr");
+        let r = Replay::decode(fixture).unwrap();
+        assert!(r.rules.is_empty() && !r.edited);
+        assert_eq!(r.encode(), fixture);
+    }
+
+    #[test]
     fn the_edited_flag_rides_in_the_origin_byte() {
         let mut r = sample();
         r.origin = SeedOrigin::Local;
@@ -1719,17 +1731,17 @@ mod tests {
             starts: vec![(0, Value::Int(3)), (1, Value::Float(1.5))],
             changes: vec![],
         };
-        assert!(d.matches(&exact));
+        assert!(d.matches(&exact, &[]));
         assert_eq!(hash::content(&exact), d.content());
         let mut other_level = exact.clone();
         other_level.level = 8;
-        assert!(!d.matches(&other_level));
+        assert!(!d.matches(&other_level, &[]));
         let mut other_value = exact.clone();
         other_value.starts[1].1 = Value::Float(2.0);
-        assert!(!d.matches(&other_value));
+        assert!(!d.matches(&other_value, &[]));
         let mut missing = exact.clone();
         missing.starts.pop();
-        assert!(!d.matches(&missing));
+        assert!(!d.matches(&missing, &[]));
         let mut changed = exact.clone();
         changed.changes.push(crate::game::tunables::TuneChange {
             tick: 1,
@@ -1737,8 +1749,133 @@ mod tests {
             value: Value::Int(3),
         });
         assert!(
-            !d.matches(&changed),
+            !d.matches(&changed, &[]),
             "a change back to the default still counts"
+        );
+        let swap = [RulesRecord {
+            tick: 1,
+            bytes: Vec::new(),
+        }];
+        assert!(!d.matches(&exact, &swap), "any rules swap is never default");
+    }
+
+    /// [`record_on_shipped_content`]'s run, with `swap` set mid-run at tick
+    /// 90 when given; `None` when the shipped content ended the run first.
+    fn record_with_rules_swap(swap: Option<&[u8]>) -> Option<Replay> {
+        use crate::game::rules::set_rules;
+        use crate::game::sim::{PendingSeed, RunOver};
+        const SWAP_AT: u32 = 90;
+        let mut app = build_headless_app();
+        app.add_systems(
+            PreUpdate,
+            selftest::script.before(gamebient_input::input::accumulate_input),
+        );
+        app.world_mut().resource_mut::<PendingSeed>().0 = Some(selftest::SELFTEST_SEED);
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        while app.world().resource::<SimTick>().0 < 240
+            && !app.world().resource::<RunOver>().0
+            && *app.world().resource::<State<GameState>>().get() == GameState::Playing
+        {
+            if let Some(bytes) = swap
+                && app.world().resource::<SimTick>().0 == SWAP_AT
+            {
+                set_rules(app.world_mut(), bytes).unwrap();
+            }
+            app.update();
+        }
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::GameOver);
+        app.update();
+        let replay = app
+            .world()
+            .resource::<recorder::ReplayRecorder>()
+            .last_run()
+            .cloned()
+            .expect("run sealed on OnExit(Playing)");
+        (replay.ticks > SWAP_AT).then_some(replay)
+    }
+
+    #[test]
+    fn a_mid_run_rules_swap_verifies_but_is_not_the_release_default() {
+        const SWAP: &[u8] =
+            br#"{"v":1,"rules":[{"id":"tick","when":{"every":1},"do":[{"add":["score",1]}]}]}"#;
+        let Some(plain) = record_with_rules_swap(None) else {
+            return; // the shipped content ended the run first: nothing to swap
+        };
+        let v = verify(&plain);
+        assert!(v.matches && v.is_default_content, "{v:?}");
+        let swapped = record_with_rules_swap(Some(SWAP)).expect("same run, same length");
+        assert_eq!(swapped.rules.len(), 1, "one swap recorded");
+        assert_eq!(
+            swapped.content, plain.content,
+            "a swap never moves `content`"
+        );
+        let v = verify(&swapped);
+        assert!(v.matches, "it re-simulates fine with its swap: {v:?}");
+        assert!(
+            !v.is_default_content,
+            "a swapped run is never default: {v:?}"
+        );
+    }
+
+    #[test]
+    fn a_mid_run_rules_swap_rides_in_the_replay_and_verifies() {
+        use crate::game::rules::set_rules;
+        use crate::game::sim::{PendingSeed, RunOver};
+        const SWAP_AT: u32 = 90;
+        const SWAP: &[u8] =
+            br#"{"v":1,"rules":[{"id":"tick","when":{"every":1},"do":[{"add":["score",1]}]}]}"#;
+        let mut app = build_headless_app();
+        app.add_systems(
+            PreUpdate,
+            selftest::script.before(gamebient_input::input::accumulate_input),
+        );
+        app.world_mut().resource_mut::<PendingSeed>().0 = Some(selftest::SELFTEST_SEED);
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        while app.world().resource::<SimTick>().0 < 240
+            && !app.world().resource::<RunOver>().0
+            && *app.world().resource::<State<GameState>>().get() == GameState::Playing
+        {
+            if app.world().resource::<SimTick>().0 == SWAP_AT {
+                set_rules(app.world_mut(), SWAP).unwrap();
+            }
+            app.update();
+        }
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::GameOver);
+        app.update();
+        let replay = app
+            .world()
+            .resource::<recorder::ReplayRecorder>()
+            .last_run()
+            .cloned()
+            .expect("run sealed on OnExit(Playing)");
+        if replay.ticks <= SWAP_AT {
+            return; // the shipped content ended the run first: nothing to swap
+        }
+        assert_eq!(
+            replay.rules,
+            vec![RulesRecord {
+                tick: SWAP_AT + 1,
+                bytes: SWAP.to_vec()
+            }]
+        );
+        let back = Replay::decode(&replay.encode()).unwrap();
+        assert_eq!(back.rules, replay.rules);
+        let v = verify(&back);
+        assert!(
+            v.matches,
+            "the verifier replays the swap on its tick: {v:?}"
         );
     }
 }
