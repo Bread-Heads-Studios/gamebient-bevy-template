@@ -124,6 +124,8 @@ To test against a local website, build with
 "end_card": { "headline": "REFUEL WITH ACME", "body": "Use code ARCADE", "url": "https://example.com", "image": "qr.png" }
 ```
 
+The game inserts `EndCardStyle` (`theme::end_card_style()`, from `UiPlugin`) and spawns `(Node::default(), look::EndCardSlot)` in its game-over card. `theme::end_card_text_width(card_w)` sizes the text column from `card_w`, **the outer width of the box the slot sits in** (the template passes the game-over card's width less its padding, `theme::game_over_slot_width()`; a game with a 560 px card passes 560 less its padding), never the view. A slot without a style logs one warning and shows nothing (`EndCardStyleMissing`); `tests/app_boots.rs` fails if a contract that declares the four `endcard*` roles never inserts the style.
+
 Only `headline` is required. The URL is shown as text; the game never opens it. Set the `endcard` palette role to give the card its own plate (transparent by default). See `docs/sponsor-kit/` for the sponsor kit.
 
 To check a game's end card, wear `docs/sponsor-kit/end-card-sample/`: an end card (headline, body, URL and logo) and nothing else, so every game's contract accepts it. Run `cargo run -- --look <template>/docs/sponsor-kit/end-card-sample` from the game and lose a run. It is not a built-in pack (nothing builds or ships `docs/`), so never copy it into `assets/looks/`. The template's own `sample-sponsor` sets template roles, strings and a `player` slot, so other games refuse it.
@@ -404,6 +406,8 @@ spawn and on every `LookChanged`, which `look.clear` and
 |---|---|---|
 | A node's border | `LookBorder::new(role)` (`.alpha(a)`) | Uniform borders only: it writes all four sides of `BorderColor`, so a top-only accent would become four coloured sides even under the default look. |
 | Gradient stops | `LookGradient::two(LookTint::new(top), LookTint::new(bottom))`, `LookGradient::new([Some(t), None, ..])`, `LookGradient::role(role, &[alphas])` | Stop `i` of every gradient in the `BackgroundGradient`; `None` keeps the spawned colour. Positions and shape untouched. |
+| An `ImageNode`'s tint | `LookImage::new(role)` (`.alpha(a)`) | Writes `ImageNode::color` only. `LookColour` deliberately does not reach it (a button carries an image and a background). Not on an image a system lights or dims from state. |
+| A text or box shadow | `LookShadow::new(role)` (`.alpha(a)`) | Colour of `TextShadow` and of every shadow in a `BoxShadow` on the entity (offsets, blur, spread stay as spawned). Give a shadow the role of the part it sits under so a pack's palette does not clash with a literal shadow. |
 | A card (`card_with`) | `LookColour::new(fill)` + `LookBorder` + `LookGradient::two` | The roles' defaults must equal the `CardStyle` literals. |
 | A glow that is a multiple of the base | `LookColour::new(role).emissive(s)` | Emissive RGB = colour (linear) × s × `glow`. The material's emissive **alpha is kept** as built, so the stored `LinearRgba` round-trips exactly under the default look (Bevy 0.18 ignores that alpha; the exposure weight is `StandardMaterial::emissive_exposure_weight`). |
 | A glow that is **not** a multiple of the base | `LookColour::new(role)` + `LookGlow::new(role, game_emissive)`, **the same role on both** | Default look: exactly `game_emissive`. Pack: the pack's colour for the role × the game's emissive-to-default brightness ratio, × the pack's `glow` for the role, so one palette entry recolours base and glow together and one `glow` entry dims it. List the role in the contract's `glow`. 3D only (compiled out under `gx_look_no_pbr`). Never combine with `.emissive(s)` on one material. A separate glow role (`LookGlow::new("rail_glow", ..)`) is the exception, only for a part whose glow a pack should recolour independently of its body: the contract then lists `rail_glow` in `palette` and `glow`, and a pack must set and dim `rail_glow` itself (setting `rail` alone leaves the glow in the game's hue). |
@@ -560,7 +564,14 @@ comment, rather than writing its own boot test.
 
 Recopying `src/ui/fit.rs` means each `Face` in `fonts.rs` needs its
 `widest_em`, `advances` table and `kerns`. Copy `src/ui/font_metrics.rs`
-verbatim (test-only: `#[cfg(test)] mod font_metrics;` in `ui/mod.rs`,
+unchanged except its config block at the top (`DEFAULT_TITLE`: the game's own
+string for the look key, and `TITLE_KEY`: that `theme::STRINGS` key; the
+pack strings the tests build are sized from the key's `max_chars`). Its
+face-dependent checks adapt themselves: a monospace face (all printable
+advances equal) skips the "close to the default size" test, and `<---` must
+defeat the estimate only for a face that really has a widening ligature
+(measured with the shaper); `widest_em` need not be at least `advance_em`.
+(test-only: `#[cfg(test)] mod font_metrics;` in `ui/mod.rs`,
 plus the dev-dependency `cosmic-text = { version = "=0.16.0", features =
 ["shape-run-cache"] }`, already in the lockfile through bevy_text), run
 `cargo test print_glyph_tables -- --ignored --nocapture`, and paste for
@@ -598,7 +609,8 @@ clamp sees a wrap as more than one visual line (distinct run tops in
 and is for UI `Text` only (its query needs a `Node`; not `Text2d`).
 The headless app needs bevy's `bevy_picking` (on in native builds
 through Bevy's default features), because bevy_ui's picking systems
-read picking state. Why
+read picking state; a game with `default-features = false` and no
+picking adds it as a test-only dev-dependency feature (as Gravestone did). Why
 per-glyph widest advances and not a plain advance plus a sparse table of
 widening pairs: Inter's alternates reach through a run (`"**I"` widens
 both asterisks) and carry their own kerns (`"1)a"` widens though `")a"`
@@ -616,7 +628,9 @@ game's own `fitted()` rows and the tests over them.
 
 Copy `look_contract_tests` from the template's `src/ui/theme.rs`
 unchanged (end-card roles, end-card column fit, string defaults); it uses
-only `crate::look`, `theme` and `ui::fit::ui_width`. The template's
+only `crate::look` and `theme`. The game's own `end_card_style()` passes the
+width of its game-over card (the box the slot sits in, less padding) to
+`end_card_text_width(card_w)`. The template's
 `look_contract_game_tests` (every sound is a cue a pack can override) reads
 the template's own audio module: write a game's own version against its
 sound list, or leave it out while `AUDIO_CUES` is empty.

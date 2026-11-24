@@ -1,6 +1,7 @@
 //! Look tags for the parts of a UI node `LookColour` does not reach: its
-//! `BorderColor` ([`LookBorder`]) and the stops of its `BackgroundGradient`
-//! ([`LookGradient`]). They follow `LookColour`'s rules: spawn code puts
+//! `BorderColor` ([`LookBorder`]), the stops of its `BackgroundGradient`
+//! ([`LookGradient`]), its `ImageNode` tint ([`LookImage`]) and its shadows
+//! (`TextShadow` / `BoxShadow`, [`LookShadow`]). They follow `LookColour`'s rules: spawn code puts
 //! the tag next to the game's own colours, and the systems here (in
 //! `LookSet`, `PostUpdate`) write the active pack's colours on the frame
 //! the tag spawns and again on every `LookChanged`, which a clear
@@ -52,6 +53,39 @@ impl LookTint {
 pub struct LookBorder(pub LookTint);
 
 impl LookBorder {
+    pub const fn new(role: &'static str) -> Self {
+        Self(LookTint::new(role))
+    }
+    pub const fn alpha(self, alpha: f32) -> Self {
+        Self(self.0.alpha(alpha))
+    }
+}
+
+/// Tints the entity's `ImageNode::color` from a role. `LookColour` does not
+/// reach it on purpose: a button carries an image and a background, and each
+/// has its own tag. Do not tag an image whose colour a system writes from
+/// state (a lit or spent heart): that system reads the role itself.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct LookImage(pub LookTint);
+
+impl LookImage {
+    pub const fn new(role: &'static str) -> Self {
+        Self(LookTint::new(role))
+    }
+    pub const fn alpha(self, alpha: f32) -> Self {
+        Self(self.0.alpha(alpha))
+    }
+}
+
+/// Colours the entity's shadow from a role: `TextShadow::color`, and the
+/// colour of every `ShadowStyle` in a `BoxShadow`, whichever the entity has
+/// (offsets, blur and spread stay as spawned). One tag, one role: an entity
+/// with both shadows in different colours takes the colour a game system
+/// writes instead.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct LookShadow(pub LookTint);
+
+impl LookShadow {
     pub const fn new(role: &'static str) -> Self {
         Self(LookTint::new(role))
     }
@@ -135,6 +169,58 @@ pub fn retint_gradient(
         }
         if *gradient != want {
             *gradient = want;
+        }
+    }
+}
+
+pub fn retint_image(
+    look: Res<ActiveLook>,
+    mut changed: MessageReader<LookChanged>,
+    mut q: Query<(Ref<LookImage>, &mut ImageNode)>,
+) {
+    let all = changed.read().count() > 0;
+    for (tag, mut image) in &mut q {
+        if all || tag.is_added() {
+            let want = tag.0.resolve(&look);
+            if image.color != want {
+                image.color = want;
+            }
+        }
+    }
+}
+
+pub fn retint_text_shadow(
+    look: Res<ActiveLook>,
+    mut changed: MessageReader<LookChanged>,
+    mut q: Query<(Ref<LookShadow>, &mut TextShadow)>,
+) {
+    let all = changed.read().count() > 0;
+    for (tag, mut shadow) in &mut q {
+        if all || tag.is_added() {
+            let want = tag.0.resolve(&look);
+            if shadow.color != want {
+                shadow.color = want;
+            }
+        }
+    }
+}
+
+pub fn retint_box_shadow(
+    look: Res<ActiveLook>,
+    mut changed: MessageReader<LookChanged>,
+    mut q: Query<(Ref<LookShadow>, &mut BoxShadow)>,
+) {
+    let all = changed.read().count() > 0;
+    for (tag, mut shadow) in &mut q {
+        if !(all || tag.is_added()) {
+            continue;
+        }
+        let want = tag.0.resolve(&look);
+        // Compare first: `DerefMut` marks the shadow changed.
+        if shadow.0.iter().any(|s| s.color != want) {
+            for s in &mut shadow.0 {
+                s.color = want;
+            }
         }
     }
 }

@@ -20,8 +20,8 @@
 use bevy::prelude::*;
 use gamebient_game::look::validate::{parse_colour, validate};
 use gamebient_game::look::{
-    self, ActiveLook, LookBorder, LookColour, LookFit, LookGradient, LookPlugin, LookText,
-    LookTint, Selection,
+    self, ActiveLook, LookBorder, LookColour, LookFit, LookGradient, LookImage, LookPlugin,
+    LookShadow, LookText, LookTint, Selection,
 };
 use gamebient_game::ui::theme;
 
@@ -346,6 +346,114 @@ fn border_and_gradient_tags_follow_the_look_and_restore_on_clear() {
             default_colour(p.role2).with_alpha(0.25)
         ]
     );
+}
+
+/// `LookImage` tints an `ImageNode`, `LookShadow` a `TextShadow` and a
+/// `BoxShadow`: on spawn, on a look change, on a late spawn, and back to
+/// the role defaults on a clear. Only the colour is written (offsets, blur
+/// and the image stay as spawned), and the tag leaves `BackgroundColor`
+/// alone (`LookColour` does not reach the image either).
+#[test]
+fn image_and_shadow_tags_follow_the_look_and_restore_on_clear() {
+    let p = probe();
+    let mut app = app_with(Selection::Embedded(p.id.into()));
+    let bg = Color::srgb(0.2, 0.3, 0.4);
+    let spawn_all = |app: &mut App| {
+        let image = app
+            .world_mut()
+            .spawn((
+                ImageNode::default().with_color(default_colour(p.role)),
+                BackgroundColor(bg),
+                LookImage::new(p.role).alpha(0.5),
+            ))
+            .id();
+        let text_shadow = app
+            .world_mut()
+            .spawn((
+                Text::new("x"),
+                TextShadow {
+                    offset: Vec2::new(1.0, 2.0),
+                    color: default_colour(p.role),
+                },
+                LookShadow::new(p.role2).alpha(0.25),
+            ))
+            .id();
+        let box_shadow = app
+            .world_mut()
+            .spawn((
+                BoxShadow::new(
+                    default_colour(p.role),
+                    Val::Px(0.0),
+                    Val::Px(4.0),
+                    Val::Px(0.0),
+                    Val::Px(8.0),
+                ),
+                LookShadow::new(p.role2),
+            ))
+            .id();
+        (image, text_shadow, box_shadow)
+    };
+    let (image, text_shadow, box_shadow) = spawn_all(&mut app);
+    let read = |app: &App, e: Entity| {
+        let w = app.world();
+        (
+            w.get::<ImageNode>(e).map(|i| i.color),
+            w.get::<TextShadow>(e).map(|s| s.color),
+            w.get::<BoxShadow>(e).map(|s| s.0[0].color),
+        )
+    };
+    app.update();
+    assert_eq!(read(&app, image).0, Some(p.colour().with_alpha(0.5)));
+    assert_eq!(
+        app.world().get::<BackgroundColor>(image).unwrap().0,
+        bg,
+        "the image tag leaves the background alone"
+    );
+    assert_eq!(
+        read(&app, text_shadow).1,
+        Some(p.colour2().with_alpha(0.25))
+    );
+    assert_eq!(read(&app, box_shadow).2, Some(p.colour2()));
+    let b = &app.world().get::<BoxShadow>(box_shadow).unwrap().0[0];
+    assert_eq!((b.y_offset, b.blur_radius), (Val::Px(4.0), Val::Px(8.0)));
+    assert_eq!(
+        app.world().get::<TextShadow>(text_shadow).unwrap().offset,
+        Vec2::new(1.0, 2.0)
+    );
+
+    // A late spawn under the pack takes it on its first frame.
+    let (late_image, late_text, late_box) = spawn_all(&mut app);
+    app.update();
+    assert_eq!(read(&app, late_image).0, Some(p.colour().with_alpha(0.5)));
+    assert_eq!(read(&app, late_text).1, Some(p.colour2().with_alpha(0.25)));
+    assert_eq!(read(&app, late_box).2, Some(p.colour2()));
+
+    // A change to the game's own look (what a clear does): role defaults.
+    app.insert_resource(ActiveLook::resolve(&theme::LOOK, Selection::Default));
+    app.world_mut().write_message(look::LookChanged);
+    app.update();
+    for e in [image, late_image] {
+        assert_eq!(
+            read(&app, e).0,
+            Some(default_colour(p.role).with_alpha(0.5))
+        );
+    }
+    for e in [text_shadow, late_text] {
+        assert_eq!(
+            read(&app, e).1,
+            Some(default_colour(p.role2).with_alpha(0.25))
+        );
+    }
+    for e in [box_shadow, late_box] {
+        assert_eq!(read(&app, e).2, Some(default_colour(p.role2)));
+    }
+
+    // And a hot swap to the pack again follows.
+    app.insert_resource(p.look());
+    app.world_mut().write_message(look::LookChanged);
+    app.update();
+    assert_eq!(read(&app, image).0, Some(p.colour().with_alpha(0.5)));
+    assert_eq!(read(&app, box_shadow).2, Some(p.colour2()));
 }
 
 /// A stand-in face for `look_fit_keeps_the_default_size_and_fits_any_pack_string`:
