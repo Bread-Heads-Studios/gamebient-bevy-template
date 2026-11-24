@@ -34,7 +34,7 @@ use gamebient_input::{HostCommand, HostEvent};
 use crate::frame::Highlight;
 use crate::game::scoring::{GameData, LeaderboardScore};
 use crate::game::sim;
-use crate::game::states::{GameState, Paused};
+use crate::game::states::{GameState, Paused, QuietPause};
 
 /// Set by a host `mute`. New sounds honour it through `GlobalVolume`; sinks
 /// already playing are muted directly, and sinks spawned while muted are
@@ -129,6 +129,7 @@ fn apply_host_commands(
     mut commands: MessageReader<HostCommand>,
     state: Res<State<GameState>>,
     mut paused: ResMut<Paused>,
+    mut quiet: ResMut<QuietPause>,
     mut muted: ResMut<Muted>,
     local: Res<LocalMute>,
     // `GlobalVolume` is only inserted by `AudioPlugin`, which the headless
@@ -148,6 +149,9 @@ fn apply_host_commands(
                 if paused.0 != want {
                     paused.0 = want;
                 }
+                // A host pause looks like a player pause, never the
+                // editor timeline's quiet one.
+                quiet.set_if_neq(QuietPause(false));
             }
             HostCommand::Mute(mute) => {
                 muted.0 = *mute;

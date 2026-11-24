@@ -126,10 +126,19 @@ impl ReplayRecorder {
     }
 }
 
-/// `OnEnter(Playing)`, after `sim::begin_run` and `tunables::begin_run_tunables`.
-pub fn begin_recording(seed: Res<RunSeed>, log: Res<TuneLog>, mut rec: ResMut<ReplayRecorder>) {
+/// `BeginRun`, after `sim::begin_run` and `tunables::begin_run_tunables`.
+/// A fresh run is not edited, whatever the last one was: without this,
+/// every run after an edited one would be sealed edited and never posted.
+/// (Time travel's in-place restart keeps the flag: `time::seek::restart_run`.)
+pub fn begin_recording(
+    seed: Res<RunSeed>,
+    log: Res<TuneLog>,
+    mut rec: ResMut<ReplayRecorder>,
+    mut edited: ResMut<RunEdited>,
+) {
     rec.begin(*seed);
     rec.set_tunes(&log);
+    edited.set_if_neq(RunEdited(false));
 }
 
 /// Last in `SimSet`: only sim ticks are recorded, so paused ticks are absent.

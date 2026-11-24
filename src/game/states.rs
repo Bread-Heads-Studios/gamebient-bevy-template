@@ -27,7 +27,8 @@ pub struct Paused(pub bool);
 /// A pause the editor's timeline holds (`game::time`): the sim is paused
 /// exactly as by [`Paused`], which is set with it, but the pause overlay
 /// stays hidden so the frame being inspected shows. Cleared when a run
-/// starts and whenever `Paused` is cleared.
+/// starts, whenever `Paused` is cleared (`game::time`), and by any pause
+/// or resume the player or the host makes (`toggle_pause`, `game::host`).
 #[derive(Resource, Default, Debug, PartialEq, Eq)]
 pub struct QuietPause(pub bool);
 

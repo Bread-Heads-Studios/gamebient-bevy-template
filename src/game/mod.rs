@@ -18,6 +18,8 @@ pub mod rules;
 pub mod scoring;
 pub mod sim;
 pub mod states;
+#[cfg(feature = "editor")]
+pub mod time;
 pub mod tunables;
 pub mod tuning;
 
@@ -201,6 +203,11 @@ impl Plugin for GamePlugin {
                     .chain(),
             )
             .add_systems(OnExit(GameState::Editing), cleanup_game_entities);
+
+        // The editor's time travel (pause, step, seek, branch, speed), in
+        // both modes so the headless tests drive it.
+        #[cfg(feature = "editor")]
+        app.add_plugins(time::TimePlugin);
 
         if !self.headless {
             app.add_plugins(content::edit::EditCameraPlugin);
@@ -388,9 +395,14 @@ fn cleanup_pause_overlay(mut commands: Commands, query: Query<Entity, With<Pause
 /// and pause stays masked at both ends. Move the read into a sim system, or
 /// make the fade decide anything on a non-pause tick, and it is the shipped
 /// Sundae Shooter bug again.
+///
+/// The player's own pause is never the editor's quiet one: either press
+/// clears `QuietPause`, so a pause the player makes after the editor's
+/// timeline held the run shows its overlay.
 fn toggle_pause(
     input: Res<gamebient_input::TickInput>,
     mut paused: ResMut<states::Paused>,
+    mut quiet: ResMut<states::QuietPause>,
     fade: Option<Res<crate::ui::transition::ScreenFade>>,
     mut sfx: MessageWriter<audio::SfxEvent>,
 ) {
@@ -398,6 +410,7 @@ fn toggle_pause(
         return;
     }
     paused.0 = !paused.0;
+    quiet.set_if_neq(states::QuietPause(false));
     sfx.write(audio::SfxEvent::Pause);
 }
 
