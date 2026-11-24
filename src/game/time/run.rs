@@ -59,6 +59,11 @@ pub fn prepare_reentry(world: &mut World) {
     let Some(start) = world.resource::<TimeTravel>().start.clone() else {
         return;
     };
+    // Every value changed since the run left `Playing`, counted again now:
+    // one applied off-run while the re-entry waited (its fade) would
+    // otherwise be written over by the start values and lost.
+    let edits = value_edits(world);
+    world.resource_mut::<Seek>().held.edits = edits;
     let live = Content::capture(world);
     start.content.put(world);
     put_starts(world, &start.starts);

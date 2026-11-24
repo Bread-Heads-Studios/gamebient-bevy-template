@@ -311,12 +311,16 @@ pub fn mark_edited(world: &mut World) {
 /// Brings the recording up to date. While the run is live it is the
 /// recorder's run so far. During playback it is the recorder's run so far
 /// (which holds any setting or rules change made since the seek) followed
-/// by what the recording holds after this tick, so a later seek keeps both.
+/// by what the recording holds after this tick, so a later seek keeps both,
+/// unless the run has just ended (`RunOver`): then it ends here.
 pub fn refresh_recording(world: &mut World) {
     let mut r = world
         .resource::<ReplayRecorder>()
         .snapshot(world.resource::<TuneLog>(), world.resource::<RulesLog>());
+    // A run that ended here ends its recording here: the old tail is out
+    // of its reach.
     if world.contains_resource::<PlaybackFeeder>()
+        && !world.resource::<sim::RunOver>().0
         && let Some(old) = &world.resource::<TimeTravel>().recording
     {
         append_after(&mut r, old);

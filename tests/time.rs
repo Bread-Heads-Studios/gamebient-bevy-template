@@ -801,8 +801,9 @@ fn a_branch_that_enters_playing_again_keeps_its_timeline_and_held_edits() {
         .resource_mut::<PendingTunes>()
         .0
         .push((id, v.clone()));
-    // The game-over screen left the run's seed and a start value behind:
-    // `prepare_reentry` must stage the run's own.
+    // The game-over screen left the run's seed and a changed value behind:
+    // `prepare_reentry` must stage the run's own start, and queue the
+    // changed value as an edit for the tick after N.
     let starts = app.world().resource::<TuneLog>().starts.clone();
     let (sid, sv) = an_edit(&app);
     write_value(app.world_mut(), sid, &sv);
@@ -834,8 +835,8 @@ fn a_branch_that_enters_playing_again_keeps_its_timeline_and_held_edits() {
     assert!(heard(&app, "time.diverged").is_empty());
     assert_eq!(
         app.world().resource::<PendingTunes>().0,
-        vec![(id, v.clone())],
-        "the held edit is queued again"
+        vec![(sid, sv.clone()), (id, v.clone())],
+        "the value changed off-run and the held edit are queued again"
     );
     assert!(!app.world().resource::<Paused>().0, "a branch plays on");
     assert!(
@@ -846,11 +847,18 @@ fn a_branch_that_enters_playing_again_keeps_its_timeline_and_held_edits() {
     app.update();
     assert_eq!(
         app.world().resource::<TuneLog>().changes,
-        vec![TuneChange {
-            tick: n + 1,
-            id,
-            value: v
-        }]
+        vec![
+            TuneChange {
+                tick: n + 1,
+                id: sid,
+                value: sv
+            },
+            TuneChange {
+                tick: n + 1,
+                id,
+                value: v
+            }
+        ]
     );
 }
 
@@ -1344,4 +1352,61 @@ fn a_rules_change_during_playback_survives_a_backward_seek() {
     settle(&mut app);
     assert_eq!(tick(&app), 70);
     assert_eq!(print(&mut app), want, "re-simulated with the new rules");
+}
+
+#[test]
+fn a_setting_changed_while_a_seek_from_game_over_waits_lands_on_the_tick_after_it() {
+    let mut app = on_rules(END_AT_120, &[FAR], false);
+    play_until_over(&mut app);
+    command(&mut app, "time.seek", json!({ "tick": 60 }));
+    assert_eq!(
+        state(&app),
+        GameState::GameOver,
+        "the re-entry is still waiting"
+    );
+    // The flush that arrives meanwhile, applied off-run (as
+    // `apply_pending_tunes` does when it runs before `drive_seek`).
+    let (id, v) = an_edit(&app);
+    write_value(app.world_mut(), id, &v);
+    settle(&mut app);
+    assert_eq!(state(&app), GameState::Playing);
+    assert_eq!(tick(&app), 60);
+    assert!(
+        app.world().resource::<TuneLog>().changes.is_empty(),
+        "never inside the re-simulation"
+    );
+    command(&mut app, "time.resume", json!({}));
+    app.update();
+    assert_eq!(
+        app.world().resource::<TuneLog>().changes,
+        vec![TuneChange {
+            tick: 61,
+            id,
+            value: v
+        }]
+    );
+}
+
+#[test]
+fn a_run_that_ends_during_playback_ends_its_recording_there() {
+    let mut app = on_rules(ADD_1, &[FAR], false);
+    play_to(&mut app, 300);
+    command(&mut app, "time.pause", json!({}));
+    command(&mut app, "time.seek", json!({ "tick": 50 }));
+    settle(&mut app);
+    assert!(app.world().contains_resource::<PlaybackFeeder>());
+    set_rules(app.world_mut(), END_AT_120.as_bytes()).unwrap();
+    command(&mut app, "time.resume", json!({}));
+    play_until_over(&mut app);
+    let end = tick(&app);
+    assert!(end < 300, "the new rules ended the run early, at {end}");
+    assert_eq!(
+        app.world().resource::<TimeTravel>().recorded(),
+        end,
+        "nothing past the end it reached"
+    );
+    command(&mut app, "time.seek", json!({ "tick": 500 }));
+    settle(&mut app);
+    assert_eq!(state(&app), GameState::Playing, "one tick short of the end");
+    assert_eq!(tick(&app), end - 1);
 }
