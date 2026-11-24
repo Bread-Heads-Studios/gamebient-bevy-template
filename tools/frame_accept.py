@@ -414,6 +414,14 @@ def check_copies(game_arg):
     if (game / rules_dir).is_dir():
         exact_tree("src/game/rules", rules_dir)
         exact("content/schema/rules.schema.json")
+    # Time travel (the editor's timeline): the layer and the shared pieces
+    # it rests on are verbatim copies. A game without the editor's time
+    # travel has no folder and is not checked.
+    time_dir = "src/time" if flat else "src/game/time"
+    if (game / time_dir).is_dir():
+        exact_tree("src/game/time", time_dir)
+        for f in ("states.rs", "replay/recorder.rs", "replay/feeder.rs"):
+            exact(f"src/game/{f}", f"src/{f}" if flat else f"src/game/{f}")
 
     # tests/display_shape.rs: the crate name only.
     name = lib_name(game)

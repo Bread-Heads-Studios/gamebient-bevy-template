@@ -91,6 +91,7 @@ in before the first gameplay code; the cover and metadata skills read it.
   frames (`dist-editor/`) with the `wasm-editor` profile (no LTO, stripped,
   about a second to rebuild after an edit; publishing keeps `wasm-release`); see
   `docs/superpowers/specs/2026-11-06-editor-design.md`.
+- **Time travel (editor builds):** `src/game/time/` (copied verbatim, like `rules/`) answers `time.pause` / `time.resume` / `time.step {n}` / `time.seek {tick}` / `time.branch` / `time.speed {x}` with `time {tick, of, paused, speed, seeking, edited, run, over}` (plus `refused: "<sentence>"` for a command not taken; `over: true` once the run leaves `Playing`, and a seek still takes an ended run back in), plus `time.mark` and `time.diverged`. A seek re-simulates from tick 0 through `FixedMain` (`seek::run_ticks`) after `seek::restart_run` runs the `BeginRun` schedule. Keep every run-start reset inside `BeginRun`, never in another `OnEnter(Playing)` system, and every run entity a `GameEntity`, or a seek will miss it. Marks: `rule_table::MARKS`. Rules swaps ride in the GXR2 `RULE` section; edited runs set the `origin` edited bit and are never submitted. Tests: `tests/time.rs` and `tests/seek_budget.rs` (`cargo test --all-features`). Guide: `docs/content-kit.md`, "Time travel".
 - **A visual check:** `cargo run --features autopilot` plays a scripted ~60 s
   session (logo → title → how-to-play → bot-played run → pause → game over) and
   saves renderer screenshots `01-studio-logo` … `09-game-over` to

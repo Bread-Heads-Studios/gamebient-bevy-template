@@ -29,6 +29,7 @@ use crate::game::audio::SfxEvent;
 use crate::game::content::files::{embedded, fnv1a64};
 use crate::game::content::kit::Kinds;
 use crate::game::content::level::LevelSource;
+use crate::game::replay::{MAX_RULES_SWAPS, RulesRecord};
 use crate::game::rule_table;
 use crate::game::scoring::GameData;
 use crate::game::states::GameState;
@@ -48,6 +49,23 @@ pub struct CounterDef {
     pub set: fn(&mut GameData, i64),
 }
 
+/// When a counter makes a time-travel mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkWhen {
+    Falls,
+    Rises,
+}
+
+/// A counter whose changes the editor's timeline marks
+/// (`rule_table::MARKS`; `game::time::marks`).
+pub struct MarkDef {
+    /// A `COUNTERS` name.
+    pub counter: &'static str,
+    pub when: MarkWhen,
+    /// What the timeline says ("Lost a life"; the editor adds "at 9.2 s").
+    pub label: &'static str,
+}
+
 /// The rules the next run starts with (`LevelSource::Content`).
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub struct Rules(pub RulesFile);
@@ -56,10 +74,32 @@ pub struct Rules(pub RulesFile);
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RulesHash(pub u64);
 
-/// A file `content.set` swapped in during a run, and its hash: `run_rules`
-/// takes it at the start of the next tick.
+/// A rules file a run takes mid-run: the checked file, its hash (0 for no
+/// rules) and its exact bytes, which the replay records (`RULE`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RulesSwap {
+    pub file: RulesFile,
+    pub hash: u64,
+    pub bytes: Vec<u8>,
+}
+
+/// A file `content.set` swapped in during a run (or a replay's recorded
+/// swap): `run_rules` takes it at the start of the next tick.
 #[derive(Resource, Debug, Default)]
-pub struct PendingRules(pub Option<(RulesFile, u64)>);
+pub struct PendingRules(pub Option<RulesSwap>);
+
+/// The exact bytes of the file in [`Rules`] (empty before any file).
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct RulesText(pub Vec<u8>);
+
+/// Every swap the run in progress took, on the tick it landed. Reset when
+/// a run starts; sealed into the replay's `RULE` section.
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct RulesLog(pub Vec<RulesRecord>);
+
+/// What `set_rules` answers once a run has taken `MAX_RULES_SWAPS` swaps.
+pub const TOO_MANY_SWAPS: &str =
+    "This run has changed its rules 64 times. Restart the run to change them again.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -80,6 +120,8 @@ impl Plugin for RulesPlugin {
         app.init_resource::<Rules>()
             .init_resource::<RulesHash>()
             .init_resource::<PendingRules>()
+            .init_resource::<RulesText>()
+            .init_resource::<RulesLog>()
             .init_resource::<RunEnd>()
             .init_resource::<run::RunRules>();
         if let Some(bytes) = embedded("rules.json")
@@ -136,7 +178,8 @@ pub fn test_rules_hash() -> u64 {
 
 /// Checks `bytes` whole and swaps it in: the next run starts with it, and
 /// a run in progress on the content rules takes it at the next tick
-/// (`PendingRules`). On error nothing changes.
+/// (`PendingRules`), at most `MAX_RULES_SWAPS` times a run. On error
+/// nothing changes.
 pub fn set_rules(world: &mut World, bytes: &[u8]) -> Result<(), String> {
     let file = model::check_file(bytes, &vocab(world))?;
     let hash = rules_hash(&file, bytes);
@@ -146,14 +189,21 @@ pub fn set_rules(world: &mut World, bytes: &[u8]) -> Result<(), String> {
     let test = world
         .get_resource::<LevelSource>()
         .is_some_and(|s| *s == LevelSource::Test);
-    if playing
-        && !test
-        && let Some(mut pending) = world.get_resource_mut::<PendingRules>()
-    {
-        pending.0 = Some((file.clone(), hash));
+    let live = playing && !test && world.contains_resource::<PendingRules>();
+    let swaps = world.get_resource::<RulesLog>().map_or(0, |l| l.0.len());
+    if live && swaps >= MAX_RULES_SWAPS {
+        return Err(TOO_MANY_SWAPS.to_string());
+    }
+    if live {
+        world.resource_mut::<PendingRules>().0 = Some(RulesSwap {
+            file: file.clone(),
+            hash,
+            bytes: bytes.to_vec(),
+        });
     }
     world.insert_resource(Rules(file));
     world.insert_resource(RulesHash(hash));
+    world.insert_resource(RulesText(bytes.to_vec()));
     Ok(())
 }
 
@@ -251,6 +301,69 @@ mod tests {
     use super::*;
     use crate::game::content::files::{embedded, fnv1a64};
     use crate::game::replay::build_headless_app;
+
+    /// A run in progress on the content source.
+    fn playing() -> App {
+        use crate::game::content::level::LevelSource;
+        let mut app = build_headless_app();
+        app.insert_resource(LevelSource::Content);
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        app
+    }
+
+    #[test]
+    fn every_mark_names_a_counter() {
+        for m in crate::game::rule_table::MARKS {
+            assert!(
+                crate::game::rule_table::COUNTERS
+                    .iter()
+                    .any(|c| c.name == m.counter),
+                "{}",
+                m.counter
+            );
+            assert!(!m.label.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_swap_during_a_run_carries_its_bytes() {
+        let mut app = playing();
+        let good =
+            br#"{"v":1,"rules":[{"id":"a","when":{"start":true},"do":[{"add":["score",1]}]}]}"#;
+        set_rules(app.world_mut(), good).unwrap();
+        let swap = app
+            .world()
+            .resource::<PendingRules>()
+            .0
+            .clone()
+            .expect("a run in progress takes it at the next tick");
+        assert_eq!(swap.bytes, good.to_vec());
+        assert_eq!(swap.hash, fnv1a64(good));
+        assert_eq!(app.world().resource::<RulesText>().0, good.to_vec());
+    }
+
+    #[test]
+    fn the_sixty_fifth_swap_of_a_run_is_refused() {
+        use crate::game::replay::{MAX_RULES_SWAPS, RulesRecord};
+        let mut app = playing();
+        let before = app.world().resource::<Rules>().clone();
+        app.world_mut().resource_mut::<RulesLog>().0 = (0..MAX_RULES_SWAPS as u32)
+            .map(|tick| RulesRecord {
+                tick,
+                bytes: Vec::new(),
+            })
+            .collect();
+        assert_eq!(
+            set_rules(app.world_mut(), b"{\"v\":1,\"rules\":[]}"),
+            Err(TOO_MANY_SWAPS.to_string())
+        );
+        assert_eq!(*app.world().resource::<Rules>(), before);
+        assert!(app.world().resource::<PendingRules>().0.is_none());
+    }
 
     /// The shipped file is valid, whatever it holds (never compared with
     /// what was shipped: the editor saves it).

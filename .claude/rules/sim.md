@@ -19,7 +19,7 @@ check them yourself on every sim change:
 - No `Time::elapsed*`, wall clock or frame count in a sim system; use
   `sim::RunClock`. `Time::delta_secs()` is fine inside `FixedUpdate`.
 - Run state never lives in a `Local<_>`, a `static` or a plugin-build-time
-  cache: put it in a resource or component that `OnEnter(Playing)` resets.
+  cache: put it in a resource or component that the `BeginRun` chain resets.
 - No sim read of `UiScale`, `Window`, `GameViewport` or `FrameInsets`.
 - The level (`content/level.json`) is run content and in the replay hash; the selftest and checks use `LevelSource::Test`, never `content/`.
 - `GameState::Editing` (the level editor) runs no `SimSet` system; never add a sim system that runs outside `Playing`.

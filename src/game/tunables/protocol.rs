@@ -21,6 +21,7 @@
 //! | host → game | `look.preview`   | `{ id, files: { "look.json": {text}, "<name>.png": {png}, "<name>.ogg": {ogg} } }`: validate and wear (src/look/editor.rs) |
 //! | host → game | `look.preview.clear` | `{}`: back to the game's own look |
 //! | game → host | `look`           | `{ id, ok, errors: ["<where>: <what>"], hash, warnings: ["<where>: <what>"] }`; hash is the pack's content hash when ok, else null |
+//! | host → game | `time.*`         | time travel (pause, step, seek, branch, speed): `src/game/time/` |
 //!
 //! (`look.set` / `look.clear` / `look.applied` are the hosted looks'
 //! commands, in every build: `src/look/hosted.rs`.)
@@ -102,7 +103,9 @@ impl Plugin for EditorProtocolPlugin {
             (
                 handle_custom_commands,
                 apply_content_sets,
-                restart_run,
+                // After a `time.seek` read this frame, so a restart sent
+                // with it drops the seek's re-entry (see `restart_run`).
+                restart_run.after(crate::game::time::commands::apply_time_commands),
                 apply_edit_request,
             )
                 .chain()
@@ -286,6 +289,7 @@ pub fn catalog_json(world: &World) -> Json {
         j["level"] = level;
     }
     j["rules"] = crate::game::rules::rules_catalog(world);
+    j["time"] = crate::game::time::catalog();
     if let Some(looks) = crate::look::editor::looks_catalog(world) {
         j["looks"] = looks;
     }
@@ -547,9 +551,21 @@ fn restart_run(
     state: Res<State<GameState>>,
     mut next: ResMut<NextState<GameState>>,
     fade: Option<ResMut<crate::ui::transition::ScreenFade>>,
+    time: Option<ResMut<crate::game::time::TimeTravel>>,
+    seek: Option<Res<crate::game::time::seek::Seek>>,
+    mut commands: Commands,
 ) {
     if !restart.0 {
         return;
+    }
+    // A restart is a fresh run, never the level editor's return to a
+    // paused tick (`time::run::prepare_reentry`), nor a seek waiting to
+    // take an ended run back into `Playing` (`Phase::Reenter`).
+    if let Some(mut time) = time {
+        time.edit_return = None;
+    }
+    if seek.is_some_and(|s| s.phase == crate::game::time::seek::Phase::Reenter) {
+        commands.remove_resource::<crate::game::time::seek::Seek>();
     }
     let target = if *state.get() == GameState::Playing {
         GameState::Menu

@@ -5,7 +5,7 @@
 //! build    u8 len + UTF-8            GX_BUILD_ID of the game that recorded it
 //! tick_hz  u16
 //! seed     [u8; 32]
-//! origin   u8                        0 host, 1 local
+//! origin   u8                        0 host, 1 local; bit 0x80 set: edited in the editor
 //! content  u64                       hash of the level, then the tune log (start values + changes)
 //! ticks    u32                       total sim ticks
 //! score    u64                       claimed
@@ -13,7 +13,16 @@
 //! starts   u16 count, then [id u16, len u8, bytes]        every non-cosmetic tunable's start value, index order
 //! tunes    u32 count, then [tick u32, id u16, len u8, bytes]  mid-run changes, in apply order
 //! runs     u32 count, then [held u16, latched u16, ax i8, ay i8, count u16]
+//! sections zero or more [tag [u8; 4], len u32, body]
+//!          b"RULE": u16 count, then [tick u32, len u32, bytes]   mid-run rules swaps, in apply order
 //! ```
+//!
+//! A reader stops after `runs` unless it knows the sections
+//! ([`decode_prefix`] is that older reader), and skips a tag it does not
+//! know. A run with no swaps writes no section and a run that was not
+//! edited leaves `origin` 0 or 1, so such a file is byte-identical to one
+//! from before sections existed. An edited run (time travel, `game::time`)
+//! is never posted and never verified ([`verify_bytes`]).
 //!
 //! `starts` and `tunes` are the game's tunables (`game::tunables`): the
 //! verifier applies the start values before the run and feeds each change
@@ -24,7 +33,8 @@
 //! played on the release's default content: the verdict reports
 //! `default_content` (the hash this build's own embedded content gives) and
 //! `is_default_content` (the run's level, start values and changes compared
-//! exactly with those defaults, not by hash), and the website refuses a
+//! exactly with those defaults, not by hash, and no mid-run rules swap),
+//! and the website refuses a
 //! ranked run unless both say so.
 
 pub mod feeder;
@@ -45,6 +55,29 @@ pub const MAX_TUNES: usize = 4096;
 /// post a handful of bytes could otherwise ask a verifier to run for days.
 /// `decode` rejects anything above this before it reads a single run.
 pub const MAX_TICKS: u32 = 216_000;
+
+/// Most mid-run rules swaps one run records (`RULE`).
+pub const MAX_RULES_SWAPS: usize = 64;
+
+/// The largest rules file a swap carries: the rules file limit.
+pub const MAX_RULES_BYTES: usize = crate::game::rules::model::MAX_BYTES;
+
+/// Set in the `origin` byte of a run edited in the editor.
+pub const EDITED_BIT: u8 = 0x80;
+
+/// The trailing section of mid-run rules swaps.
+pub const RULES_TAG: &[u8; 4] = b"RULE";
+
+/// What the verifier answers for an edited run.
+pub const EDITED_REFUSAL: &str = "This run was edited in the editor.";
+
+/// A rules file swapped in mid-run, on `tick` (the value of `SimTick`
+/// during the tick `rules::run_rules` took it), as its exact bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RulesRecord {
+    pub tick: u32,
+    pub bytes: Vec<u8>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TickRun {
@@ -80,6 +113,11 @@ pub struct Replay {
     /// Mid-run changes, in the order they applied.
     pub tunes: Vec<TuneRecord>,
     pub runs: Vec<TickRun>,
+    /// Mid-run rules swaps, in the order they applied (`RULE`).
+    pub rules: Vec<RulesRecord>,
+    /// Paused, stepped, rewound, branched or sped up in the editor: never
+    /// submitted, refused by the verifier.
+    pub edited: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -135,7 +173,7 @@ impl Replay {
         out.extend_from_slice(&build[..build.len().min(255)]);
         out.extend_from_slice(&self.tick_hz.to_le_bytes());
         out.extend_from_slice(&self.seed);
-        out.push(self.origin as u8);
+        out.push(self.origin as u8 | if self.edited { EDITED_BIT } else { 0 });
         out.extend_from_slice(&self.content.to_le_bytes());
         out.extend_from_slice(&self.ticks.to_le_bytes());
         out.extend_from_slice(&self.score.to_le_bytes());
@@ -161,76 +199,132 @@ impl Replay {
             out.push(r.ay as u8);
             out.extend_from_slice(&r.count.to_le_bytes());
         }
+        if !self.rules.is_empty() {
+            let mut body = Vec::new();
+            body.extend_from_slice(&(self.rules.len() as u16).to_le_bytes());
+            for r in &self.rules {
+                body.extend_from_slice(&r.tick.to_le_bytes());
+                body.extend_from_slice(&(r.bytes.len() as u32).to_le_bytes());
+                body.extend_from_slice(&r.bytes);
+            }
+            out.extend_from_slice(RULES_TAG);
+            out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            out.extend_from_slice(&body);
+        }
         out
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Replay, DecodeError> {
-        let mut c = Cursor { b: bytes, i: 0 };
-        if c.take(4)? != MAGIC {
-            return Err(DecodeError::BadMagic);
+        let (mut replay, used) = decode_prefix(bytes)?;
+        let mut c = Cursor { b: bytes, i: used };
+        while c.i < c.b.len() {
+            let tag = c.take(4)?;
+            let len = c.u32()? as usize;
+            let body = c.take(len)?;
+            if tag == RULES_TAG {
+                replay.rules = decode_rules(body, replay.ticks)?;
+            }
         }
-        let n = c.u8()? as usize;
-        let build = core::str::from_utf8(c.take(n)?)
-            .map_err(|_| DecodeError::BadBuild)?
-            .to_string();
-        let tick_hz = c.u16()?;
-        if tick_hz != super::sim::TICK_HZ as u16 {
-            return Err(DecodeError::BadTickRate(tick_hz));
+        Ok(replay)
+    }
+
+    /// Cuts the recording to its first `n` ticks: the inputs after `n`,
+    /// and the changes and rules swaps applied after `n`, are dropped. A
+    /// record on tick `n` itself stays (that tick was simulated with it).
+    pub fn truncate(&mut self, n: u32) {
+        if n < self.ticks {
+            let mut left = n;
+            let mut runs = Vec::new();
+            for r in &self.runs {
+                if left == 0 {
+                    break;
+                }
+                let take = u32::from(r.count).min(left);
+                runs.push(TickRun {
+                    count: take as u16,
+                    ..*r
+                });
+                left -= take;
+            }
+            self.runs = runs;
+            self.ticks = n;
         }
-        let mut seed = [0u8; 32];
-        seed.copy_from_slice(c.take(32)?);
-        let o = c.u8()?;
-        let origin = SeedOrigin::from_u8(o).ok_or(DecodeError::BadOrigin(o))?;
-        let content = c.u64()?;
-        let ticks = c.u32()?;
-        if ticks > MAX_TICKS {
-            return Err(DecodeError::TooManyTicks(ticks));
-        }
-        let score = c.u64()?;
-        let checksum = c.u64()?;
-        let n_starts = usize::from(c.u16()?);
-        if n_starts > MAX_TUNES {
-            return Err(DecodeError::BadValue);
-        }
-        let mut starts = Vec::with_capacity(n_starts);
-        for _ in 0..n_starts {
-            let id = c.u16()?;
-            let len = usize::from(c.u8()?);
-            starts.push((id, c.take(len)?.to_vec()));
-        }
-        let n_tunes = c.u32()? as usize;
-        if n_tunes > MAX_TUNES {
-            return Err(DecodeError::BadValue);
-        }
-        let mut tunes = Vec::with_capacity(n_tunes);
-        for _ in 0..n_tunes {
-            let tick = c.u32()?;
-            let id = c.u16()?;
-            let len = usize::from(c.u8()?);
-            tunes.push(TuneRecord {
-                tick,
-                id,
-                bytes: c.take(len)?.to_vec(),
-            });
-        }
-        let n_runs = c.u32()? as usize;
-        let mut runs = Vec::with_capacity(n_runs.min(1 << 16));
-        let mut sum: u32 = 0;
-        for _ in 0..n_runs {
-            let r = TickRun {
-                held: c.u16()?,
-                latched: c.u16()?,
-                ax: c.u8()? as i8,
-                ay: c.u8()? as i8,
-                count: c.u16()?,
-            };
-            sum = sum.saturating_add(u32::from(r.count));
-            runs.push(r);
-        }
-        if sum != ticks {
-            return Err(DecodeError::RunCountMismatch { header: ticks, sum });
-        }
-        Ok(Replay {
+        self.tunes.retain(|t| t.tick <= n);
+        self.rules.retain(|r| r.tick <= n);
+    }
+}
+
+/// Reads a `GXR2` file up to and including `runs`, the way every reader
+/// before trailing sections did, and says how many bytes that took.
+pub fn decode_prefix(bytes: &[u8]) -> Result<(Replay, usize), DecodeError> {
+    let mut c = Cursor { b: bytes, i: 0 };
+    if c.take(4)? != MAGIC {
+        return Err(DecodeError::BadMagic);
+    }
+    let n = c.u8()? as usize;
+    let build = core::str::from_utf8(c.take(n)?)
+        .map_err(|_| DecodeError::BadBuild)?
+        .to_string();
+    let tick_hz = c.u16()?;
+    if tick_hz != super::sim::TICK_HZ as u16 {
+        return Err(DecodeError::BadTickRate(tick_hz));
+    }
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(c.take(32)?);
+    let o = c.u8()?;
+    let edited = o & EDITED_BIT != 0;
+    let origin = SeedOrigin::from_u8(o & !EDITED_BIT).ok_or(DecodeError::BadOrigin(o))?;
+    let content = c.u64()?;
+    let ticks = c.u32()?;
+    if ticks > MAX_TICKS {
+        return Err(DecodeError::TooManyTicks(ticks));
+    }
+    let score = c.u64()?;
+    let checksum = c.u64()?;
+    let n_starts = usize::from(c.u16()?);
+    if n_starts > MAX_TUNES {
+        return Err(DecodeError::BadValue);
+    }
+    let mut starts = Vec::with_capacity(n_starts);
+    for _ in 0..n_starts {
+        let id = c.u16()?;
+        let len = usize::from(c.u8()?);
+        starts.push((id, c.take(len)?.to_vec()));
+    }
+    let n_tunes = c.u32()? as usize;
+    if n_tunes > MAX_TUNES {
+        return Err(DecodeError::BadValue);
+    }
+    let mut tunes = Vec::with_capacity(n_tunes);
+    for _ in 0..n_tunes {
+        let tick = c.u32()?;
+        let id = c.u16()?;
+        let len = usize::from(c.u8()?);
+        tunes.push(TuneRecord {
+            tick,
+            id,
+            bytes: c.take(len)?.to_vec(),
+        });
+    }
+    let n_runs = c.u32()? as usize;
+    let mut runs = Vec::with_capacity(n_runs.min(1 << 16));
+    let mut sum: u32 = 0;
+    for _ in 0..n_runs {
+        let r = TickRun {
+            held: c.u16()?,
+            latched: c.u16()?,
+            ax: c.u8()? as i8,
+            ay: c.u8()? as i8,
+            count: c.u16()?,
+        };
+        sum = sum.saturating_add(u32::from(r.count));
+        runs.push(r);
+    }
+    if sum != ticks {
+        return Err(DecodeError::RunCountMismatch { header: ticks, sum });
+    }
+    Ok((
+        Replay {
             build,
             tick_hz,
             seed,
@@ -242,8 +336,34 @@ impl Replay {
             starts,
             tunes,
             runs,
-        })
+            rules: Vec::new(),
+            edited,
+        },
+        c.i,
+    ))
+}
+
+/// The `RULE` section's body: at most [`MAX_RULES_SWAPS`] swaps of at most
+/// [`MAX_RULES_BYTES`] each, none after the run's last tick.
+fn decode_rules(body: &[u8], ticks: u32) -> Result<Vec<RulesRecord>, DecodeError> {
+    let mut c = Cursor { b: body, i: 0 };
+    let n = usize::from(c.u16()?);
+    if n > MAX_RULES_SWAPS {
+        return Err(DecodeError::BadValue);
     }
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let tick = c.u32()?;
+        let len = c.u32()? as usize;
+        if len > MAX_RULES_BYTES || tick > ticks {
+            return Err(DecodeError::BadValue);
+        }
+        out.push(RulesRecord {
+            tick,
+            bytes: c.take(len)?.to_vec(),
+        });
+    }
+    Ok(out)
 }
 
 use std::time::Duration;
@@ -387,9 +507,12 @@ impl ReleaseDefault {
     }
 
     /// Whether `log` (a finished run's) is exactly these defaults: the same
-    /// level, the same start values byte for byte, and no mid-run change.
-    pub fn matches(&self, log: &TuneLog) -> bool {
+    /// level, the same start values byte for byte, no mid-run change, and
+    /// no mid-run rules swap (`rules`, the replay's `RULE` section: its
+    /// swaps never fold into `content`, so any swap is never default).
+    pub fn matches(&self, log: &TuneLog, rules: &[RulesRecord]) -> bool {
         log.level == self.level
+            && rules.is_empty()
             && log.changes.is_empty()
             && log.starts.len() == self.starts.len()
             && log
@@ -471,6 +594,36 @@ pub fn verify(replay: &Replay) -> Verdict {
     run_verify_app(&mut app, replay)
 }
 
+/// Why the verifier gives no verdict.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Refused {
+    Decode(DecodeError),
+    /// The run was edited in the editor (`Replay::edited`).
+    Edited,
+}
+
+impl Refused {
+    /// The `error` the verifier answers: the decode error's name, or
+    /// [`EDITED_REFUSAL`].
+    pub fn sentence(&self) -> String {
+        match self {
+            Refused::Decode(e) => format!("{e:?}"),
+            Refused::Edited => EDITED_REFUSAL.to_string(),
+        }
+    }
+}
+
+/// Decodes and verifies `bytes`, refusing an edited run before it is
+/// simulated. Both verifier entry points (`src/bin/verify.rs`) go through
+/// this.
+pub fn verify_bytes(bytes: &[u8]) -> Result<Verdict, Refused> {
+    let replay = Replay::decode(bytes).map_err(Refused::Decode)?;
+    if replay.edited {
+        return Err(Refused::Edited);
+    }
+    Ok(verify(&replay))
+}
+
 /// Steps `app` (from [`build_verify_app`]) through the whole replay.
 pub fn run_verify_app(app: &mut App, replay: &Replay) -> Verdict {
     // First update: Time's first frame has zero delta and runs no fixed tick.
@@ -537,7 +690,7 @@ pub fn run_verify_app(app: &mut App, replay: &Replay) -> Verdict {
         .get_resource::<ReleaseDefault>()
         .expect("run_verify_app needs an app from build_verify_app (ReleaseDefault)");
     let default_content = defaults.content();
-    let is_default_content = defaults.matches(log);
+    let is_default_content = defaults.matches(log, &replay.rules);
     let ticks = app.world().resource::<SimTick>().0;
     Verdict {
         score,
@@ -612,6 +765,8 @@ mod tests {
                 bytes: vec![2, 0, 0, 0, 0, 0, 0, 0],
             }],
             runs: Vec::new(),
+            rules: Vec::new(),
+            edited: false,
         };
         for _ in 0..3 {
             r.push_tick(8, 0, 0, 0);
@@ -1280,6 +1435,176 @@ mod tests {
         assert_eq!(crate::game::sim::TICK_HZ as u16, sample().tick_hz);
     }
 
+    fn with_swaps() -> Replay {
+        let mut r = sample();
+        r.rules = vec![
+            RulesRecord {
+                tick: 2,
+                bytes: br#"{"v":1,"rules":[]}"#.to_vec(),
+            },
+            RulesRecord {
+                tick: 5,
+                bytes: vec![b'x'; 300],
+            },
+        ];
+        r
+    }
+
+    #[test]
+    fn a_rules_section_round_trips() {
+        let r = with_swaps();
+        let bytes = r.encode();
+        let back = Replay::decode(&bytes).unwrap();
+        assert_eq!(back.rules, r.rules);
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn an_older_reader_stops_before_the_rules_section() {
+        // `decode_prefix` is the GXR2 reader as it was before trailing
+        // sections existed: it reads up to and including `runs`.
+        let r = with_swaps();
+        let bytes = r.encode();
+        let (old, used) = decode_prefix(&bytes).unwrap();
+        let mut want = r.clone();
+        want.rules.clear();
+        assert_eq!(old, want);
+        assert!(used < bytes.len(), "the section follows `runs`");
+        assert_eq!(&bytes[used..used + 4], RULES_TAG);
+    }
+
+    #[test]
+    fn a_run_with_no_swaps_and_no_edit_writes_nothing_new() {
+        let r = sample();
+        let bytes = r.encode();
+        let (_, used) = decode_prefix(&bytes).unwrap();
+        assert_eq!(used, bytes.len(), "no trailing section");
+        let origin_at = 4 + 1 + r.build.len() + 2 + 32;
+        assert_eq!(bytes[origin_at], SeedOrigin::Host as u8);
+    }
+
+    #[test]
+    fn the_committed_fixture_re_encodes_byte_for_byte() {
+        let fixture: &[u8] = include_bytes!("../../../tests/fixtures/selftest.gxr");
+        let r = Replay::decode(fixture).unwrap();
+        assert!(r.rules.is_empty() && !r.edited);
+        assert_eq!(r.encode(), fixture);
+    }
+
+    #[test]
+    fn the_committed_wasm_fixture_re_encodes_byte_for_byte() {
+        let fixture: &[u8] = include_bytes!("../../../tests/fixtures/selftest-wasm.gxr");
+        let r = Replay::decode(fixture).unwrap();
+        assert!(r.rules.is_empty() && !r.edited);
+        assert_eq!(r.encode(), fixture);
+    }
+
+    #[test]
+    fn the_edited_flag_rides_in_the_origin_byte() {
+        let mut r = sample();
+        r.origin = SeedOrigin::Local;
+        r.edited = true;
+        let bytes = r.encode();
+        let origin_at = 4 + 1 + r.build.len() + 2 + 32;
+        assert_eq!(bytes[origin_at], SeedOrigin::Local as u8 | EDITED_BIT);
+        let back = Replay::decode(&bytes).unwrap();
+        assert!(back.edited);
+        assert_eq!(back.origin, SeedOrigin::Local);
+        // The bit never reaches the content hash: it is not hashed at all.
+        assert_eq!(back.content, r.content);
+    }
+
+    #[test]
+    fn the_verifier_refuses_an_edited_run_with_a_sentence() {
+        let mut r = sample();
+        r.edited = true;
+        assert_eq!(verify_bytes(&r.encode()), Err(Refused::Edited));
+        assert_eq!(
+            Refused::Edited.sentence(),
+            "This run was edited in the editor."
+        );
+        assert_eq!(
+            verify_bytes(b"GXR0"),
+            Err(Refused::Decode(DecodeError::BadMagic))
+        );
+        assert_eq!(
+            Refused::Decode(DecodeError::BadMagic).sentence(),
+            "BadMagic"
+        );
+    }
+
+    #[test]
+    fn too_many_or_too_long_swaps_are_refused() {
+        let mut r = sample();
+        r.rules = (0..=MAX_RULES_SWAPS as u32)
+            .map(|_| RulesRecord {
+                tick: 1,
+                bytes: Vec::new(),
+            })
+            .collect();
+        assert_eq!(Replay::decode(&r.encode()), Err(DecodeError::BadValue));
+        r.rules = vec![RulesRecord {
+            tick: 1,
+            bytes: vec![b' '; MAX_RULES_BYTES + 1],
+        }];
+        assert_eq!(Replay::decode(&r.encode()), Err(DecodeError::BadValue));
+        r.rules = vec![RulesRecord {
+            tick: r.ticks + 1,
+            bytes: Vec::new(),
+        }];
+        assert_eq!(
+            Replay::decode(&r.encode()),
+            Err(DecodeError::BadValue),
+            "a swap after the last tick"
+        );
+    }
+
+    #[test]
+    fn an_unknown_trailing_section_is_skipped() {
+        let r = with_swaps();
+        let mut bytes = r.encode();
+        bytes.extend_from_slice(b"ZZZZ");
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&[1, 2, 3]);
+        assert_eq!(Replay::decode(&bytes).unwrap(), r);
+        bytes.pop();
+        assert_eq!(Replay::decode(&bytes), Err(DecodeError::Truncated));
+    }
+
+    #[test]
+    fn truncate_drops_everything_after_the_tick() {
+        let mut r = with_swaps();
+        r.tunes = vec![
+            TuneRecord {
+                tick: 2,
+                id: 0,
+                bytes: vec![1],
+            },
+            TuneRecord {
+                tick: 4,
+                id: 0,
+                bytes: vec![2],
+            },
+        ];
+        r.truncate(3);
+        assert_eq!(r.ticks, 3);
+        assert_eq!(r.runs.iter().map(|t| u32::from(t.count)).sum::<u32>(), 3);
+        assert_eq!(r.runs.len(), 1, "the first run held 3 ticks");
+        assert_eq!(r.tunes.len(), 1);
+        assert_eq!(r.rules.len(), 1);
+        assert_eq!(r.rules[0].tick, 2);
+        // A cut inside a run keeps its head; past the end changes nothing.
+        let mut s = sample();
+        s.truncate(4);
+        assert_eq!(s.runs.len(), 2);
+        assert_eq!(s.runs[1].count, 1);
+        let before = sample();
+        let mut same = sample();
+        same.truncate(99);
+        assert_eq!(same, before);
+        assert!(Replay::decode(&s.encode()).is_ok(), "still a valid file");
+    }
+
     /// Records the selftest script on the shipped content (`content/`, the
     /// stuff a release default is made of), queuing `edit` before the run
     /// (a start value, as the editor saves one) or at tick `CHANGE_AT`.
@@ -1406,17 +1731,17 @@ mod tests {
             starts: vec![(0, Value::Int(3)), (1, Value::Float(1.5))],
             changes: vec![],
         };
-        assert!(d.matches(&exact));
+        assert!(d.matches(&exact, &[]));
         assert_eq!(hash::content(&exact), d.content());
         let mut other_level = exact.clone();
         other_level.level = 8;
-        assert!(!d.matches(&other_level));
+        assert!(!d.matches(&other_level, &[]));
         let mut other_value = exact.clone();
         other_value.starts[1].1 = Value::Float(2.0);
-        assert!(!d.matches(&other_value));
+        assert!(!d.matches(&other_value, &[]));
         let mut missing = exact.clone();
         missing.starts.pop();
-        assert!(!d.matches(&missing));
+        assert!(!d.matches(&missing, &[]));
         let mut changed = exact.clone();
         changed.changes.push(crate::game::tunables::TuneChange {
             tick: 1,
@@ -1424,8 +1749,133 @@ mod tests {
             value: Value::Int(3),
         });
         assert!(
-            !d.matches(&changed),
+            !d.matches(&changed, &[]),
             "a change back to the default still counts"
+        );
+        let swap = [RulesRecord {
+            tick: 1,
+            bytes: Vec::new(),
+        }];
+        assert!(!d.matches(&exact, &swap), "any rules swap is never default");
+    }
+
+    /// [`record_on_shipped_content`]'s run, with `swap` set mid-run at tick
+    /// 90 when given; `None` when the shipped content ended the run first.
+    fn record_with_rules_swap(swap: Option<&[u8]>) -> Option<Replay> {
+        use crate::game::rules::set_rules;
+        use crate::game::sim::{PendingSeed, RunOver};
+        const SWAP_AT: u32 = 90;
+        let mut app = build_headless_app();
+        app.add_systems(
+            PreUpdate,
+            selftest::script.before(gamebient_input::input::accumulate_input),
+        );
+        app.world_mut().resource_mut::<PendingSeed>().0 = Some(selftest::SELFTEST_SEED);
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        while app.world().resource::<SimTick>().0 < 240
+            && !app.world().resource::<RunOver>().0
+            && *app.world().resource::<State<GameState>>().get() == GameState::Playing
+        {
+            if let Some(bytes) = swap
+                && app.world().resource::<SimTick>().0 == SWAP_AT
+            {
+                set_rules(app.world_mut(), bytes).unwrap();
+            }
+            app.update();
+        }
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::GameOver);
+        app.update();
+        let replay = app
+            .world()
+            .resource::<recorder::ReplayRecorder>()
+            .last_run()
+            .cloned()
+            .expect("run sealed on OnExit(Playing)");
+        (replay.ticks > SWAP_AT).then_some(replay)
+    }
+
+    #[test]
+    fn a_mid_run_rules_swap_verifies_but_is_not_the_release_default() {
+        const SWAP: &[u8] =
+            br#"{"v":1,"rules":[{"id":"tick","when":{"every":1},"do":[{"add":["score",1]}]}]}"#;
+        let Some(plain) = record_with_rules_swap(None) else {
+            return; // the shipped content ended the run first: nothing to swap
+        };
+        let v = verify(&plain);
+        assert!(v.matches && v.is_default_content, "{v:?}");
+        let swapped = record_with_rules_swap(Some(SWAP)).expect("same run, same length");
+        assert_eq!(swapped.rules.len(), 1, "one swap recorded");
+        assert_eq!(
+            swapped.content, plain.content,
+            "a swap never moves `content`"
+        );
+        let v = verify(&swapped);
+        assert!(v.matches, "it re-simulates fine with its swap: {v:?}");
+        assert!(
+            !v.is_default_content,
+            "a swapped run is never default: {v:?}"
+        );
+    }
+
+    #[test]
+    fn a_mid_run_rules_swap_rides_in_the_replay_and_verifies() {
+        use crate::game::rules::set_rules;
+        use crate::game::sim::{PendingSeed, RunOver};
+        const SWAP_AT: u32 = 90;
+        const SWAP: &[u8] =
+            br#"{"v":1,"rules":[{"id":"tick","when":{"every":1},"do":[{"add":["score",1]}]}]}"#;
+        let mut app = build_headless_app();
+        app.add_systems(
+            PreUpdate,
+            selftest::script.before(gamebient_input::input::accumulate_input),
+        );
+        app.world_mut().resource_mut::<PendingSeed>().0 = Some(selftest::SELFTEST_SEED);
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        while app.world().resource::<SimTick>().0 < 240
+            && !app.world().resource::<RunOver>().0
+            && *app.world().resource::<State<GameState>>().get() == GameState::Playing
+        {
+            if app.world().resource::<SimTick>().0 == SWAP_AT {
+                set_rules(app.world_mut(), SWAP).unwrap();
+            }
+            app.update();
+        }
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::GameOver);
+        app.update();
+        let replay = app
+            .world()
+            .resource::<recorder::ReplayRecorder>()
+            .last_run()
+            .cloned()
+            .expect("run sealed on OnExit(Playing)");
+        if replay.ticks <= SWAP_AT {
+            return; // the shipped content ended the run first: nothing to swap
+        }
+        assert_eq!(
+            replay.rules,
+            vec![RulesRecord {
+                tick: SWAP_AT + 1,
+                bytes: SWAP.to_vec()
+            }]
+        );
+        let back = Replay::decode(&replay.encode()).unwrap();
+        assert_eq!(back.rules, replay.rules);
+        let v = verify(&back);
+        assert!(
+            v.matches,
+            "the verifier replays the swap on its tick: {v:?}"
         );
     }
 }

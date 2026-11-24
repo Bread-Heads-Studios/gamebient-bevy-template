@@ -80,8 +80,11 @@ impl Plugin for UiPlugin {
             .add_systems(OnEnter(GameState::DemoEnd), demo_end::spawn_demo_end)
             .add_systems(OnExit(GameState::DemoEnd), menu::despawn_menu)
             .add_systems(Update, menu::menu_input)
-            // In-run HUD
-            .add_systems(OnEnter(GameState::Playing), hud::spawn_hud)
+            // In-run HUD. In the run-start chain's schedule, not
+            // `OnEnter(Playing)`: the HUD is a `GameEntity`, so a time-travel
+            // seek (`game::time::seek::restart_run`) despawns it and runs
+            // `BeginRun` again, which must bring it back.
+            .add_systems(crate::game::BeginRun, hud::spawn_hud)
             .add_systems(Update, hud::update_hud.run_if(in_state(GameState::Playing)));
     }
 

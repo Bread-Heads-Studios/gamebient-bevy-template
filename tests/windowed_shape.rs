@@ -687,7 +687,7 @@ fn a_run_does_not_depend_on_how_long_the_app_was_up_before_it() {
 /// run 1's last tick, with that direction's repeat timer already past
 /// `REPEAT_DELAY`, and so swallowed a cursor step the verifier's fresh app
 /// emits. The fix is the rule: run state lives in a resource or a component
-/// that `OnEnter(Playing)` resets — never in a `Local<_>`, a `static`, or
+/// the `BeginRun` chain resets — never in a `Local<_>`, a `static`, or
 /// something a plugin computed once at build time.
 ///
 /// What this row does: play run 1 with the bot's script, leave `Playing`

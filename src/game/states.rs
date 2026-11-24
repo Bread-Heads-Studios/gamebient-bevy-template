@@ -24,6 +24,15 @@ pub enum GameState {
 #[derive(Resource, Default, PartialEq, Eq)]
 pub struct Paused(pub bool);
 
+/// A pause the editor's timeline holds (`game::time`): the sim is paused
+/// exactly as by [`Paused`], which is set with it, but the pause overlay
+/// stays hidden so the frame being inspected shows. Cleared when a run
+/// starts (`reset_paused`), by any pause or resume the player or the host
+/// makes (`toggle_pause`, `game::host`), and in editor builds by
+/// `game::time` on the frame it finds `Paused` false.
+#[derive(Resource, Default, Debug, PartialEq, Eq)]
+pub struct QuietPause(pub bool);
+
 /// Run condition: true when the game is NOT paused.
 pub fn not_paused(paused: Res<Paused>) -> bool {
     !paused.0

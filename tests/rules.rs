@@ -10,12 +10,15 @@ use gamebient_game::game::content::level::{Level, LevelSource};
 use gamebient_game::game::content::model::LEVEL_MAX_THINGS;
 use gamebient_game::game::content::model::{LevelFile, PlacedThing};
 use gamebient_game::game::content::saved::reset_to_defaults;
+use gamebient_game::game::replay::RulesRecord;
 use gamebient_game::game::replay::build_headless_app;
 use gamebient_game::game::rule_table::COUNTERS;
 use gamebient_game::game::rules::model::{MAX_BYTES, canonical_text};
 use gamebient_game::game::rules::run::MAX_WAITING;
 use gamebient_game::game::rules::run::{RunRules, run_rules};
-use gamebient_game::game::rules::{Outcome, PendingRules, RunEnd, extreme_rules, set_rules, vocab};
+use gamebient_game::game::rules::{
+    Outcome, PendingRules, RulesLog, RunEnd, extreme_rules, set_rules, vocab,
+};
 use gamebient_game::game::scoring::GameData;
 use gamebient_game::game::sim::{Checksum, PendingSeed, RunOver, SimTick, SpawnOrder, seed_bytes};
 use gamebient_game::game::states::GameState;
@@ -494,5 +497,29 @@ fn extreme_rules_all_firing_never_panic() {
     assert_eq!(
         app.world().resource::<RunRules>().waiting.len(),
         MAX_WAITING
+    );
+}
+
+#[test]
+fn a_swap_is_logged_on_the_tick_it_lands() {
+    let mut app = run(
+        r#"[{"id":"a","when":{"every":1},"do":[{"add":["score",1]}]}]"#,
+        &[FAR],
+    );
+    ticks(&mut app, 4);
+    let text = br#"{"v":1,"rules":[{"id":"a","when":{"every":1},"do":[{"add":["score",10]}]}]}"#;
+    set_rules(app.world_mut(), text).unwrap();
+    assert!(
+        app.world().resource::<RulesLog>().0.is_empty(),
+        "nothing lands between ticks"
+    );
+    ticks(&mut app, 1);
+    let tick = app.world().resource::<SimTick>().0;
+    assert_eq!(
+        app.world().resource::<RulesLog>().0,
+        vec![RulesRecord {
+            tick,
+            bytes: text.to_vec()
+        }]
     );
 }

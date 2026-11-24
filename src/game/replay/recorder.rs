@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use gamebient_input::{Buttons, HostEvent, TickInput};
 
 use super::{Replay, TuneRecord};
+use crate::game::rules::RulesLog;
 use crate::game::scoring::{GameData, LeaderboardScore};
 use crate::game::sim::{Checksum, RunSeed, TICK_HZ};
 use crate::game::tunables::{TuneLog, hash};
@@ -15,6 +16,13 @@ pub struct ReplayRecorder {
     pub replay: Replay,
     pub sealed: bool,
 }
+
+/// Set by the editor's time travel (`game::time`) the moment a run is
+/// paused, stepped, rewound, branched or sped up there; cleared when a
+/// fresh run starts. An edited run is sealed with `Replay::edited` and is
+/// never posted to the host.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RunEdited(pub bool);
 
 impl Default for ReplayRecorder {
     fn default() -> Self {
@@ -38,6 +46,8 @@ fn empty(seed: RunSeed) -> Replay {
         starts: Vec::new(),
         tunes: Vec::new(),
         runs: Vec::new(),
+        rules: Vec::new(),
+        edited: false,
     }
 }
 
@@ -87,6 +97,23 @@ impl ReplayRecorder {
         self.replay.content = hash::content(log);
     }
 
+    /// Copies the run's rules swaps in.
+    pub fn set_rules(&mut self, log: &RulesLog) {
+        self.replay.rules = log.0.clone();
+    }
+
+    /// The run so far as a replay, without sealing it: what time travel
+    /// re-simulates.
+    pub fn snapshot(&self, log: &TuneLog, rules: &RulesLog) -> Replay {
+        let mut copy = ReplayRecorder {
+            replay: self.replay.clone(),
+            sealed: false,
+        };
+        copy.set_tunes(log);
+        copy.set_rules(rules);
+        copy.replay
+    }
+
     pub fn seal(&mut self, score: u64, checksum: u64) -> Replay {
         self.replay.score = score;
         self.replay.checksum = checksum;
@@ -99,10 +126,19 @@ impl ReplayRecorder {
     }
 }
 
-/// `OnEnter(Playing)`, after `sim::begin_run` and `tunables::begin_run_tunables`.
-pub fn begin_recording(seed: Res<RunSeed>, log: Res<TuneLog>, mut rec: ResMut<ReplayRecorder>) {
+/// `BeginRun`, after `sim::begin_run` and `tunables::begin_run_tunables`.
+/// A fresh run is not edited, whatever the last one was: without this,
+/// every run after an edited one would be sealed edited and never posted.
+/// (Time travel's in-place restart keeps the flag: `time::seek::restart_run`.)
+pub fn begin_recording(
+    seed: Res<RunSeed>,
+    log: Res<TuneLog>,
+    mut rec: ResMut<ReplayRecorder>,
+    mut edited: ResMut<RunEdited>,
+) {
     rec.begin(*seed);
     rec.set_tunes(&log);
+    edited.set_if_neq(RunEdited(false));
 }
 
 /// Last in `SimSet`: only sim ticks are recorded, so paused ticks are absent.
@@ -110,12 +146,13 @@ pub fn record_tick(t: Res<TickInput>, mut rec: ResMut<ReplayRecorder>) {
     rec.push(&t);
 }
 
-/// `OnExit(Playing)`: seal, post to the host, and on native optionally
-/// write `$GX_REPLAY_DIR/<unix-ms>.gxr`.
+/// `OnExit(Playing)`: seal (with the rules swaps and the edited bit), post to the host unless edited, and on native optionally write `$GX_REPLAY_DIR/<unix-ms>.gxr`.
 pub fn seal_run(
     data: Res<GameData>,
     sum: Res<Checksum>,
     log: Res<TuneLog>,
+    rules: Res<RulesLog>,
+    edited: Res<RunEdited>,
     mut rec: ResMut<ReplayRecorder>,
     mut host: MessageWriter<HostEvent>,
 ) {
@@ -123,9 +160,14 @@ pub fn seal_run(
         return;
     }
     rec.set_tunes(&log);
+    rec.set_rules(&rules);
+    rec.replay.edited = edited.0;
     let replay = rec.seal(u64::from(data.leaderboard_score()), sum.0);
     let bytes = replay.encode();
-    host.write(HostEvent::Run(bytes.clone()));
+    // The host relay: a run edited in the editor is never submitted.
+    if !replay.edited {
+        host.write(HostEvent::Run(bytes.clone()));
+    }
     #[cfg(not(target_arch = "wasm32"))]
     if let Ok(dir) = std::env::var("GX_REPLAY_DIR") {
         let ms = std::time::SystemTime::now()
@@ -229,5 +271,67 @@ mod tests {
         rec.begin(RunSeed::default());
         assert_eq!(rec.replay.ticks, 0);
         assert!(!rec.sealed);
+    }
+
+    #[test]
+    fn a_snapshot_carries_the_rules_swaps_and_leaves_the_run_open() {
+        use crate::game::replay::RulesRecord;
+        let mut rec = ReplayRecorder::default();
+        rec.begin(RunSeed::default());
+        rec.push(&tick(Buttons::A));
+        let rules = RulesLog(vec![RulesRecord {
+            tick: 1,
+            bytes: b"{}".to_vec(),
+        }]);
+        let snap = rec.snapshot(&TuneLog::default(), &rules);
+        assert_eq!(snap.rules, rules.0);
+        assert_eq!(snap.ticks, 1);
+        assert!(!rec.sealed);
+        assert!(
+            rec.replay.rules.is_empty(),
+            "the recorder itself is untouched"
+        );
+    }
+
+    /// Plays a short run and leaves it; returns the sealed replay and how
+    /// many `HostEvent::Run`s were posted.
+    fn sealed_run(edited: bool) -> (Replay, usize) {
+        use crate::game::replay::build_builtin_app;
+        use crate::game::states::GameState;
+        let mut app = build_builtin_app();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        app.update();
+        app.world_mut().resource_mut::<RunEdited>().0 = edited;
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::GameOver);
+        app.update();
+        let posted = app
+            .world_mut()
+            .resource_mut::<Messages<HostEvent>>()
+            .drain()
+            .filter(|e| matches!(e, HostEvent::Run(_)))
+            .count();
+        let replay = app
+            .world()
+            .resource::<ReplayRecorder>()
+            .last_run()
+            .cloned()
+            .expect("sealed on OnExit(Playing)");
+        (replay, posted)
+    }
+
+    #[test]
+    fn an_edited_run_is_sealed_as_edited_and_never_posted() {
+        let (plain, posted) = sealed_run(false);
+        assert!(!plain.edited);
+        assert_eq!(posted, 1);
+        let (edited, posted) = sealed_run(true);
+        assert!(edited.edited);
+        assert_eq!(posted, 0, "the host relay drops an edited run");
     }
 }
