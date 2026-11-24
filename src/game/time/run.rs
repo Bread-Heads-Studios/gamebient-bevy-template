@@ -121,8 +121,8 @@ pub fn on_run_exit(world: &mut World) {
     world.remove_resource::<PlaybackFeeder>();
     // Bevy sets `State` to the state being entered before `OnExit` runs.
     // Only a held run that goes straight into the level editor comes back
-    // as a branch: one quit to the title (`pause_quit` works under the
-    // hold too) starts fresh, even if the level editor opens from there.
+    // as a branch: one quit to the title (by the host: `pause_quit` is off
+    // under the hold) starts fresh, even if the level editor opens from there.
     let into_editor = world
         .get_resource::<State<GameState>>()
         .is_some_and(|s| *s.get() == GameState::Editing);

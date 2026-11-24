@@ -519,12 +519,15 @@ fn sync_pause_overlay(
 /// While paused, Start (Enter / pad Start) or B (X / gamepad East) quits
 /// back to the title screen through the fade. Run state resets on the next
 /// Playing entry (`reset_paused`); OnExit(Playing) systems handle cleanup.
+/// Not under the editor timeline's hold (`QuietPause`): no overlay offers
+/// the quit there, and it would throw the timeline away.
 fn pause_quit(
     input: Res<input::GameInput>,
     paused: Res<states::Paused>,
+    quiet: Res<states::QuietPause>,
     mut fade: ResMut<crate::ui::transition::ScreenFade>,
 ) {
-    if !paused.0 || !fade.is_idle() {
+    if !paused.0 || quiet.0 || !fade.is_idle() {
         return;
     }
     if input.start_just_pressed || input.secondary_just_pressed {
@@ -543,6 +546,29 @@ mod tests {
     fn count_things(world: &mut World) -> usize {
         let mut q = world.query_filtered::<(), With<content::kit::Thing>>();
         q.iter(world).count()
+    }
+
+    /// Start or B on a paused run quits to the title, unless the editor's
+    /// timeline holds the pause: its frame shows no overlay, so a stray
+    /// Enter would throw the timeline away unseen.
+    #[test]
+    fn start_quits_the_players_pause_but_not_the_timelines() {
+        use bevy::ecs::system::RunSystemOnce;
+        for (quiet, quits) in [(false, true), (true, false)] {
+            let mut world = World::new();
+            world.insert_resource(input::GameInput {
+                start_just_pressed: true,
+                ..Default::default()
+            });
+            world.insert_resource(states::Paused(true));
+            world.insert_resource(states::QuietPause(quiet));
+            world.init_resource::<crate::ui::transition::ScreenFade>();
+            world.run_system_once(pause_quit).unwrap();
+            let idle = world
+                .resource::<crate::ui::transition::ScreenFade>()
+                .is_idle();
+            assert_eq!(!idle, quits, "quiet pause {quiet}");
+        }
     }
 
     /// What time travel's seek does: the run's entities gone, then the

@@ -781,7 +781,7 @@ mod tests {
         // is the behavioural half of this test and does.
         //
         // The rule: **run state lives in a resource or a component that
-        // `OnEnter(Playing)` resets.** Never a `Local<_>`, never a
+        // the `BeginRun` chain resets.** Never a `Local<_>`, never a
         // `static`, never something a plugin computed once at build time.
         //
         // Scope is the files whose systems `SimSet` runs —
@@ -830,7 +830,7 @@ mod tests {
              which outlives the \
              run (and the whole App) — the verifier's fresh app starts it at \
              Default and the browser's second run does not. Move it into run \
-             state OnEnter(Playing) resets; see docs/replay-verification.md \
+             state the BeginRun chain resets; see docs/replay-verification.md \
              rule 7 and tests/windowed_shape.rs::\
              a_second_run_in_the_same_app_reproduces_the_first. Mark a \
              genuinely run-free one `// allow-local: <reason>`.\n{}",

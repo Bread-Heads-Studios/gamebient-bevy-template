@@ -1177,7 +1177,8 @@ fn a_held_run_quit_to_the_title_starts_fresh_after_the_level_editor() {
     let mut app = on_rules(NO_RULES, ONE_COIN, true);
     play_to(&mut app, 60);
     command(&mut app, "time.pause", json!({}));
-    // `pause_quit` works under the timeline's hold: the run goes to the title.
+    // A quit to the title under the timeline's hold (the host's: `pause_quit`
+    // is off under it).
     app.world_mut()
         .resource_mut::<NextState<GameState>>()
         .set(GameState::Menu);
@@ -1217,4 +1218,130 @@ fn a_restart_sent_with_a_seek_after_the_run_ended_starts_a_fresh_run() {
     assert_eq!(last_answer(&app)["run"], 2, "a fresh run, not the seek");
     assert!(tick(&app) < 10);
     assert!(!app.world().resource::<RunEdited>().0);
+}
+
+#[test]
+fn a_setting_changed_during_a_long_seek_waits_for_the_tick_after_the_target() {
+    let mut app = scripted();
+    play_to(&mut app, 4500);
+    command(&mut app, "time.pause", json!({}));
+    command(&mut app, "time.seek", json!({ "tick": 4400 }));
+    assert!(
+        app.world().contains_resource::<Seek>(),
+        "the seek spans more than one frame"
+    );
+    assert!(tick(&app) < 4400);
+    let (id, v) = an_edit(&app);
+    app.world_mut()
+        .resource_mut::<PendingTunes>()
+        .0
+        .push((id, v.clone()));
+    settle(&mut app);
+    assert_eq!(tick(&app), 4400);
+    assert!(
+        app.world().resource::<TuneLog>().changes.is_empty(),
+        "never applied inside the re-simulation"
+    );
+    assert_eq!(
+        app.world().resource::<PendingTunes>().0,
+        vec![(id, v.clone())]
+    );
+    command(&mut app, "time.resume", json!({}));
+    app.update();
+    assert_eq!(
+        app.world().resource::<TuneLog>().changes,
+        vec![TuneChange {
+            tick: 4401,
+            id,
+            value: v
+        }]
+    );
+}
+
+#[test]
+fn a_rules_change_during_a_long_seek_waits_for_the_tick_after_the_target() {
+    let mut app = on_rules(ADD_1, &[FAR], false);
+    play_to(&mut app, 4500);
+    command(&mut app, "time.pause", json!({}));
+    command(&mut app, "time.seek", json!({ "tick": 4400 }));
+    assert!(app.world().contains_resource::<Seek>());
+    set_rules(app.world_mut(), ADD_10.as_bytes()).unwrap();
+    settle(&mut app);
+    assert_eq!(tick(&app), 4400);
+    assert!(app.world().resource::<RulesLog>().0.is_empty());
+    command(&mut app, "time.resume", json!({}));
+    app.update();
+    assert_eq!(
+        app.world().resource::<RulesLog>().0,
+        vec![RulesRecord {
+            tick: 4401,
+            bytes: ADD_10.as_bytes().to_vec()
+        }]
+    );
+}
+
+#[test]
+fn a_setting_changed_during_playback_survives_a_backward_seek() {
+    let mut straight = scripted();
+    play_to(&mut straight, 300);
+    let (id, v) = an_edit(&straight);
+    straight
+        .world_mut()
+        .resource_mut::<PendingTunes>()
+        .0
+        .push((id, v.clone()));
+    play_to(&mut straight, 419);
+    let want = print(&mut straight);
+
+    let mut app = scripted();
+    play_to(&mut app, 600);
+    command(&mut app, "time.pause", json!({}));
+    let of = last_answer(&app)["of"].clone();
+    command(&mut app, "time.seek", json!({ "tick": 300 }));
+    settle(&mut app);
+    assert!(app.world().contains_resource::<PlaybackFeeder>());
+    app.world_mut()
+        .resource_mut::<PendingTunes>()
+        .0
+        .push((id, v.clone()));
+    command(&mut app, "time.resume", json!({}));
+    play_to(&mut app, 420);
+    command(&mut app, "time.pause", json!({}));
+    command(&mut app, "time.seek", json!({ "tick": 419 }));
+    settle(&mut app);
+    assert_eq!(tick(&app), 419);
+    assert_eq!(
+        app.world().resource::<TuneLog>().changes,
+        vec![TuneChange {
+            tick: 301,
+            id,
+            value: v
+        }]
+    );
+    assert_eq!(print(&mut app), want, "re-simulated with the change");
+    assert_eq!(last_answer(&app)["of"], of, "the rest of the run is kept");
+}
+
+#[test]
+fn a_rules_change_during_playback_survives_a_backward_seek() {
+    let mut straight = on_rules(ADD_1, &[FAR], false);
+    play_to(&mut straight, 50);
+    set_rules(straight.world_mut(), ADD_10.as_bytes()).unwrap();
+    play_to(&mut straight, 70);
+    let want = print(&mut straight);
+
+    let mut app = on_rules(ADD_1, &[FAR], false);
+    play_to(&mut app, 100);
+    command(&mut app, "time.pause", json!({}));
+    command(&mut app, "time.seek", json!({ "tick": 50 }));
+    settle(&mut app);
+    assert!(app.world().contains_resource::<PlaybackFeeder>());
+    set_rules(app.world_mut(), ADD_10.as_bytes()).unwrap();
+    command(&mut app, "time.resume", json!({}));
+    play_to(&mut app, 80);
+    command(&mut app, "time.pause", json!({}));
+    command(&mut app, "time.seek", json!({ "tick": 70 }));
+    settle(&mut app);
+    assert_eq!(tick(&app), 70);
+    assert_eq!(print(&mut app), want, "re-simulated with the new rules");
 }

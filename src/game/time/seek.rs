@@ -97,6 +97,21 @@ impl HeldEdits {
         }
     }
 
+    /// Edits that arrived while the seek runs join the held ones (the
+    /// newest rules win), so a live edit never lands inside the
+    /// re-simulation: called before every batch, and before the in-place
+    /// restart or the re-entry's run-start chain clears `PendingRules`.
+    pub fn absorb(&mut self, world: &mut World) {
+        let tunes = core::mem::take(&mut world.resource_mut::<PendingTunes>().0);
+        self.tunes.extend(tunes);
+        if let Some(rules) = world
+            .get_resource_mut::<PendingRules>()
+            .and_then(|mut p| p.0.take())
+        {
+            self.rules = Some(rules);
+        }
+    }
+
     pub fn restore(self, world: &mut World) {
         let mut rules = self.rules;
         if self.follow_rules && rules.is_none() {
@@ -219,6 +234,7 @@ pub fn drive_seek(world: &mut World) {
     let Some(phase) = world.get_resource::<Seek>().map(|s| s.phase) else {
         return;
     };
+    world.resource_scope(|world, mut seek: Mut<Seek>| seek.held.absorb(world));
     match phase {
         Phase::Reenter => {
             if !in_playing(world) {

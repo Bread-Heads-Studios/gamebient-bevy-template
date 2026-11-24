@@ -96,7 +96,9 @@ the rules for game code:
    player sat in the menu), never a wall clock, never a frame count.
    `Time::delta_secs()` is fine — inside `FixedUpdate` it is the fixed
    timestep. And **run state may not outlive the run**: it lives in a
-   resource or component `OnEnter(Playing)` resets, never in a `Local<_>`
+   resource or component the `BeginRun` chain resets (the run-start schedule
+   `OnEnter(Playing)` runs, and that a time-travel seek runs again without a
+   state change), never in a `Local<_>`
    (which belongs to the system instance, so no run start can reach it), a
    `static`, or a plugin-build-time cache. The verifier is always a fresh
    app that plays exactly one run; the browser is not.

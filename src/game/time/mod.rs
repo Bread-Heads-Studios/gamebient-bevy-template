@@ -42,8 +42,8 @@ use gamebient_input::{HostEvent, TickInputSet};
 use serde_json::{Value as Json, json};
 
 use crate::game::content::level::{Level, LevelHash};
-use crate::game::replay::Replay;
 use crate::game::replay::recorder::{ReplayRecorder, RunEdited};
+use crate::game::replay::{Replay, TickRun};
 use crate::game::rules::{Rules, RulesHash, RulesLog, RulesText};
 use crate::game::sim::{self, RunSeed, SimTick, TICK_HZ};
 use crate::game::states::{self, GameState, Paused, QuietPause};
@@ -308,16 +308,58 @@ pub fn mark_edited(world: &mut World) {
         .set_if_neq(RunEdited(true));
 }
 
-/// While the run is live (no playback), the recording is the recorder's
-/// run so far.
+/// Brings the recording up to date. While the run is live it is the
+/// recorder's run so far. During playback it is the recorder's run so far
+/// (which holds any setting or rules change made since the seek) followed
+/// by what the recording holds after this tick, so a later seek keeps both.
 pub fn refresh_recording(world: &mut World) {
-    if world.contains_resource::<PlaybackFeeder>() {
-        return;
-    }
-    let r = world
+    let mut r = world
         .resource::<ReplayRecorder>()
         .snapshot(world.resource::<TuneLog>(), world.resource::<RulesLog>());
+    if world.contains_resource::<PlaybackFeeder>()
+        && let Some(old) = &world.resource::<TimeTravel>().recording
+    {
+        append_after(&mut r, old);
+    }
     world.resource_mut::<TimeTravel>().recording = Some(r);
+}
+
+/// Appends to `live` what `old` holds after `live`'s last tick: the inputs
+/// still to play and the changes and swaps due after it. (`content`,
+/// `score` and `checksum` stay `live`'s: a seek reads none of them.)
+pub fn append_after(live: &mut Replay, old: &Replay) {
+    let now = live.ticks;
+    if old.ticks <= now {
+        return;
+    }
+    let mut skip = now;
+    for run in &old.runs {
+        let count = u32::from(run.count);
+        if skip >= count {
+            skip -= count;
+            continue;
+        }
+        let count = (count - skip) as u16;
+        skip = 0;
+        // The recorder's own run-length coding: a tail that goes on with
+        // the last input extends that run, as it was recorded.
+        if let Some(last) = live.runs.last_mut()
+            && (TickRun {
+                count: last.count,
+                ..*run
+            }) == *last
+            && let Some(sum) = last.count.checked_add(count)
+        {
+            last.count = sum;
+            continue;
+        }
+        live.runs.push(TickRun { count, ..*run });
+    }
+    live.ticks = old.ticks;
+    live.tunes
+        .extend(old.tunes.iter().filter(|t| t.tick > now).cloned());
+    live.rules
+        .extend(old.rules.iter().filter(|r| r.tick > now).cloned());
 }
 
 /// The catalog's `time`: what the editor's timeline may ask for.
