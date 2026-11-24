@@ -4,7 +4,7 @@
 use bevy::prelude::*;
 
 use super::seek::{Phase, PlaybackFeeder, Seek};
-use super::{RunStart, TimeTravel, answer, hold, refresh_recording};
+use super::{RunStart, TimeTravel, answer, hold, mark_edited, refresh_recording};
 use crate::game::sim::{RunOver, RunSeed};
 use crate::game::states::{Paused, QuietPause};
 use crate::game::tunables::snapshot;
@@ -12,7 +12,8 @@ use crate::game::tunables::snapshot;
 /// `OnEnter(Playing)`, after the run-start chain. A seek or a branch that
 /// re-enters `Playing` (`Phase::Reenter`) is the same run: its timeline
 /// (the recording, the run before a branch, the held edits in the seek)
-/// stays, and the seek takes over from here, still paused. A fresh run
+/// stays and is still edited (`BeginRun` just cleared `RunEdited`), and
+/// the seek takes over from here, still paused. A fresh run
 /// gets a new timeline (its start captured, speed 1). `BeginRun` has
 /// already cleared `RunEdited` (`replay::recorder::begin_recording`).
 pub fn on_run_start(world: &mut World) {
@@ -32,6 +33,9 @@ pub fn on_run_start(world: &mut World) {
         if let Some(origin) = origin {
             world.resource_mut::<RunSeed>().origin = origin;
         }
+        // A re-entry exists only because the timeline was used: the run
+        // must never be sealed unedited and posted.
+        mark_edited(world);
         world.resource_mut::<Seek>().phase = Phase::Feed;
         hold(world);
         return;

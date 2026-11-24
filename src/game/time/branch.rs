@@ -29,6 +29,9 @@ pub fn start_branch(world: &mut World) {
 /// moved onto the level as it is now, the run before kept in `before`, and
 /// the waiting edits (plus `edits`) held for the tick after `n`. `compare`
 /// is the checksum at `n` before the edit.
+///
+/// The returned `Seek` owns the queued edits and `TimeTravel` is already on
+/// the branch: insert it as the seek in progress, never drop it.
 pub fn branch_seek(
     world: &mut World,
     n: u32,

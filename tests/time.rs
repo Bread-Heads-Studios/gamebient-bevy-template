@@ -8,6 +8,7 @@
 #![cfg(feature = "editor")]
 
 use bevy::prelude::*;
+use gamebient_game::game::GameEntity;
 use gamebient_game::game::content::kit::Thing;
 use gamebient_game::game::content::level::{Level, LevelSource};
 use gamebient_game::game::content::model::{LevelFile, PlacedThing};
@@ -120,10 +121,21 @@ fn tick(app: &App) -> u32 {
     app.world().resource::<SimTick>().0
 }
 
+/// Plays until tick `t`; panics rather than spin on a paused run.
 fn play_to(app: &mut App, t: u32) {
-    while tick(app) < t {
+    let budget = t.saturating_sub(tick(app)) + 600;
+    for _ in 0..budget {
+        if tick(app) >= t {
+            return;
+        }
         app.update();
     }
+    assert!(
+        tick(app) >= t,
+        "the run never reached tick {t} (at {}, paused: {})",
+        tick(app),
+        app.world().resource::<Paused>().0
+    );
 }
 
 fn send(app: &mut App, name: &str, data: Json) {
@@ -579,6 +591,8 @@ fn a_branch_drops_everything_after_the_tick_and_plays_on_live() {
         app.world().resource::<TimeTravel>().before.is_some(),
         "kept for undo"
     );
+    assert!(app.world().resource::<RunEdited>().0, "a branch is an edit");
+    assert_eq!(last_answer(&app)["edited"], true);
     app.update();
     assert_eq!(tick(&app), 31);
     assert_eq!(
@@ -685,13 +699,30 @@ fn a_plain_branch_changes_nothing_before_the_tick() {
     let mut app = scripted();
     play_to(&mut app, 200);
     command(&mut app, "time.pause", json!({}));
+    command(&mut app, "time.seek", json!({ "tick": 150 }));
+    settle(&mut app);
     let n = tick(&app);
+    assert_eq!(n, 150);
     let want = print(&mut app);
+    // A stray run entity: the branch rebuilds the world, so it goes.
+    let stray = app.world_mut().spawn(GameEntity).id();
     command(&mut app, "time.branch", json!({}));
     settle(&mut app);
     assert_eq!(tick(&app), n);
     assert_eq!(print(&mut app), want);
+    assert!(
+        app.world().get_entity(stray).is_err(),
+        "the run was rebuilt"
+    );
     assert!(heard(&app, "time.diverged").is_empty());
+    assert!(!app.world().resource::<Paused>().0, "a branch plays on");
+    assert!(!app.world().contains_resource::<PlaybackFeeder>());
+    let tt = app.world().resource::<TimeTravel>();
+    assert!(tt.before.is_some(), "kept for undo");
+    assert_eq!(tt.recording.as_ref().map(|r| r.ticks), Some(150));
+    let answer = last_answer(&app);
+    assert_eq!(answer["of"], 150, "the recording after 150 is gone");
+    assert!(answer["marks"].is_array(), "a branch answers with marks");
 }
 
 #[test]
@@ -706,8 +737,14 @@ fn undo_puts_the_run_before_the_branch_back() {
 
     command(&mut app, "time.seek", json!({ "tick": 100 }));
     settle(&mut app);
+    let (pre, pre_marks) = {
+        let tt = app.world().resource::<TimeTravel>();
+        (tt.recording.clone().unwrap(), tt.marks.clone())
+    };
+    assert_eq!(pre.ticks, of);
     command(&mut app, "time.branch", json!({}));
     settle(&mut app);
+    assert!(!app.world().resource::<Paused>().0, "a branch plays on");
     play_to(&mut app, 130);
     command(&mut app, "time.pause", json!({}));
     command(
@@ -719,11 +756,20 @@ fn undo_puts_the_run_before_the_branch_back() {
     assert_eq!(tick(&app), 100);
     let answer = last_answer(&app);
     assert_eq!(answer["of"], of);
+    assert_eq!(answer["tick"], 100);
+    assert_eq!(answer["paused"], true, "an undo is a seek: it ends paused");
     assert!(
         answer["marks"].is_array(),
         "the editor gets the run's marks back"
     );
-    assert!(app.world().resource::<TimeTravel>().before.is_none());
+    let tt = app.world().resource::<TimeTravel>();
+    assert!(tt.before.is_none());
+    assert_eq!(
+        tt.recording.as_ref(),
+        Some(&pre),
+        "the pre-branch recording"
+    );
+    assert_eq!(tt.marks, pre_marks, "the pre-branch marks");
     command(&mut app, "time.resume", json!({}));
     play_to(&mut app, of);
     assert_eq!(print(&mut app), want, "the pre-branch inputs play back");
@@ -776,6 +822,11 @@ fn a_branch_that_enters_playing_again_keeps_its_timeline_and_held_edits() {
         "the held edit is queued again"
     );
     assert!(!app.world().resource::<Paused>().0, "a branch plays on");
+    assert!(
+        app.world().resource::<RunEdited>().0,
+        "`BeginRun` cleared it; the re-entry is still an edited run"
+    );
+    assert_eq!(last_answer(&app)["edited"], true);
     app.update();
     assert_eq!(
         app.world().resource::<TuneLog>().changes,
@@ -785,4 +836,37 @@ fn a_branch_that_enters_playing_again_keeps_its_timeline_and_held_edits() {
             value: v
         }]
     );
+}
+
+#[test]
+fn a_branched_run_that_enters_playing_again_and_ends_posts_nothing() {
+    let mut app = scripted();
+    play_to(&mut app, 100);
+    command(&mut app, "time.pause", json!({}));
+    let n = tick(&app);
+    let sum = app.world().resource::<Checksum>().0;
+    let leave = |app: &mut App| {
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::GameOver);
+        app.update();
+        app.world()
+            .resource::<ReplayRecorder>()
+            .last_run()
+            .cloned()
+            .expect("sealed")
+    };
+    assert!(leave(&mut app).edited);
+    app.world_mut().resource_mut::<PendingSeed>().0 = Some(selftest::SELFTEST_SEED);
+    let seek = branch_seek(app.world_mut(), n, Some(sum), Phase::Reenter, Vec::new())
+        .expect("a timeline to branch");
+    app.world_mut().insert_resource(seek);
+    settle(&mut app);
+    assert_eq!(tick(&app), n);
+    // Play on without touching the timeline again, then end the run.
+    play_to(&mut app, n + 60);
+    let r = leave(&mut app);
+    assert!(r.edited, "sealed edited");
+    assert_eq!(app.world().resource::<Heard>().runs, 0, "never submitted");
+    assert_eq!(verify_bytes(&r.encode()), Err(Refused::Edited));
 }
