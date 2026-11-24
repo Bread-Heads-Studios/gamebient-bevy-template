@@ -985,6 +985,11 @@ fn a_seek_after_the_run_ended_goes_back_into_it() {
     assert_eq!(tick(&app), 60);
     assert!(app.world().resource::<Paused>().0);
     assert_eq!(last_answer(&app)["run"], run, "the same timeline");
+    assert!(
+        app.world().resource::<RunEdited>().0,
+        "a re-entry stays edited"
+    );
+    assert_eq!(last_answer(&app)["edited"], true);
     // A run that ended: the furthest seek is one tick before its end.
     command(&mut app, "time.seek", json!({ "tick": 500 }));
     settle(&mut app);
@@ -1016,6 +1021,10 @@ fn a_level_edit_made_in_the_level_editor_returns_into_a_branch() {
     assert_eq!(app.world().resource::<GameData>().score, 0);
     assert_eq!(heard(&app, "time.diverged"), vec![json!({ "tick": n })]);
     assert_eq!(last_answer(&app)["run"], run);
+    assert!(
+        app.world().resource::<RunEdited>().0,
+        "a re-entry stays edited"
+    );
 }
 
 #[test]
@@ -1161,4 +1170,51 @@ fn a_seek_after_the_run_ended_runs_on_its_own_rules_and_keeps_the_editors() {
         shown,
         "the editor's rules are back for what follows"
     );
+}
+
+#[test]
+fn a_held_run_quit_to_the_title_starts_fresh_after_the_level_editor() {
+    let mut app = on_rules(NO_RULES, ONE_COIN, true);
+    play_to(&mut app, 60);
+    command(&mut app, "time.pause", json!({}));
+    // `pause_quit` works under the timeline's hold: the run goes to the title.
+    app.world_mut()
+        .resource_mut::<NextState<GameState>>()
+        .set(GameState::Menu);
+    app.update();
+    assert_eq!(state(&app), GameState::Menu);
+    app.world_mut()
+        .resource_mut::<NextState<GameState>>()
+        .set(GameState::Editing);
+    app.update();
+    assert_eq!(state(&app), GameState::Editing);
+    assert_eq!(app.world().resource::<TimeTravel>().edit_return, None);
+    app.world_mut()
+        .resource_mut::<NextState<GameState>>()
+        .set(GameState::Playing);
+    app.update();
+    settle(&mut app);
+    assert_eq!(state(&app), GameState::Playing);
+    assert_eq!(last_answer(&app)["run"], 2, "a fresh run");
+    assert!(tick(&app) < 10);
+    assert!(!app.world().resource::<Paused>().0);
+    assert!(!app.world().resource::<RunEdited>().0, "and unedited");
+    assert_eq!(last_answer(&app)["edited"], false);
+    assert!(heard(&app, "time.diverged").is_empty());
+}
+
+#[test]
+fn a_restart_sent_with_a_seek_after_the_run_ended_starts_a_fresh_run() {
+    let mut app = on_rules(END_AT_120, &[FAR], false);
+    play_until_over(&mut app);
+    send(&mut app, "time.seek", json!({ "tick": 60 }));
+    send(&mut app, "run.restart", Json::Null);
+    for _ in 0..3 {
+        app.update();
+    }
+    assert!(!app.world().contains_resource::<Seek>());
+    assert_eq!(state(&app), GameState::Playing);
+    assert_eq!(last_answer(&app)["run"], 2, "a fresh run, not the seek");
+    assert!(tick(&app) < 10);
+    assert!(!app.world().resource::<RunEdited>().0);
 }

@@ -171,7 +171,8 @@ pub struct TimeTravel {
     /// Every tunable's value when the run left `Playing`: what an edit made
     /// on the game-over screen or in the level editor is told apart from.
     pub final_values: Vec<(u16, Value)>,
-    /// The run left `Playing` while the timeline held it paused.
+    /// The run left `Playing` straight into the level editor while the
+    /// timeline held it paused.
     pub held_at_exit: bool,
     /// Set on entering the level editor from a paused run: the tick and
     /// checksum to branch at when the level editor hands back.

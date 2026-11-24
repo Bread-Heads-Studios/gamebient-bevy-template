@@ -14,7 +14,7 @@ use super::{
 };
 use crate::game::replay::recorder::RunEdited;
 use crate::game::sim::{Checksum, PendingSeed, RunOver, RunSeed, SimTick};
-use crate::game::states::{Paused, QuietPause};
+use crate::game::states::{GameState, Paused, QuietPause};
 use crate::game::tunables::{Value, snapshot};
 
 /// Tunable values changed since the run left `Playing` (on the game-over
@@ -110,7 +110,8 @@ pub fn on_run_start(world: &mut World) {
 }
 
 /// `OnExit(Playing)`, before the run is sealed: the recording as it ended,
-/// whether the run ended itself, whether the timeline held it, and every
+/// whether the run ended itself, whether the timeline held it on its way
+/// into the level editor, and every
 /// tunable's value. A seek still in progress is dropped. The editor hears
 /// `over: true`: the run is no longer playing (a seek still takes it back
 /// in).
@@ -118,7 +119,15 @@ pub fn on_run_exit(world: &mut World) {
     world.remove_resource::<Seek>();
     refresh_recording(world);
     world.remove_resource::<PlaybackFeeder>();
-    let held_at_exit = world.resource::<Paused>().0 && world.resource::<QuietPause>().0;
+    // Bevy sets `State` to the state being entered before `OnExit` runs.
+    // Only a held run that goes straight into the level editor comes back
+    // as a branch: one quit to the title (`pause_quit` works under the
+    // hold too) starts fresh, even if the level editor opens from there.
+    let into_editor = world
+        .get_resource::<State<GameState>>()
+        .is_some_and(|s| *s.get() == GameState::Editing);
+    let held_at_exit =
+        into_editor && world.resource::<Paused>().0 && world.resource::<QuietPause>().0;
     let ended = world.resource::<RunOver>().0;
     let values = snapshot(world);
     let mut tt = world.resource_mut::<TimeTravel>();

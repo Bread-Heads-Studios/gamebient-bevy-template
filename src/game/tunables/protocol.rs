@@ -103,7 +103,9 @@ impl Plugin for EditorProtocolPlugin {
             (
                 handle_custom_commands,
                 apply_content_sets,
-                restart_run,
+                // After a `time.seek` read this frame, so a restart sent
+                // with it drops the seek's re-entry (see `restart_run`).
+                restart_run.after(crate::game::time::commands::apply_time_commands),
                 apply_edit_request,
             )
                 .chain()
@@ -550,14 +552,20 @@ fn restart_run(
     mut next: ResMut<NextState<GameState>>,
     fade: Option<ResMut<crate::ui::transition::ScreenFade>>,
     time: Option<ResMut<crate::game::time::TimeTravel>>,
+    seek: Option<Res<crate::game::time::seek::Seek>>,
+    mut commands: Commands,
 ) {
     if !restart.0 {
         return;
     }
     // A restart is a fresh run, never the level editor's return to a
-    // paused tick (`time::run::prepare_reentry`).
+    // paused tick (`time::run::prepare_reentry`), nor a seek waiting to
+    // take an ended run back into `Playing` (`Phase::Reenter`).
     if let Some(mut time) = time {
         time.edit_return = None;
+    }
+    if seek.is_some_and(|s| s.phase == crate::game::time::seek::Phase::Reenter) {
+        commands.remove_resource::<crate::game::time::seek::Seek>();
     }
     let target = if *state.get() == GameState::Playing {
         GameState::Menu
