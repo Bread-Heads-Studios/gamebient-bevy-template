@@ -56,6 +56,24 @@ pub struct EndCardStyle {
     pub url_size: f32,
 }
 
+/// Inserted (once) when an `EndCardSlot` exists and the game never inserted
+/// an `EndCardStyle`: the slot would silently stay empty and a pack's
+/// sponsor card never show. `warn_missing_style` logs a warning when it
+/// inserts this; tests read it.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct EndCardStyleMissing;
+
+/// Warns once per run about a slot with no `EndCardStyle`.
+pub fn warn_missing_style(mut commands: Commands, slots: Query<(), With<EndCardSlot>>) {
+    if !slots.is_empty() {
+        warn!(
+            "an EndCardSlot exists but the game never inserted an EndCardStyle \
+             (theme::end_card_style()): a pack's sponsor end card will not show"
+        );
+        commands.insert_resource(EndCardStyleMissing);
+    }
+}
+
 /// The parts `card` shows, in order. `has_image`: its image decoded.
 pub fn parts(card: &EndCard, has_image: bool) -> Vec<Part> {
     let mut v = Vec::new();

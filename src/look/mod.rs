@@ -45,14 +45,14 @@ use bevy::prelude::*;
 
 pub use apply::{LookAssets, LookChanged, LookColour, LookText};
 pub use contract::{Contract, ParamKind, ParamSpec, RecipeSpec, ShapeSpec, SlotSpec, StringSpec};
-pub use end_card::{EndCardPart, EndCardSlot, EndCardStyle, Part};
+pub use end_card::{EndCardPart, EndCardSlot, EndCardStyle, EndCardStyleMissing, Part};
 #[cfg(not(gx_look_no_pbr))]
 pub use glow::LookGlow;
 pub use hosted::HostedLook;
 pub use manifest::{
     EndCard, ImageSlot, LookKind, Manifest, Param, Prim, Primitive, RecipeSlot, ShapeSlot, Slot,
 };
-pub use node::{LookBorder, LookGradient, LookTint};
+pub use node::{LookBorder, LookGradient, LookImage, LookShadow, LookTint};
 pub use refit::LookFit;
 pub use runtime::ActiveLook;
 pub use scene::LookClearColour;
@@ -126,6 +126,9 @@ impl Plugin for LookPlugin {
                     apply::retext,
                     node::retint_border,
                     node::retint_gradient,
+                    node::retint_image,
+                    node::retint_text_shadow,
+                    node::retint_box_shadow,
                     refit::refit_text,
                 )
                     .in_set(LookSet),
@@ -137,6 +140,13 @@ impl Plugin for LookPlugin {
                 end_card::fill_slots
                     .before(LookSet)
                     .run_if(resource_exists::<end_card::EndCardStyle>),
+            )
+            .add_systems(
+                PostUpdate,
+                end_card::warn_missing_style.run_if(
+                    not(resource_exists::<end_card::EndCardStyle>)
+                        .and(not(resource_exists::<end_card::EndCardStyleMissing>)),
+                ),
             )
             .add_systems(
                 PostUpdate,

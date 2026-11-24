@@ -2,7 +2,8 @@
 
 use bevy::prelude::*;
 use gamebient_game::look::{
-    ActiveLook, EndCardPart, EndCardSlot, EndCardStyle, LookChanged, LookPlugin, Part, Selection,
+    ActiveLook, EndCardPart, EndCardSlot, EndCardStyle, EndCardStyleMissing, LookChanged,
+    LookPlugin, Part, Selection,
 };
 use gamebient_game::ui::theme;
 
@@ -111,4 +112,35 @@ fn a_swap_to_no_card_empties_the_slot() {
     app.world_mut().write_message(LookChanged);
     app.update();
     assert!(part_list(&mut app).is_empty());
+}
+
+/// A slot with no `EndCardStyle` would silently stay empty: the plugin says
+/// so (once), and says nothing when the style is there or there is no slot.
+#[test]
+fn a_slot_without_a_style_is_warned_about_once() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_plugins(bevy::asset::AssetPlugin::default());
+    app.init_asset::<Image>();
+    app.insert_resource(Selection::Default);
+    app.add_plugins(LookPlugin {
+        contract: &theme::LOOK,
+    });
+    app.update();
+    assert!(
+        app.world().get_resource::<EndCardStyleMissing>().is_none(),
+        "no slot, nothing to warn about"
+    );
+    app.world_mut().spawn((Node::default(), EndCardSlot));
+    app.update();
+    assert!(app.world().get_resource::<EndCardStyleMissing>().is_some());
+}
+
+#[test]
+fn a_slot_with_a_style_is_not_warned_about() {
+    let mut app = app(Selection::Default);
+    app.world_mut().spawn((Node::default(), EndCardSlot));
+    app.update();
+    app.update();
+    assert!(app.world().get_resource::<EndCardStyleMissing>().is_none());
 }

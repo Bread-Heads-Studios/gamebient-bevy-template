@@ -106,6 +106,25 @@ fn boots(selection: Selection) {
         "the state machine did not start"
     );
     app.world().resource::<ActiveLook>();
+    // A game that declares the end card roles shows sponsor end cards, and
+    // `look::end_card` fills nothing without the style: a game that places
+    // an `EndCardSlot` but never inserts `EndCardStyle` ships no card.
+    if look::end_card::ROLES
+        .iter()
+        .all(|r| ui::theme::LOOK.palette.iter().any(|(role, _)| role == r))
+    {
+        assert!(
+            app.world().get_resource::<look::EndCardStyle>().is_some(),
+            "the contract declares the end card roles but the app never inserted \
+             EndCardStyle (insert theme::end_card_style() from UiPlugin)"
+        );
+    }
+    assert!(
+        app.world()
+            .get_resource::<look::EndCardStyleMissing>()
+            .is_none(),
+        "an EndCardSlot exists but there is no EndCardStyle"
+    );
     // Into a run, then its end: the gameplay schedules, the HUD and the
     // game-over screen run for real (their missing resources show here).
     for state in [GameState::Playing, GameState::GameOver] {
