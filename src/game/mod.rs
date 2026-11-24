@@ -1,4 +1,5 @@
 use crate::look::{LookColour, LookText};
+use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::*;
 
 pub mod audio;
@@ -25,6 +26,18 @@ use states::GameState;
 /// Marker for entities spawned during a run; despawned on cleanup.
 #[derive(Component)]
 pub struct GameEntity;
+
+/// The run-start chain as its own schedule, so the editor's time travel
+/// (`game::time`) can start a run again in place, without leaving
+/// `Playing`. `OnEnter(Playing)` runs it through [`run_begin_run`]; the
+/// systems and their order are exactly what `OnEnter(Playing)` ran before.
+#[derive(ScheduleLabel, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BeginRun;
+
+/// `OnEnter(Playing)`: the run-start chain ([`BeginRun`]).
+pub fn run_begin_run(world: &mut World) {
+    world.run_schedule(BeginRun);
+}
 
 /// `headless: true` builds the sim only (no scene, audio, overlay or fade)
 /// for the replay verifier. The windowed game uses `GamePlugin::default()`.
@@ -59,6 +72,7 @@ impl Plugin for GamePlugin {
             .insert_resource(Time::<Fixed>::from_duration(sim::tick_duration()))
             .init_resource::<scoring::GameData>()
             .init_resource::<states::Paused>()
+            .init_resource::<states::QuietPause>()
             .init_resource::<sim::SimTick>()
             .init_resource::<sim::RunClock>()
             .init_resource::<sim::RunSeed>()
@@ -93,7 +107,7 @@ impl Plugin for GamePlugin {
                 ),
             )
             .add_systems(
-                OnEnter(GameState::Playing),
+                BeginRun,
                 (
                     reset_paused,
                     reset_game_data,
@@ -109,6 +123,7 @@ impl Plugin for GamePlugin {
                 )
                     .chain(),
             )
+            .add_systems(OnEnter(GameState::Playing), run_begin_run)
             .add_systems(
                 FixedUpdate,
                 toggle_pause
@@ -321,9 +336,10 @@ fn cleanup_game_entities(mut commands: Commands, query: Query<Entity, With<GameE
 #[derive(Component)]
 struct PauseOverlay;
 
-/// Resets pause state when a run starts.
-fn reset_paused(mut paused: ResMut<states::Paused>) {
+/// Resets pause state when a run starts (a quiet editor pause included).
+fn reset_paused(mut paused: ResMut<states::Paused>, mut quiet: ResMut<states::QuietPause>) {
     paused.0 = false;
+    quiet.0 = false;
 }
 
 /// Resets per-run data when a run starts (preserving the cross-run high score).
@@ -397,15 +413,17 @@ fn toggle_pause(
 fn sync_pause_overlay(
     mut commands: Commands,
     paused: Res<states::Paused>,
+    quiet: Res<states::QuietPause>,
     fonts: Option<Res<crate::ui::fonts::UiFonts>>,
     overlay_query: Query<Entity, With<PauseOverlay>>,
 ) {
     use crate::ui::{card, fonts, theme};
 
-    if !paused.is_changed() {
+    if !paused.is_changed() && !quiet.is_changed() {
         return;
     }
-    if paused.0 {
+    // The editor's timeline pauses quietly: the frame stays in view.
+    if paused.0 && !quiet.0 {
         if !overlay_query.is_empty() {
             return;
         }
@@ -508,6 +526,55 @@ mod tests {
     use bevy::time::TimeUpdateStrategy;
 
     use super::*;
+
+    fn count_things(world: &mut World) -> usize {
+        let mut q = world.query_filtered::<(), With<content::kit::Thing>>();
+        q.iter(world).count()
+    }
+
+    /// What time travel's seek does: the run's entities gone, then the
+    /// run-start chain again on the same seed, with no state transition.
+    #[test]
+    fn the_begin_run_schedule_restarts_a_run_in_place() {
+        let mut app = crate::game::replay::build_builtin_app();
+        app.world_mut().resource_mut::<sim::PendingSeed>().0 = Some([7u8; 32]);
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<GameState>>()
+            .set(GameState::Playing);
+        app.update();
+        let at_start = count_things(app.world_mut());
+        for _ in 0..30 {
+            app.update();
+        }
+        assert!(app.world().resource::<sim::SimTick>().0 > 0);
+        app.world_mut().resource_mut::<states::Paused>().0 = true;
+        app.world_mut().resource_mut::<states::QuietPause>().0 = true;
+        let run: Vec<Entity> = {
+            let world = app.world_mut();
+            let mut q = world.query_filtered::<Entity, With<GameEntity>>();
+            q.iter(world).collect()
+        };
+        for e in run {
+            let _ = app.world_mut().try_despawn(e);
+        }
+        app.world_mut().resource_mut::<sim::PendingSeed>().0 = Some([7u8; 32]);
+        app.world_mut().run_schedule(BeginRun);
+        assert_eq!(app.world().resource::<sim::SimTick>().0, 0);
+        assert_eq!(app.world().resource::<sim::RunSeed>().bytes, [7u8; 32]);
+        assert_eq!(
+            count_things(app.world_mut()),
+            at_start,
+            "the level is back, once"
+        );
+        assert!(!app.world().resource::<states::Paused>().0);
+        assert!(!app.world().resource::<states::QuietPause>().0);
+        assert_eq!(app.world().resource::<scoring::GameData>().score, 0);
+        assert_eq!(
+            *app.world().resource::<State<GameState>>().get(),
+            GameState::Playing
+        );
+    }
 
     /// Boots `GamePlugin { headless: true }` under `MinimalPlugins` (no
     /// window, no audio, no renderer) exactly as the future replay verifier
