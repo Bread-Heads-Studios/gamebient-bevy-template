@@ -7,7 +7,7 @@ use crate::game::scoring::GameData;
 use crate::game::states::GameState;
 use crate::look::{ActiveLook, LookColour, LookText};
 use crate::ui::backdrop::spawn_backdrop;
-use crate::ui::card::{S1, S2, S4, S6, card, card_with, chip_node, intro};
+use crate::ui::card::{S1, S2, S4, S6, card_node, card_with, chip_node, intro};
 use crate::ui::demo_end::spawn_demo_tag;
 use crate::ui::fonts::{BODY, DISPLAY};
 use crate::ui::how_to_play::{SeenHowToPlay, start_target};
@@ -200,7 +200,13 @@ pub fn spawn_game_over(mut commands: Commands, data: Res<GameData>) {
         ))
         .with_children(|root| {
             spawn_backdrop(root, true);
-            root.spawn((card(&theme::CARD), intro()))
+            // `max_width` is the width `theme::end_card_style` sizes the end
+            // card's column against.
+            let card_node = Node {
+                max_width: Val::Px(theme::game_over_card_width()),
+                ..card_node()
+            };
+            root.spawn((card_with(&theme::CARD, card_node), intro()))
                 .with_children(|card| {
                     card.spawn((
                         Text::new(GAME_OVER_HEADLINE),
