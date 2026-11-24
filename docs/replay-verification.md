@@ -530,6 +530,7 @@ The editor's timeline seeks by re-simulating from tick 0 (`game::time::seek`). `
 |---|---|---|
 | Template | `cargo test` (dev profile: crate opt 1, dependencies opt 3) | 12–16 ms (about 15 ms) |
 | Template | `--release` | 8–12 ms |
+| Coin Run | `cargo test` (dev profile) | 44–50 ms |
 
 ## Two fixtures, and which one is the gate
 
