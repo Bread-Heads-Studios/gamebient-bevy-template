@@ -414,6 +414,15 @@ def check_copies(game_arg):
     if (game / rules_dir).is_dir():
         exact_tree("src/game/rules", rules_dir)
         exact("content/schema/rules.schema.json")
+    # Plain-English checks: the harness, the checker, the interpreter and
+    # the shared cases are verbatim copies (a game owns only rule_table.rs
+    # and its own Scenario helpers). A game without them is not checked.
+    for folder in ("scenario", "checks_data"):
+        d = f"src/{folder}" if flat else f"src/game/{folder}"
+        if (game / d).is_dir():
+            exact_tree(f"src/game/{folder}", d)
+            if folder == "checks_data":
+                exact("content/schema/checks.schema.json")
     # Time travel (the editor's timeline): the layer and the shared pieces
     # it rests on are verbatim copies. A game without the editor's time
     # travel has no folder and is not checked.

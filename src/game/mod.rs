@@ -65,6 +65,8 @@ impl Plugin for GamePlugin {
         app.add_plugins(content::ContentPlugin);
         // After the content kit: the embedded rules name its kinds.
         app.add_plugins(rules::RulesPlugin);
+        // After the rules: checks name the kit's kinds too.
+        app.add_plugins(checks_data::ChecksDataPlugin);
         app.init_state::<GameState>()
             // Canon input + web glue. StateEvents posts every GameState
             // transition to the embedding host (website analytics, cabinet).

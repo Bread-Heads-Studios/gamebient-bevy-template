@@ -421,6 +421,12 @@ These cost real debugging time on the project this template was extracted from:
   --check-copies`): a game changes only `src/game/rule_table.rs`. Rule
   tests in a game are shape tests: never pin `content/rules.json` to what
   shipped, because the editor saves it.
+- **`src/game/scenario/` and `src/game/checks_data/` are verbatim copies**
+  (`tools/frame-accept.sh --check-copies`): a game describes its stage in
+  `rule_table::STAGE` and adds its own `Scenario` helpers in its own file
+  (an `impl Scenario` block). `data_checks_pass` reads the committed
+  `content/checks.json` on purpose: it is the publish gate. Every other
+  test stays a shape test.
 - **`GX_MUTE=1` (native) or `?mute=1` (web) starts a run silent.** It mutes
   sinks only (`game::host::LocalMute`), so `record` footage keeps full audio
   and a host `unmute` can't undo it. Set it whenever an agent launches a game.

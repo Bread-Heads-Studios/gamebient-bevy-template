@@ -9,6 +9,7 @@
 //! | game → host | `tunable`        | `{ path, value, applied: "tick"\|"now", tick }` or `{ path, error }` |
 //! | host → game | `checks.run`     | `{ "names": [ … ] }`                              |
 //! | game → host | `check`          | `{ name, ok, message }`, one per check            |
+//! | | | `data:<id>` names run data checks (`content/checks.json`), one per frame |
 //! | host → game | `run.restart`    | —                                                 |
 //! | host → game | `sound.preview`  | `{ name }`: an `SfxEvent` name or a cue/layer name |
 //! | game → host | `sound`          | `{ name, ok: true }` or `{ name, ok: false, error }` |
@@ -30,13 +31,16 @@
 //! `run.restart`), `tunables.json` (through `PendingTunes`, all or nothing),
 //! `sprites.json`, `sprites/<Kind>.png`, `audio/songs.json`, `audio/sfx.json`,
 //! `rules.json` (checked whole: the next run starts with it and a run in
-//! progress takes it at the next tick).
+//! progress takes it at the next tick), `checks.json` (checked whole; the
+//! next `checks.run` runs it).
 //! While Editing, `level.json` respawns the shown level at once and no restart is needed.
 //! The catalog's `files` maps every content file the game runs to its hash.
 //!
 //! Everything here runs in `Update`; the only thing that touches run state
 //! is a push onto `PendingTunes`, which `apply_pending_tunes` drains inside
 //! `SimSet`. The catalog is also posted once on `OnEnter(Playing)`.
+
+use std::collections::VecDeque;
 
 use bevy::prelude::*;
 use gamebient_input::{HostCommand, HostEvent};
@@ -68,6 +72,11 @@ struct ListRequested(bool);
 #[derive(Resource, Default)]
 struct ChecksRequested(Vec<String>);
 
+/// Data checks (`data:<id>`) still to run: one per frame, so a long check
+/// never stalls the preview for more than one frame.
+#[derive(Resource, Default)]
+struct DataQueue(VecDeque<String>);
+
 /// `content.set` requests, applied by `apply_content_sets` (they need `&mut World`).
 #[derive(Resource, Default)]
 struct ContentSets(Vec<Json>);
@@ -91,6 +100,7 @@ impl Plugin for EditorProtocolPlugin {
         .init_resource::<PreviewsRequested>()
         .init_resource::<ListRequested>()
         .init_resource::<ChecksRequested>()
+        .init_resource::<DataQueue>()
         .init_resource::<ContentSets>()
         .init_resource::<RestartPending>()
         .init_resource::<EditRequest>()
@@ -116,6 +126,7 @@ impl Plugin for EditorProtocolPlugin {
             (
                 answer_tunables_list,
                 run_requested_checks,
+                run_one_data_check,
                 report_tune_applied,
                 run_sound_previews,
                 report_level_mode,
@@ -270,7 +281,11 @@ pub fn catalog_json(world: &World) -> Json {
         "content": hash::content(world.resource::<TuneLog>()).to_string(),
         "groups": idx.groups.iter().map(|g| json!({ "path": g.path, "label": g.label, "kind": g.kind.name() })).collect::<Vec<_>>(),
         "tunables": tunables,
-        "checks": checks.iter().map(|c| json!({ "name": c.name, "title": c.title })).collect::<Vec<_>>(),
+        "checks": checks
+            .iter()
+            .map(|c| json!({ "name": c.name, "title": c.title }))
+            .chain(crate::game::checks_data::catalog_entries(world))
+            .collect::<Vec<_>>(),
         "sounds": info.sounds,
         "files": world
             .get_resource::<crate::game::content::LiveFiles>()
@@ -289,6 +304,7 @@ pub fn catalog_json(world: &World) -> Json {
         j["level"] = level;
     }
     j["rules"] = crate::game::rules::rules_catalog(world);
+    j["checks_data"] = crate::game::checks_data::checks_catalog(world);
     j["time"] = crate::game::time::catalog();
     if let Some(looks) = crate::look::editor::looks_catalog(world) {
         j["looks"] = looks;
@@ -349,8 +365,14 @@ fn answer_tunables_list(world: &mut World) {
     world.write_message(custom("tunables", catalog));
 }
 
+/// `checks.run`: the Rust checks run now; data checks (`data:<id>`) join
+/// the queue `run_one_data_check` drains one per frame.
 fn run_requested_checks(world: &mut World) {
     let names: Vec<String> = core::mem::take(&mut world.resource_mut::<ChecksRequested>().0);
+    let (data, names): (Vec<String>, Vec<String>) = names
+        .into_iter()
+        .partition(|n| crate::game::checks_data::is_data(n));
+    world.resource_mut::<DataQueue>().0.extend(data);
     if names.is_empty() {
         return;
     }
@@ -374,6 +396,21 @@ fn run_requested_checks(world: &mut World) {
     }
 }
 
+/// Runs the next queued data check and answers `check`, like a Rust check.
+fn run_one_data_check(world: &mut World) {
+    let Some(name) = world.resource_mut::<DataQueue>().0.pop_front() else {
+        return;
+    };
+    let (ok, message) = match crate::game::checks_data::run_named(world, &name) {
+        Ok(()) => (true, String::new()),
+        Err(m) => (false, m),
+    };
+    world.write_message(custom(
+        "check",
+        json!({ "name": name, "ok": ok, "message": message }),
+    ));
+}
+
 /// The first sentence of trouble, or `None` when `file` was applied.
 fn set_content(world: &mut World, file: &str, data: &Json) -> Result<u64, String> {
     use crate::game::content::{audio, base64, files, level, model::TunablesFile, sprites};
@@ -388,6 +425,7 @@ fn set_content(world: &mut World, file: &str, data: &Json) -> Result<u64, String
             | "audio/songs.json"
             | "audio/sfx.json"
             | "rules.json"
+            | "checks.json"
     );
     if !known && !is_png {
         let shown: String = file.chars().take(40).collect();
@@ -429,6 +467,8 @@ fn set_content(world: &mut World, file: &str, data: &Json) -> Result<u64, String
         // Checked whole; the next run starts with it, and a run in progress
         // takes it at the next tick (`rules::PendingRules`).
         "rules.json" => crate::game::rules::set_rules(world, &bytes)?,
+        // Checked whole; the next `checks.run` runs the new file.
+        "checks.json" => crate::game::checks_data::set_checks(world, &bytes)?,
         "tunables.json" => {
             let parsed = TunablesFile::parse(&bytes).map_err(|e| e.0)?;
             let idx = world.resource::<TunableIndex>().clone();
@@ -1419,5 +1459,98 @@ mod tests {
                 .any(|k| k == "Player")
         );
         assert_eq!(j["rules"]["triggers"].as_array().unwrap().len(), 6);
+    }
+
+    #[test]
+    fn data_checks_answer_one_per_frame_beside_rust_checks() {
+        let mut app = build_builtin_app();
+        app.update();
+        let text = r#"{"checks":[{"id":"a","source":"The run keeps going","do":[{"wait":1}],"expect":[{"outcome":"playing"}]},{"id":"b","source":"It is won","do":[],"expect":[{"outcome":"win"}]}]}"#;
+        crate::game::checks_data::set_checks(app.world_mut(), text.as_bytes()).unwrap();
+        drain_custom(&mut app);
+        send(
+            &mut app,
+            "checks.run",
+            r#"{"names":["data:a","no_such_check","data:b","data:zzz"]}"#,
+        );
+        let mut frames: Vec<Vec<Json>> = Vec::new();
+        for _ in 0..4 {
+            app.update();
+            frames.push(
+                drain_custom(&mut app)
+                    .into_iter()
+                    .filter(|e| e.0 == "check")
+                    .map(|e| serde_json::from_str(&e.1).unwrap())
+                    .collect(),
+            );
+        }
+        assert_eq!(
+            frames[0].len(),
+            2,
+            "the Rust check and one data check: {:?}",
+            frames[0]
+        );
+        assert_eq!(frames[0][0]["name"], "no_such_check");
+        assert_eq!(
+            frames[0][1],
+            json!({ "name": "data:a", "ok": true, "message": "" })
+        );
+        assert_eq!(
+            frames[1],
+            [
+                json!({ "name": "data:b", "ok": false, "message": "didn't win: the run is still going" })
+            ]
+        );
+        assert_eq!(
+            frames[2],
+            [json!({ "name": "data:zzz", "ok": false, "message": "no check named data:zzz" })]
+        );
+        assert!(frames[3].is_empty());
+    }
+
+    #[test]
+    fn content_set_checks_is_checked_whole_and_listed() {
+        let mut app = build_builtin_app();
+        app.update();
+        drain_custom(&mut app);
+        let bad =
+            r#"{"checks":[{"id":"a","source":"s","do":[],"expect":[{"count":["Ghost","=",0]}]}]}"#;
+        send(
+            &mut app,
+            "content.set",
+            &json!({ "file": "checks.json", "text": bad }).to_string(),
+        );
+        app.update();
+        let r = content_replies(&mut app);
+        assert_eq!(r[0]["ok"], false);
+        assert_eq!(
+            r[0]["error"],
+            "Check 1: This game has no kind called Ghost."
+        );
+        let good = r#"{"checks":[{"id":"keeps-going","source":"The run keeps going","do":[],"expect":[{"outcome":"playing"}]}]}"#;
+        send(
+            &mut app,
+            "content.set",
+            &json!({ "file": "checks.json", "text": good }).to_string(),
+        );
+        app.update();
+        assert_eq!(content_replies(&mut app)[0]["ok"], true);
+        let j = catalog_json(app.world());
+        let entry = j["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "data:keeps-going")
+            .cloned()
+            .unwrap();
+        assert_eq!(
+            entry,
+            json!({ "name": "data:keeps-going", "title": "The run keeps going", "data": true })
+        );
+        assert_eq!(
+            j["checks_data"],
+            crate::game::checks_data::checks_catalog(app.world())
+        );
+        assert!(j["files"]["checks.json"].is_string());
     }
 }
