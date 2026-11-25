@@ -45,7 +45,10 @@ use bevy::prelude::*;
 
 pub use apply::{LookAssets, LookChanged, LookColour, LookText};
 pub use contract::{Contract, ParamKind, ParamSpec, RecipeSpec, ShapeSpec, SlotSpec, StringSpec};
-pub use end_card::{EndCardPart, EndCardSlot, EndCardStyle, EndCardStyleMissing, Part};
+pub use end_card::{
+    EndCardPart, EndCardSlot, EndCardStyle, EndCardStyleMissing, EndCardWrapper, Part,
+    end_card_slot,
+};
 #[cfg(not(gx_look_no_pbr))]
 pub use glow::LookGlow;
 pub use hosted::HostedLook;
@@ -140,6 +143,13 @@ impl Plugin for LookPlugin {
                 end_card::fill_slots
                     .before(LookSet)
                     .run_if(resource_exists::<end_card::EndCardStyle>),
+            )
+            // A wrapper follows its slot, after the fill and before layout.
+            .add_systems(
+                PostUpdate,
+                end_card::sync_wrappers
+                    .after(end_card::fill_slots)
+                    .before(bevy::ui::UiSystems::Layout),
             )
             .add_systems(
                 PostUpdate,

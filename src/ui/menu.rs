@@ -243,8 +243,11 @@ pub fn spawn_game_over(mut commands: Commands, data: Res<GameData>) {
                             .card_look(&CHIP, &CHIP_ROLES)
                             .with_child((Text::new(best), BODY.font(16.0), TextColor(SIGNAL)));
                     }
-                    // A sponsor pack's end card (`look::end_card`); empty otherwise.
-                    card.spawn((Node::default(), crate::look::EndCardSlot));
+                    // A sponsor pack's end card (`look::end_card`); hidden, and
+                    // taking no `row_gap`, until a pack fills it. The wrapper
+                    // carries the width (`fill_slots` replaces the slot's own
+                    // `Node`): `end_card_slot_width` is its content width.
+                    card.spawn(crate::look::end_card_slot(theme::end_card_slot_width()));
                     if demo::DEMO {
                         card.spawn(card_with(&CHIP, chip_node()))
                             .card_look(&CHIP, &CHIP_ROLES)

@@ -24,10 +24,70 @@ const GAP: f32 = 16.0;
 const PAD: f32 = 16.0;
 
 /// Put on an empty UI node; it is filled with the end card. The system
-/// replaces the slot's `Node` on every rebuild, so games spawn
-/// `(Node::default(), EndCardSlot)` and put any margins on a wrapper node.
+/// **replaces the slot's own `Node`** on every rebuild, so a slot can carry
+/// no width, margin or alignment of its own. To put the card in a column
+/// narrower than its parent, spawn the slot with [`end_card_slot`], which
+/// wraps it in a template-owned [`EndCardWrapper`] of a given width; a
+/// bare `(Node::default(), EndCardSlot)` still works where the card should
+/// take its parent's width as it is.
 #[derive(Component, Debug, Default, Clone, Copy)]
 pub struct EndCardSlot;
+
+/// The node [`end_card_slot`] puts around an [`EndCardSlot`]. It is
+/// `Display::None` from spawn until the slot is filled, shown while the
+/// card is there and hidden again when a clear empties it, so a wrapper
+/// that sits in a column with a `row_gap` adds no gap under the default
+/// look. `sync_wrappers` (PostUpdate, after `fill_slots`, before UI layout)
+/// does it, so there is no frame with a gap or a flash.
+#[derive(Component, Debug, Default, Clone, Copy)]
+pub struct EndCardWrapper;
+
+/// The wrapper's own node: `width` px wide (the **content width** the card
+/// is laid out in: `theme::end_card_slot_width()`), the card centred in it,
+/// hidden until the slot is filled.
+pub fn wrapper_node(width: f32) -> Node {
+    Node {
+        display: Display::None,
+        width: Val::Px(width),
+        justify_content: JustifyContent::Center,
+        ..default()
+    }
+}
+
+/// A slot inside its wrapper: spawn it where the end card goes.
+///
+/// ```ignore
+/// card.spawn(look::end_card::end_card_slot(theme::end_card_slot_width()));
+/// ```
+///
+/// The rule: the slot's own `Node` is replaced, so the width goes on the
+/// wrapper, and `theme::end_card_slot_width()` (what `end_card_style()` is
+/// built from) is the wrapper's content width.
+pub fn end_card_slot(width: f32) -> impl Bundle {
+    (
+        wrapper_node(width),
+        EndCardWrapper,
+        children![(Node::default(), EndCardSlot)],
+    )
+}
+
+/// Shows each wrapper while its slot holds a card and hides it otherwise.
+/// Writes only on a change.
+pub fn sync_wrappers(
+    slots: Query<(&Node, Option<&Children>, &ChildOf), With<EndCardSlot>>,
+    mut wrappers: Query<&mut Node, (With<EndCardWrapper>, Without<EndCardSlot>)>,
+) {
+    for (slot, children, parent) in &slots {
+        let Ok(mut wrapper) = wrappers.get_mut(parent.parent()) else {
+            continue;
+        };
+        let filled = slot.display != Display::None && children.is_some_and(|c| !c.is_empty());
+        let want = if filled { Display::Flex } else { Display::None };
+        if wrapper.display != want {
+            wrapper.display = want;
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Part {
