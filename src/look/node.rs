@@ -10,15 +10,13 @@
 //! spawned literals changes nothing. Presentation only: the sim never
 //! queries these.
 //!
-//! A card (`ui::card::card_with`: fill, gradient, border) takes three tags:
+//! A card (`ui::card::card_with`: fill, gradient, border, shadow) takes
+//! `ui::card::CardLookExt::card_look(&style, &roles)`, which inserts
+//! exactly the tags below that the style has:
 //!
 //! ```ignore
-//! commands.spawn((
-//!     card_with(&CARD, node),
-//!     LookColour::new("card"),
-//!     LookBorder::new("rim").alpha(0.9),
-//!     LookGradient::two(LookTint::new("cardtop"), LookTint::new("cardbottom")),
-//! ));
+//! commands.spawn(card_with(&CARD, node)).card_look(&CARD, &CARD_ROLES);
+//! // = LookColour (fill) + LookBorder + LookGradient::two + LookShadow
 //! ```
 
 use bevy::prelude::*;
@@ -39,9 +37,9 @@ use super::runtime::ActiveLook;
 ///   without it a look change repaints the role at full alpha for a frame.
 ///   It wins over `alpha`. The spawn-time alpha (the game's own) is the one
 ///   kept on the frame the tag is added.
-/// - [`toward_white`](Self::toward_white): the role colour mixed `w` (0 to
-///   1) of the way toward white in sRGB, then the alpha rule: a lightened
-///   stop (the light centre of a horizon line, a gloss).
+/// - [`toward_white`](Self::toward_white): the role colour mixed `w` (from
+///   0 up to 1) of the way toward white in sRGB, then the alpha rule: a
+///   lightened stop (the light centre of a horizon line, a gloss).
 /// - [`default_is`](Self::default_is): the literal colour the game spawns
 ///   this part with. When the active look's colour for the role **is** the
 ///   contract default (the default look, or a pack that leaves the role

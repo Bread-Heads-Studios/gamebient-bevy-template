@@ -541,12 +541,10 @@ fn the_templates_cards_are_unchanged_by_the_default_look_and_follow_a_pack() {
     let ids: Vec<Entity> = cards
         .iter()
         .map(|(style, roles)| {
-            let id = app
-                .world_mut()
+            app.world_mut()
                 .spawn(card_with(style, Node::default()))
                 .card_look(style, roles)
-                .id();
-            id
+                .id()
         })
         .collect();
     let parts = |app: &App, id: Entity| {
