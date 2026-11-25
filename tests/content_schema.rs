@@ -28,7 +28,9 @@ fn agree<T, E>(name: &str, parse: fn(&[u8]) -> Result<T, E>, valid: &[&str], inv
 
 #[test]
 fn schema_files_are_valid_schemas() {
-    for n in ["level", "tunables", "sprites", "songs", "sfx", "rules"] {
+    for n in [
+        "level", "tunables", "sprites", "songs", "sfx", "rules", "checks",
+    ] {
         schema(n);
     }
 }
@@ -259,6 +261,41 @@ fn rules_schema_agrees_with_the_shared_cases() {
             case["text"].as_str().unwrap().to_string()
         };
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v.is_valid(&json), want, "{}", case["name"]);
+    }
+}
+
+/// The schema the editor's server checks `checks.json` saves against says
+/// yes to every file the game takes, and gives the verdict each shared case
+/// records.
+#[test]
+fn checks_schema_agrees_with_the_shared_cases() {
+    let v = schema("checks");
+    let all: serde_json::Value =
+        serde_json::from_str(include_str!("../src/game/checks_data/cases.json")).unwrap();
+    for case in all["cases"].as_array().unwrap() {
+        let Some(want) = case["schema"].as_bool() else {
+            continue;
+        };
+        if case["error"].is_null() {
+            assert!(
+                want,
+                "{}: a file the game takes must pass the schema",
+                case["name"]
+            );
+        }
+        let json: serde_json::Value = if let Some(n) = case["many"].as_u64() {
+            let checks: Vec<serde_json::Value> = (1..=n)
+                .map(|i| {
+                    serde_json::json!({ "id": format!("c{i}"), "source": "s", "do": [], "expect": [{ "outcome": "playing" }] })
+                })
+                .collect();
+            serde_json::json!({ "checks": checks })
+        } else if !case["file"].is_null() {
+            case["file"].clone()
+        } else {
+            serde_json::from_str(case["text"].as_str().unwrap()).unwrap()
+        };
         assert_eq!(v.is_valid(&json), want, "{}", case["name"]);
     }
 }

@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "checks.schema.json",
+  "title": "Checks",
+  "description": "content/checks.json: plain-English checks as data. The game also checks names, unique ids, counter ranges, the ticks in all and the size (src/game/checks_data/model.rs).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["checks"],
+  "properties": {
+    "checks": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/check" } }
+  },
+  "$defs": {
+    "name": { "type": "string", "minLength": 1 },
+    "int": { "type": "integer", "minimum": -1000000, "maximum": 1000000 },
+    "op": { "enum": ["<", "<=", "=", ">=", ">"] },
+    "ticks": { "type": "integer", "minimum": 1, "maximum": 1800 },
+    "coord": { "type": "integer", "minimum": -100000, "maximum": 100000 },
+    "at": {
+      "type": "array",
+      "prefixItems": [{ "$ref": "#/$defs/coord" }, { "anyOf": [{ "$ref": "#/$defs/coord" }, { "const": "floor" }] }],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "button": { "enum": ["left", "right", "up", "down", "A", "B"] },
+    "buttons": { "type": "array", "minItems": 1, "maxItems": 6, "items": { "$ref": "#/$defs/button" } },
+    "comparison": {
+      "type": "array",
+      "prefixItems": [{ "$ref": "#/$defs/name" }, { "$ref": "#/$defs/op" }, { "$ref": "#/$defs/int" }],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "expectation": {
+      "type": "object",
+      "oneOf": [
+        { "required": ["counter"], "additionalProperties": false, "properties": { "counter": { "$ref": "#/$defs/comparison" }, "ever": { "type": "boolean" } } },
+        { "required": ["change"], "additionalProperties": false, "properties": { "change": { "$ref": "#/$defs/comparison" }, "ever": { "type": "boolean" } } },
+        { "required": ["count"], "additionalProperties": false, "properties": { "count": { "$ref": "#/$defs/comparison" }, "ever": { "type": "boolean" } } },
+        { "required": ["outcome"], "additionalProperties": false, "properties": { "outcome": { "enum": ["win", "lose", "playing"] }, "ever": { "type": "boolean" } } },
+        { "required": ["sound"], "additionalProperties": false, "properties": { "sound": { "$ref": "#/$defs/name" } } }
+      ]
+    },
+    "step": {
+      "type": "object",
+      "oneOf": [
+        { "required": ["hold", "ticks"], "additionalProperties": false, "properties": { "hold": { "$ref": "#/$defs/buttons" }, "ticks": { "$ref": "#/$defs/ticks" } } },
+        { "required": ["press"], "additionalProperties": false, "properties": { "press": { "$ref": "#/$defs/button" } } },
+        { "required": ["wait"], "additionalProperties": false, "properties": { "wait": { "$ref": "#/$defs/ticks" } } },
+        { "required": ["until", "within"], "additionalProperties": false, "properties": { "until": { "$ref": "#/$defs/expectation" }, "within": { "$ref": "#/$defs/ticks" }, "hold": { "$ref": "#/$defs/buttons" } } }
+      ]
+    },
+    "placed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/name" },
+        "at": { "$ref": "#/$defs/at" },
+        "beside": { "enum": ["left", "right", "above", "below"] }
+      },
+      "oneOf": [{ "required": ["at"] }, { "required": ["beside"] }]
+    },
+    "given": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "level": { "enum": ["empty", "current"] },
+        "player": { "type": "object", "additionalProperties": false, "properties": { "at": { "$ref": "#/$defs/at" } } },
+        "place": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/placed" } },
+        "set": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "type": "array", "prefixItems": [{ "$ref": "#/$defs/name" }, { "$ref": "#/$defs/int" }], "minItems": 2, "maxItems": 2 }
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source", "do", "expect"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9-]{1,48}$" },
+        "source": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "off": { "type": "boolean" },
+        "given": { "$ref": "#/$defs/given" },
+        "do": { "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/step" } },
+        "expect": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/$defs/expectation" } }
+      }
+    }
+  }
+}

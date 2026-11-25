@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Proves the content kit's promise: a data save to content/ never breaks
 # `cargo test`. Copies the repo to a scratch folder, saves every tunable at
-# its max (then, in a second run, at its min), saves content/rules.json at
-# the limits (then, in the min run, empty) and edits content/level.json
-# (one Thing moved, one removed), then runs the full test suite there.
+# its max (then, in a second run, at its min), saves content/rules.json and
+# content/checks.json at the limits (then, in the min run, empty) and edits
+# content/level.json (one Thing moved, one removed), then runs the full
+# test suite there (`data_checks_pass` included: every check at the limits
+# holds whatever the rest of the content says).
 #
 # The tunables file comes from the ignored unit test
 # `write_extreme_tunables` (src/game/content/saved.rs), which reads the
@@ -61,6 +63,9 @@ for end in "${ends[@]}"; do
   (cd "$root" && GX_EXTREME="$end" GX_EXTREME_OUT="$copy/content/rules.json" \
     cargo test --lib --all-features -- --ignored --exact \
     game::rules::tests::write_extreme_rules --quiet)
+  (cd "$root" && GX_EXTREME="$end" GX_EXTREME_OUT="$copy/content/checks.json" \
+    cargo test --lib --all-features -- --ignored --exact \
+    game::checks_data::tests::write_extreme_checks --quiet)
   (cd "$copy" && CARGO_TARGET_DIR="$copy_target" cargo test --all-targets --all-features)
 done
 echo "extreme content: cargo test passed for: ${ends[*]}"

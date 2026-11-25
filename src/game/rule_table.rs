@@ -9,12 +9,14 @@
 //! jump (it must respect the game's own grounded check), and `STOP` one
 //! that stops a thing's motion (`respawn` calls it). `test_rules()` is
 //! built in Rust so a data save never changes the fixtures. List the
-//! counters whose changes the editor's timeline marks in `MARKS`.
+//! counters whose changes the editor's timeline marks in `MARKS`. Describe
+//! the stage a data check's `"level": "empty"` builds in `STAGE`.
 
 use bevy::prelude::*;
 
 use super::rules::model::RulesFile;
 use super::rules::{CounterDef, MarkDef, MarkWhen};
+use super::scenario::StageDef;
 use super::scoring::GameData;
 
 fn set_score(d: &mut GameData, v: i64) {
@@ -60,6 +62,19 @@ pub const STOP: Option<fn(&mut World, Entity)> = None;
 
 /// Half the screen in world units (the camera shows about 22.1 x 16.6).
 pub const HALF_SCREEN: Vec2 = Vec2::new(11.0, 8.3);
+
+/// The stage a data check builds for `"level": "empty"`, in world units:
+/// the player's kind and start, the floor (a Thing, or none), the line
+/// Things rest on (`"floor"`), and how far `beside` places a Thing (centre
+/// to centre). The template's player floats: no floor thing, and its feet
+/// at y = -0.5.
+pub const STAGE: StageDef = StageDef {
+    player: "Player",
+    floor: None,
+    floor_top: -0.5,
+    start: Vec2::new(0.0, 0.0),
+    beside: 2.0,
+};
 
 /// The rules the replay selftest and the named checks run on
 /// (`LevelSource::Test`). The template has none.

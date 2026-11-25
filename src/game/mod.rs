@@ -5,6 +5,7 @@ use bevy::prelude::*;
 pub mod audio;
 #[cfg(feature = "autopilot")]
 pub mod autopilot;
+pub mod checks_data;
 pub mod content;
 pub mod demo;
 pub mod host;
@@ -15,6 +16,7 @@ pub mod record;
 pub mod replay;
 pub mod rule_table;
 pub mod rules;
+pub mod scenario;
 pub mod scoring;
 pub mod sim;
 pub mod states;
@@ -63,6 +65,8 @@ impl Plugin for GamePlugin {
         app.add_plugins(content::ContentPlugin);
         // After the content kit: the embedded rules name its kinds.
         app.add_plugins(rules::RulesPlugin);
+        // After the rules: checks name the kit's kinds too.
+        app.add_plugins(checks_data::ChecksDataPlugin);
         app.init_state::<GameState>()
             // Canon input + web glue. StateEvents posts every GameState
             // transition to the embedding host (website analytics, cabinet).

@@ -150,6 +150,39 @@ keep their edge memory; timers whose names are gone are dropped). The
 catalog's `rules` key carries the vocabulary the editor builds its
 dropdowns from.
 
+## Checks as data
+
+`content/checks.json` holds plain-English checks: a sentence (`source`)
+and a small staged test that should always pass. `given` builds the scene
+(`level` `"empty"` or `"current"`, `player.at`, up to 16 Things placed `at`
+a point or `beside` the player, starting values in `set`), `do` plays up
+to 16 steps (`hold`, `press`, `wait`, `until`; at most 1800 ticks in all)
+and `expect` holds 1 to 8 expectations (`counter`, `change`, `count`,
+`outcome`, `sound`; `"ever": true` means "at some tick"). Comparisons are
+the rules' `<`, `<=`, `=`, `>=`, `>`.
+
+`src/game/checks_data/model.rs` checks a file whole, with one sentence per
+refusal; `run.rs` runs one check on a fresh headless `Scenario`
+(`src/game/scenario/`) with a fixed seed, under the game's current rules,
+tunables and level, and answers in plain words ("lives went from 3 to 3;
+expected a change of -1"). The stage comes from `rule_table::STAGE` (the
+player's kind and start, the floor, how far `beside` is), counters from
+`COUNTERS`, sounds from `SfxEvent`. `scenario/` and `checks_data/` are
+copied verbatim (`tools/frame-accept.sh --check-copies`); the editor carries
+byte-identical copies of `model.rs`, `cases.json` and the schema.
+
+A data check runs whole in one frame, and a long check (up to 1800 ticks)
+can take a noticeable fraction of a second in the browser; a name already
+waiting in the queue is not queued again.
+
+The editor runs checks by name (`data:<id>`, one per frame, through
+`checks.run`); `content.set checks.json` swaps the file in. The test
+`data_checks_pass` runs every check that is on in the committed file under
+the committed content, so the release gate (which runs `cargo test`)
+refuses a game with a failing check. Its message names the failing checks
+by sentence and carries one `GX-CHECK-FAILED {json}` line each for the
+editor. Turning a check off (`"off": true`) is the way past it.
+
 ## File hash and `content.set`
 
 Everywhere a file is named (the catalog's `files`, the UI, tests) its hash is
