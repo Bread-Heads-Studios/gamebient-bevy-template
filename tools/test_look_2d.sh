@@ -122,7 +122,7 @@ pub mod game {
         }
     }
 
-    // A field, so `GamePlugin::default()` is not a unit struct (clippy).
+    // A field, so \`GamePlugin::default()\` is not a unit struct (clippy).
     #[derive(Default)]
     pub struct GamePlugin {
         _windowed: bool,
