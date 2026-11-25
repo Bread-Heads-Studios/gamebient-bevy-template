@@ -15,6 +15,7 @@ pub mod record;
 pub mod replay;
 pub mod rule_table;
 pub mod rules;
+pub mod scenario;
 pub mod scoring;
 pub mod sim;
 pub mod states;
