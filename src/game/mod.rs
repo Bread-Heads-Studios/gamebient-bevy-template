@@ -5,6 +5,7 @@ use bevy::prelude::*;
 pub mod audio;
 #[cfg(feature = "autopilot")]
 pub mod autopilot;
+pub mod checks_data;
 pub mod content;
 pub mod demo;
 pub mod host;
