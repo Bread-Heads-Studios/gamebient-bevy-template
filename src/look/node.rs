@@ -26,25 +26,102 @@ use bevy::prelude::*;
 use super::apply::LookChanged;
 use super::runtime::ActiveLook;
 
-/// A palette role at an optional alpha: one colour a tag writes. `None`
-/// keeps the role's own alpha, as `LookColour` does.
+/// A palette role and what a tag writes for it: one colour. Every tag here
+/// (`LookBorder`, `LookImage`, `LookShadow`, `LookGradient` stops) holds
+/// one, and `LookColour` follows the same two opt-ins (`keep_alpha`; the
+/// lightening is `LookTint` only).
+///
+/// - [`alpha`](Self::alpha): the colour is written at this alpha; without
+///   it the role's own alpha is kept, as `LookColour` does.
+/// - [`keep_alpha`](Self::keep_alpha): retint **RGB only** and leave
+///   whatever alpha the component has now. For an entity whose alpha a game
+///   system animates (a score pop, a banner, a fade) under a static tag:
+///   without it a look change repaints the role at full alpha for a frame.
+///   It wins over `alpha`. The spawn-time alpha (the game's own) is the one
+///   kept on the frame the tag is added.
+/// - [`toward_white`](Self::toward_white): the role colour mixed `w` (0 to
+///   1) of the way toward white in sRGB, then the alpha rule: a lightened
+///   stop (the light centre of a horizon line, a gloss).
+/// - [`default_is`](Self::default_is): the literal colour the game spawns
+///   this part with. When the active look's colour for the role **is** the
+///   contract default (the default look, or a pack that leaves the role
+///   alone), exactly that literal is written, with no float round trip
+///   through the lightening and the alpha, so the default look stays
+///   bit-identical to the spawn code. Without it a lightened tint computes
+///   its default colour from the role.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LookTint {
     pub role: &'static str,
     pub alpha: Option<f32>,
+    pub white: f32,
+    pub keep_alpha: bool,
+    pub default: Option<Color>,
 }
 
 impl LookTint {
     pub const fn new(role: &'static str) -> Self {
-        Self { role, alpha: None }
+        Self {
+            role,
+            alpha: None,
+            white: 0.0,
+            keep_alpha: false,
+            default: None,
+        }
     }
     pub const fn alpha(mut self, alpha: f32) -> Self {
         self.alpha = Some(alpha);
         self
     }
+    /// Retint RGB only; the component's own alpha is kept (see the type).
+    pub const fn keep_alpha(mut self) -> Self {
+        self.keep_alpha = true;
+        self
+    }
+    /// The role colour mixed `w` of the way toward white (sRGB, `0.0..=1.0`).
+    pub const fn toward_white(mut self, w: f32) -> Self {
+        self.white = w;
+        self
+    }
+    /// The literal the game spawns this part with: written as is while the
+    /// role is at its contract default.
+    pub const fn default_is(mut self, colour: Color) -> Self {
+        self.default = Some(colour);
+        self
+    }
+
+    /// The colour this tint wants, ignoring `keep_alpha` (there is no
+    /// current alpha to keep): the role colour, lightened, at `alpha`.
     pub fn resolve(&self, look: &ActiveLook) -> Color {
         let c = look.colour(self.role);
+        if let Some(d) = self.default
+            && look.contract.default_colour(self.role) == Some(c)
+        {
+            return d;
+        }
+        let c = if self.white > 0.0 {
+            let s = c.to_srgba();
+            let w = self.white.min(1.0);
+            Color::srgba(
+                s.red + (1.0 - s.red) * w,
+                s.green + (1.0 - s.green) * w,
+                s.blue + (1.0 - s.blue) * w,
+                s.alpha,
+            )
+        } else {
+            c
+        };
         self.alpha.map_or(c, |a| c.with_alpha(a))
+    }
+
+    /// What to write over a component currently holding `current`: as
+    /// [`resolve`](Self::resolve), with `current`'s alpha under `keep_alpha`.
+    pub fn resolve_over(&self, look: &ActiveLook, current: Color) -> Color {
+        let c = self.resolve(look);
+        if self.keep_alpha {
+            c.with_alpha(current.alpha())
+        } else {
+            c
+        }
     }
 }
 
@@ -58,6 +135,10 @@ impl LookBorder {
     }
     pub const fn alpha(self, alpha: f32) -> Self {
         Self(self.0.alpha(alpha))
+    }
+    /// Keep the component's own alpha (`LookTint::keep_alpha`).
+    pub const fn keep_alpha(self) -> Self {
+        Self(self.0.keep_alpha())
     }
 }
 
@@ -75,6 +156,10 @@ impl LookImage {
     pub const fn alpha(self, alpha: f32) -> Self {
         Self(self.0.alpha(alpha))
     }
+    /// Keep the component's own alpha (`LookTint::keep_alpha`).
+    pub const fn keep_alpha(self) -> Self {
+        Self(self.0.keep_alpha())
+    }
 }
 
 /// Colours the entity's shadow from a role: `TextShadow::color`, and the
@@ -91,6 +176,10 @@ impl LookShadow {
     }
     pub const fn alpha(self, alpha: f32) -> Self {
         Self(self.0.alpha(alpha))
+    }
+    /// Keep the component's own alpha (`LookTint::keep_alpha`).
+    pub const fn keep_alpha(self) -> Self {
+        Self(self.0.keep_alpha())
     }
 }
 
@@ -140,7 +229,13 @@ pub fn retint_border(
     let all = changed.read().count() > 0;
     for (tag, mut border) in &mut q {
         if all || tag.is_added() {
-            let want = BorderColor::all(tag.0.resolve(&look));
+            let t = &tag.0;
+            let want = BorderColor {
+                top: t.resolve_over(&look, border.top),
+                right: t.resolve_over(&look, border.right),
+                bottom: t.resolve_over(&look, border.bottom),
+                left: t.resolve_over(&look, border.left),
+            };
             if *border != want {
                 *border = want;
             }
@@ -163,7 +258,7 @@ pub fn retint_gradient(
         for g in &mut want.0 {
             for (colour, tint) in stop_colours(g).into_iter().zip(&tag.0) {
                 if let Some(t) = tint {
-                    *colour = t.resolve(&look);
+                    *colour = t.resolve_over(&look, *colour);
                 }
             }
         }
@@ -181,7 +276,7 @@ pub fn retint_image(
     let all = changed.read().count() > 0;
     for (tag, mut image) in &mut q {
         if all || tag.is_added() {
-            let want = tag.0.resolve(&look);
+            let want = tag.0.resolve_over(&look, image.color);
             if image.color != want {
                 image.color = want;
             }
@@ -197,7 +292,7 @@ pub fn retint_text_shadow(
     let all = changed.read().count() > 0;
     for (tag, mut shadow) in &mut q {
         if all || tag.is_added() {
-            let want = tag.0.resolve(&look);
+            let want = tag.0.resolve_over(&look, shadow.color);
             if shadow.color != want {
                 shadow.color = want;
             }
@@ -215,11 +310,14 @@ pub fn retint_box_shadow(
         if !(all || tag.is_added()) {
             continue;
         }
-        let want = tag.0.resolve(&look);
         // Compare first: `DerefMut` marks the shadow changed.
-        if shadow.0.iter().any(|s| s.color != want) {
+        if shadow
+            .0
+            .iter()
+            .any(|s| s.color != tag.0.resolve_over(&look, s.color))
+        {
             for s in &mut shadow.0 {
-                s.color = want;
+                s.color = tag.0.resolve_over(&look, s.color);
             }
         }
     }

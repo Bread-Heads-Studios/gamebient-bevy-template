@@ -38,6 +38,11 @@ pub struct LookColour {
     /// that tagging changes nothing a test or snapshot compares.
     /// Ignored everywhere else (`ColorMaterial` has no emissive).
     pub emissive: Option<f32>,
+    /// Retint RGB only and keep the alpha the component has now (see
+    /// `LookTint::keep_alpha`): for a static tag on an entity whose alpha a
+    /// game system animates. Wins over `alpha`. For a material it is the
+    /// material's current colour alpha.
+    pub keep_alpha: bool,
 }
 
 impl LookColour {
@@ -46,6 +51,7 @@ impl LookColour {
             role,
             alpha: None,
             emissive: None,
+            keep_alpha: false,
         }
     }
     pub const fn alpha(mut self, alpha: f32) -> Self {
@@ -56,11 +62,25 @@ impl LookColour {
         self.emissive = Some(strength);
         self
     }
+    /// Retint RGB only; the component's own alpha is kept.
+    pub const fn keep_alpha(mut self) -> Self {
+        self.keep_alpha = true;
+        self
+    }
     pub fn resolve(&self, look: &ActiveLook) -> Color {
         let c = look.colour(self.role);
         match self.alpha {
             Some(a) => c.with_alpha(a),
             None => c,
+        }
+    }
+    /// What to write over a component currently holding `current`: as
+    /// [`resolve`](Self::resolve), with `current`'s alpha under `keep_alpha`.
+    pub fn resolve_over(&self, look: &ActiveLook, current: Color) -> Color {
+        if self.keep_alpha {
+            look.colour(self.role).with_alpha(current.alpha())
+        } else {
+            self.resolve(look)
         }
     }
 }
@@ -148,7 +168,7 @@ pub fn retint_text(
     let all = changed.read().count() > 0;
     for (tag, mut c) in &mut q {
         if all || tag.is_added() {
-            c.0 = tag.resolve(&look);
+            c.0 = tag.resolve_over(&look, c.0);
         }
     }
 }
@@ -161,7 +181,7 @@ pub fn retint_background(
     let all = changed.read().count() > 0;
     for (tag, mut c) in &mut q {
         if all || tag.is_added() {
-            c.0 = tag.resolve(&look);
+            c.0 = tag.resolve_over(&look, c.0);
         }
     }
 }
@@ -174,7 +194,7 @@ pub fn retint_sprite(
     let all = changed.read().count() > 0;
     for (tag, mut s) in &mut q {
         if all || tag.is_added() {
-            s.color = tag.resolve(&look);
+            s.color = tag.resolve_over(&look, s.color);
         }
     }
 }
@@ -198,7 +218,7 @@ pub fn retint_material(
             continue;
         }
         if let Some(m) = materials.get_mut(&handle.0) {
-            let c = tag.resolve(&look);
+            let c = tag.resolve_over(&look, m.base_color);
             m.base_color = c;
             if let Some(s) = tag.emissive {
                 // RGB only: the stored alpha stays as built (Bevy ignores it).
@@ -234,7 +254,7 @@ pub fn retint_color_material(
             continue;
         }
         if let Some(m) = materials.get_mut(&handle.0) {
-            m.color = tag.resolve(&look);
+            m.color = tag.resolve_over(&look, m.color);
         }
     }
 }
