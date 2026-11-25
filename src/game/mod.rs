@@ -430,6 +430,7 @@ fn sync_pause_overlay(
     fonts: Option<Res<crate::ui::fonts::UiFonts>>,
     overlay_query: Query<Entity, With<PauseOverlay>>,
 ) {
+    use crate::ui::card::CardLookExt as _;
     use crate::ui::{card, fonts, theme};
 
     if !paused.is_changed() && !quiet.is_changed() {
@@ -471,6 +472,7 @@ fn sync_pause_overlay(
                         ),
                         card::intro(),
                     ))
+                    .card_look(&theme::CARD, &theme::CARD_ROLES)
                     .with_children(|card| {
                         card.spawn((
                             Text::new(theme::PAUSE_WORD),

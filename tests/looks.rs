@@ -456,6 +456,370 @@ fn image_and_shadow_tags_follow_the_look_and_restore_on_clear() {
     assert_eq!(read(&app, box_shadow).2, Some(p.colour2()));
 }
 
+/// A shadow tag recolours **every** `ShadowStyle` of a multi-shadow
+/// `BoxShadow` (a glow under a drop), offsets, blur and spread kept.
+#[test]
+fn a_shadow_tag_recolours_every_box_shadow_style() {
+    let p = probe();
+    let mut app = app_with(Selection::Embedded(p.id.into()));
+    let style = |y: f32, blur: f32, spread: f32| ShadowStyle {
+        color: default_colour(p.role),
+        x_offset: Val::Px(1.0),
+        y_offset: Val::Px(y),
+        spread_radius: Val::Px(spread),
+        blur_radius: Val::Px(blur),
+    };
+    let e = app
+        .world_mut()
+        .spawn((
+            BoxShadow(vec![style(2.0, 4.0, 0.0), style(8.0, 28.0, 3.0)]),
+            LookShadow::new(p.role2).alpha(0.4),
+        ))
+        .id();
+    let read = |app: &App| app.world().get::<BoxShadow>(e).unwrap().0.clone();
+    app.update();
+    let want = p.colour2().with_alpha(0.4);
+    let got = read(&app);
+    assert_eq!(got.len(), 2);
+    assert!(got.iter().all(|s| s.color == want), "{got:?}");
+    assert_eq!(
+        (got[1].y_offset, got[1].blur_radius, got[1].spread_radius),
+        (Val::Px(8.0), Val::Px(28.0), Val::Px(3.0)),
+        "geometry is not touched"
+    );
+    assert_eq!(got[0].x_offset, Val::Px(1.0));
+
+    app.insert_resource(ActiveLook::resolve(&theme::LOOK, Selection::Default));
+    app.world_mut().write_message(look::LookChanged);
+    app.update();
+    let want = default_colour(p.role2).with_alpha(0.4);
+    assert!(read(&app).iter().all(|s| s.color == want));
+}
+
+/// `keep_alpha` retints RGB and keeps the alpha the component has: on
+/// spawn (the game's own alpha), on a change after a game system animated
+/// the alpha, on a late spawn, and on a clear. Without it the same tag
+/// repaints the role's alpha (the default behaviour is unchanged).
+#[test]
+fn keep_alpha_retints_rgb_and_keeps_the_alpha_a_game_system_wrote() {
+    let p = probe();
+    let mut app = app_with(Selection::Embedded(p.id.into()));
+    let own = default_colour(p.role);
+    let spawn_all = |app: &mut App, a: f32| {
+        let text = app
+            .world_mut()
+            .spawn((
+                Text::new("+100"),
+                TextColor(own.with_alpha(a)),
+                LookColour::new(p.role).keep_alpha(),
+            ))
+            .id();
+        let sprite = app
+            .world_mut()
+            .spawn((
+                Sprite::from_color(own.with_alpha(a), Vec2::ONE),
+                // `keep_alpha` wins over `alpha`.
+                LookColour::new(p.role).alpha(1.0).keep_alpha(),
+            ))
+            .id();
+        let background = app
+            .world_mut()
+            .spawn((
+                BackgroundColor(own.with_alpha(a)),
+                LookColour::new(p.role).keep_alpha(),
+            ))
+            .id();
+        let border = app
+            .world_mut()
+            .spawn((
+                BorderColor::all(own.with_alpha(a)),
+                LookBorder::new(p.role).keep_alpha(),
+            ))
+            .id();
+        let image = app
+            .world_mut()
+            .spawn((
+                ImageNode::default().with_color(own.with_alpha(a)),
+                LookImage::new(p.role).keep_alpha(),
+            ))
+            .id();
+        let shadow = app
+            .world_mut()
+            .spawn((
+                TextShadow {
+                    offset: Vec2::ONE,
+                    color: own.with_alpha(a),
+                },
+                LookShadow::new(p.role).keep_alpha(),
+            ))
+            .id();
+        let box_shadow = app
+            .world_mut()
+            .spawn((
+                BoxShadow(vec![ShadowStyle {
+                    color: own.with_alpha(a),
+                    ..default()
+                }]),
+                LookShadow::new(p.role).keep_alpha(),
+            ))
+            .id();
+        let gradient = app
+            .world_mut()
+            .spawn((
+                BackgroundGradient::from(LinearGradient::to_bottom(vec![
+                    ColorStop::new(own.with_alpha(a), Val::Percent(0.0)),
+                    ColorStop::new(own.with_alpha(a * 0.5), Val::Percent(100.0)),
+                ])),
+                LookGradient::new([
+                    Some(LookTint::new(p.role).keep_alpha()),
+                    Some(LookTint::new(p.role).keep_alpha()),
+                ]),
+            ))
+            .id();
+        // The default behaviour: no keep_alpha, the role's alpha comes back.
+        let plain = app
+            .world_mut()
+            .spawn((
+                TextColor(own.with_alpha(a)),
+                LookColour::new(p.role),
+                Text::new("plain"),
+            ))
+            .id();
+        [
+            text, sprite, background, border, image, shadow, box_shadow, gradient, plain,
+        ]
+    };
+    // Every colour one entity wears, as (rgb, alpha) pairs.
+    let read = |app: &App, e: Entity| -> Vec<Color> {
+        let w = app.world();
+        if let Some(c) = w.get::<TextColor>(e) {
+            return vec![c.0];
+        }
+        if let Some(c) = w.get::<Sprite>(e) {
+            return vec![c.color];
+        }
+        if let Some(c) = w.get::<ImageNode>(e) {
+            return vec![c.color];
+        }
+        if let Some(c) = w.get::<TextShadow>(e) {
+            return vec![c.color];
+        }
+        if let Some(c) = w.get::<BoxShadow>(e) {
+            return c.0.iter().map(|s| s.color).collect();
+        }
+        if let Some(c) = w.get::<BorderColor>(e) {
+            return vec![c.top, c.right, c.bottom, c.left];
+        }
+        if let Some(c) = w.get::<BackgroundGradient>(e) {
+            return match &c.0[0] {
+                Gradient::Linear(l) => l.stops.iter().map(|s| s.color).collect(),
+                _ => unreachable!(),
+            };
+        }
+        vec![w.get::<BackgroundColor>(e).unwrap().0]
+    };
+    let rgb = |c: Color| c.with_alpha(1.0);
+
+    let spawned = spawn_all(&mut app, 0.3);
+    app.update();
+    for (i, e) in spawned.into_iter().enumerate() {
+        let got = read(&app, e);
+        if i == 7 {
+            // The gradient's two stops keep their own alphas.
+            assert_eq!(got[0], p.colour().with_alpha(0.3));
+            assert_eq!(got[1], p.colour().with_alpha(0.15));
+        } else if i == 8 {
+            assert_eq!(got, vec![p.colour()], "no keep_alpha: the role's alpha");
+        } else {
+            assert!(
+                got.iter().all(|c| *c == p.colour().with_alpha(0.3)),
+                "{i}: {got:?}"
+            );
+        }
+    }
+
+    // A game system animates the alphas; then the look changes.
+    let late_spawned = spawn_all(&mut app, 0.8);
+    let animate = |app: &mut App, e: Entity, a: f32| {
+        let mut w = app.world_mut().entity_mut(e);
+        if let Some(mut c) = w.get_mut::<TextColor>() {
+            c.0.set_alpha(a);
+        }
+        if let Some(mut c) = w.get_mut::<Sprite>() {
+            c.color.set_alpha(a);
+        }
+        if let Some(mut c) = w.get_mut::<BackgroundColor>() {
+            c.0.set_alpha(a);
+        }
+        if let Some(mut c) = w.get_mut::<BorderColor>() {
+            let c = &mut *c;
+            for side in [&mut c.top, &mut c.right, &mut c.bottom, &mut c.left] {
+                side.set_alpha(a);
+            }
+        }
+        if let Some(mut c) = w.get_mut::<ImageNode>() {
+            c.color.set_alpha(a);
+        }
+        if let Some(mut c) = w.get_mut::<TextShadow>() {
+            c.color.set_alpha(a);
+        }
+        if let Some(mut c) = w.get_mut::<BoxShadow>() {
+            for s in &mut c.0 {
+                s.color.set_alpha(a);
+            }
+        }
+    };
+    app.update();
+    // The late spawn (alpha 0.8, a pack already active) kept its alpha.
+    for (i, e) in late_spawned.into_iter().enumerate() {
+        let got = read(&app, e);
+        if i < 7 {
+            assert!(
+                got.iter().all(|c| *c == p.colour().with_alpha(0.8)),
+                "late {i}: {got:?}"
+            );
+        }
+    }
+    let all: Vec<Entity> = {
+        let mut q = app.world_mut().query_filtered::<Entity, Or<(
+            With<LookColour>,
+            With<LookBorder>,
+            With<LookImage>,
+            With<LookShadow>,
+        )>>();
+        q.iter(app.world()).collect()
+    };
+    for (n, e) in all.iter().enumerate() {
+        animate(&mut app, *e, 0.1 + 0.01 * n as f32);
+    }
+    let before: Vec<Vec<Color>> = all.iter().map(|e| read(&app, *e)).collect();
+    app.insert_resource(ActiveLook::resolve(&theme::LOOK, Selection::Default));
+    app.world_mut().write_message(look::LookChanged);
+    app.update();
+    for (e, was) in all.iter().zip(before) {
+        let now = read(&app, *e);
+        let tagged_keep = app.world().get::<Text>(*e).is_none_or(|t| t.0 != "plain");
+        if !tagged_keep {
+            // Not keep_alpha: the role's own alpha, as before this change.
+            assert_eq!(now, vec![default_colour(p.role)]);
+            continue;
+        }
+        if app.world().get::<BackgroundGradient>(*e).is_some() {
+            continue;
+        }
+        assert_eq!(now.len(), was.len());
+        for (n, w) in now.iter().zip(was) {
+            assert_eq!(
+                *n,
+                rgb(default_colour(p.role)).with_alpha(w.alpha()),
+                "a clear keeps the animated alpha"
+            );
+        }
+    }
+}
+
+/// `toward_white` is the role colour mixed toward white, per stop, with its
+/// own role; `default_is` is the literal the game spawns it with, written
+/// exactly while the role is at the contract default (default look, clear),
+/// never recomputed.
+#[test]
+fn toward_white_stops_write_their_literal_at_the_default_and_the_mix_under_a_pack() {
+    let p = probe();
+    let mut app = app_with(Selection::Default);
+    // Literals a float mix would not reproduce bit for bit.
+    let lit1 = Color::srgba(0.123_456_79, 0.456_789_1, 0.789_012_3, 0.37);
+    let lit2 = Color::srgba(0.987_654_3, 0.012_345_68, 0.5, 1.0);
+    let node = app
+        .world_mut()
+        .spawn((
+            BackgroundGradient::from(LinearGradient::to_right(vec![
+                ColorStop::new(lit1, Val::Percent(0.0)),
+                ColorStop::new(lit2, Val::Percent(50.0)),
+                ColorStop::new(Color::BLACK, Val::Percent(100.0)),
+            ])),
+            LookGradient::new([
+                Some(
+                    LookTint::new(p.role)
+                        .toward_white(0.4)
+                        .alpha(0.37)
+                        .default_is(lit1),
+                ),
+                // Its own role, no alpha: the role colour's own alpha.
+                Some(LookTint::new(p.role2).toward_white(0.25).default_is(lit2)),
+                None,
+            ]),
+        ))
+        .id();
+    let stops = |app: &App| -> Vec<Color> {
+        match &app.world().get::<BackgroundGradient>(node).unwrap().0[0] {
+            Gradient::Linear(l) => l.stops.iter().map(|s| s.color).collect(),
+            _ => unreachable!(),
+        }
+    };
+    let lighten = |c: Color, w: f32, a: Option<f32>| {
+        let s = c.to_srgba();
+        Color::srgba(
+            s.red + (1.0 - s.red) * w,
+            s.green + (1.0 - s.green) * w,
+            s.blue + (1.0 - s.blue) * w,
+            a.unwrap_or(s.alpha),
+        )
+    };
+    // Default look: the literals, bit for bit, and untouched on later frames.
+    app.update();
+    assert_eq!(stops(&app), vec![lit1, lit2, Color::BLACK]);
+    app.world_mut().write_message(look::LookChanged);
+    app.update();
+    assert_eq!(stops(&app), vec![lit1, lit2, Color::BLACK]);
+
+    // A pack that sets the roles: each stop its own role, lightened.
+    app.insert_resource(p.look());
+    app.world_mut().write_message(look::LookChanged);
+    app.update();
+    let got = stops(&app);
+    assert_eq!(got[0], lighten(p.colour(), 0.4, Some(0.37)));
+    assert_eq!(got[1], lighten(p.colour2(), 0.25, None));
+    assert_eq!(got[2], Color::BLACK);
+
+    // A clear: the literals again, exactly.
+    app.insert_resource(ActiveLook::resolve(&theme::LOOK, Selection::Default));
+    app.world_mut().write_message(look::LookChanged);
+    app.update();
+    assert_eq!(stops(&app), vec![lit1, lit2, Color::BLACK]);
+}
+
+/// Without `default_is` a lightened tint computes its default colour from
+/// the role, and `toward_white(0.0)` is the role colour itself.
+#[test]
+fn a_lightened_tint_without_a_literal_mixes_the_default_role_colour() {
+    let look = ActiveLook::default_for(&theme::LOOK);
+    let (role, c) = theme::PALETTE[0];
+    let s = c.to_srgba();
+    let w = 0.5;
+    assert_eq!(
+        LookTint::new(role)
+            .toward_white(w)
+            .alpha(0.6)
+            .resolve(&look),
+        Color::srgba(
+            s.red + (1.0 - s.red) * w,
+            s.green + (1.0 - s.green) * w,
+            s.blue + (1.0 - s.blue) * w,
+            0.6
+        )
+    );
+    assert_eq!(LookTint::new(role).toward_white(0.0).resolve(&look), c);
+    assert_eq!(LookTint::new(role).resolve(&look), c);
+    // keep_alpha with nothing to keep (`resolve`) is the plain colour.
+    assert_eq!(LookTint::new(role).keep_alpha().resolve(&look), c);
+    assert_eq!(
+        LookTint::new(role)
+            .keep_alpha()
+            .resolve_over(&look, Color::srgba(1.0, 1.0, 1.0, 0.2)),
+        c.with_alpha(0.2)
+    );
+}
+
 /// A stand-in face for `look_fit_keeps_the_default_size_and_fits_any_pack_string`:
 /// every glyph 0.55 em but 'W' (1.1), the widest.
 static STAND_IN: look::refit::Advances = {

@@ -21,7 +21,9 @@
 //!
 //! Copy this file into a game unchanged except for the crate name
 //! (`gamebient_game` below). It names only modules every template game
-//! has. A game whose screens need another engine resource or asset store
+//! has, and compiles with or without `bevy_pbr` (the `StandardMaterial`
+//! store is behind the `gx_look_no_pbr` cfg a 2D game's `build.rs` sets;
+//! `tools/test_look_2d.sh` builds and runs this file that way). A game whose screens need another engine resource or asset store
 //! headless adds it in `app()` and says why.
 
 use bevy::asset::AssetPlugin;
@@ -56,10 +58,14 @@ fn app(selection: Selection) -> App {
         TextPlugin,
     ));
     // The stores render-side code bakes into (no renderer in a test).
+    // `StandardMaterial` needs bevy_pbr: a 2D game without it sets the
+    // `gx_look_no_pbr` cfg from its `build.rs` (the look port recipe), which
+    // leaves this store out; the file copies unchanged either way.
+    #[cfg(not(gx_look_no_pbr))]
+    app.init_asset::<StandardMaterial>();
     app.init_asset::<Mesh>()
         .init_asset::<Image>()
         .init_asset::<Shader>()
-        .init_asset::<StandardMaterial>()
         .init_asset::<ColorMaterial>()
         .init_asset::<AudioSource>()
         .init_resource::<UiScale>()

@@ -9,8 +9,9 @@
 
 use bevy::prelude::*;
 
+use crate::look::LookTint;
 use crate::look::{Contract, ParamKind, ParamSpec, RecipeSpec, ShapeSpec, SlotSpec, StringSpec};
-use crate::ui::card::CardStyle;
+use crate::ui::card::{CardRoles, CardStyle};
 use crate::ui::fonts;
 
 // --- Palette -------------------------------------------------------------
@@ -37,17 +38,21 @@ pub const TITLE_SHADOW: Color = Color::srgba(0.0, 0.0, 0.0, 0.55);
 
 // --- Cards ---------------------------------------------------------------
 
+/// The card surface's colours (the palette roles `card`, `cardtop`,
+/// `cardbottom` and `cardshadow` default to these).
+pub const CARD_FILL: Color = Color::srgba(0.06, 0.07, 0.15, 0.9);
+pub const CARD_TOP: Color = Color::srgba(0.13, 0.13, 0.30, 0.94);
+pub const CARD_BOTTOM: Color = Color::srgba(0.05, 0.06, 0.13, 0.94);
+pub const CARD_SHADOW: Color = Color::srgba(0.0, 0.0, 0.0, 0.6);
+
 /// The game's card surface: a dark glass panel with a cyan rim.
 pub const CARD: CardStyle = CardStyle {
-    fill: Color::srgba(0.06, 0.07, 0.15, 0.9),
-    gradient: Some([
-        Color::srgba(0.13, 0.13, 0.30, 0.94),
-        Color::srgba(0.05, 0.06, 0.13, 0.94),
-    ]),
+    fill: CARD_FILL,
+    gradient: Some([CARD_TOP, CARD_BOTTOM]),
     border: Color::srgba(0.30, 0.86, 0.93, 0.85),
     border_px: 2.0,
     radius: 16.0,
-    shadow: Some(Color::srgba(0.0, 0.0, 0.0, 0.6)),
+    shadow: Some(CARD_SHADOW),
 };
 
 /// The prompt rail's plate: the same surface, flatter and with a hairline.
@@ -59,6 +64,26 @@ pub const RAIL: CardStyle = CardStyle {
     radius: 14.0,
     shadow: Some(Color::srgba(0.0, 0.0, 0.0, 0.45)),
 };
+
+/// The roles each card style takes under a pack (`ui::card::CardRoles`),
+/// beside the style: the tint's alpha is the style's own alpha, so under
+/// the default look every part is exactly the style's colour. Spawn with
+/// `.card_look(&CARD, &CARD_ROLES)` after `card_with`.
+pub const CARD_ROLES: CardRoles =
+    CardRoles::new(LookTint::new("card"), LookTint::new("signal").alpha(0.85))
+        .gradient(LookTint::new("cardtop"), LookTint::new("cardbottom"))
+        .shadow(LookTint::new("cardshadow"));
+pub const RAIL_ROLES: CardRoles = CardRoles::new(
+    LookTint::new("ink").alpha(0.78),
+    LookTint::new("signal").alpha(0.35),
+)
+.shadow(LookTint::new("cardshadow").alpha(0.45));
+pub const CHIP_ROLES: CardRoles = CardRoles::new(
+    LookTint::new("signal").alpha(0.12),
+    LookTint::new("signal").alpha(0.8),
+);
+pub const BADGE_ROLES: CardRoles =
+    CardRoles::new(LookTint::new("coral").alpha(0.18), LookTint::new("coral"));
 
 /// Small pill for the best score and badges.
 pub const CHIP: CardStyle = CardStyle {
@@ -104,6 +129,12 @@ pub const PALETTE: &[(&str, Color)] = &[
     ("paper", PAPER),
     ("muted", MUTED),
     ("player", PLAYER),
+    // Card surface (`CARD_ROLES`); rims, rails, chips and badges reuse
+    // `signal`, `ink` and `coral`.
+    ("card", CARD_FILL),
+    ("cardtop", CARD_TOP),
+    ("cardbottom", CARD_BOTTOM),
+    ("cardshadow", CARD_SHADOW),
     // Sponsor end card (`look::end_card`), on the game-over card.
     ("endcard", Color::srgba(0.035, 0.043, 0.094, 0.0)),
     ("endcardhead", PAPER),

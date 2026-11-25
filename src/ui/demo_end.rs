@@ -6,10 +6,13 @@ use bevy::prelude::*;
 
 use crate::game::scoring::GameData;
 use crate::ui::backdrop::spawn_backdrop;
-use crate::ui::card::{S1, S2, S4, S6, card, card_with, chip_node, intro};
+use crate::ui::card::{CardLookExt, S1, S2, S4, S6, card, card_with, chip_node, intro};
 use crate::ui::fonts::{BODY, DISPLAY};
 use crate::ui::menu::{MenuRoot, PROMPT_PULSE, TITLE, best_label};
-use crate::ui::theme::{self, BADGE, CHIP, CORAL, MUTED, PAPER, RAIL, SIGNAL, TITLE_SHADOW};
+use crate::ui::theme::{
+    self, BADGE, BADGE_ROLES, CHIP, CHIP_ROLES, CORAL, MUTED, PAPER, RAIL, RAIL_ROLES, SIGNAL,
+    TITLE_SHADOW,
+};
 
 pub const DEMO_HEADLINE: &str = "DEMO OVER";
 pub const RESTART_PROMPT: &str = "PRESS ENTER TO RESTART";
@@ -26,11 +29,10 @@ pub fn own_line(title: &str) -> String {
 
 /// The DEMO chip; `spawn_menu` calls it under the tagline when `demo::DEMO`.
 pub fn spawn_demo_tag(parent: &mut ChildSpawnerCommands) {
-    parent.spawn(card_with(&BADGE, chip_node())).with_child((
-        Text::new(DEMO_TAG),
-        BODY.font(16.0),
-        TextColor(CORAL),
-    ));
+    parent
+        .spawn(card_with(&BADGE, chip_node()))
+        .card_look(&BADGE, &BADGE_ROLES)
+        .with_child((Text::new(DEMO_TAG), BODY.font(16.0), TextColor(CORAL)));
 }
 
 pub fn spawn_demo_end(mut commands: Commands, data: Res<GameData>) {
@@ -53,6 +55,7 @@ pub fn spawn_demo_end(mut commands: Commands, data: Res<GameData>) {
         .with_children(|root| {
             spawn_backdrop(root, true);
             root.spawn((card(&theme::CARD), intro()))
+                .card_look(&theme::CARD, &theme::CARD_ROLES)
                 .with_children(|card| {
                     card.spawn((
                         Text::new(DEMO_HEADLINE),
@@ -84,11 +87,9 @@ pub fn spawn_demo_end(mut commands: Commands, data: Res<GameData>) {
                         body.spawn((Text::new("SCORE"), BODY.font(16.0), TextColor(MUTED)));
                         body.spawn((Text::new(score), DISPLAY.font(64.0), TextColor(PAPER)));
                     });
-                    card.spawn(card_with(&CHIP, chip_node())).with_child((
-                        Text::new(best),
-                        BODY.font(16.0),
-                        TextColor(SIGNAL),
-                    ));
+                    card.spawn(card_with(&CHIP, chip_node()))
+                        .card_look(&CHIP, &CHIP_ROLES)
+                        .with_child((Text::new(best), BODY.font(16.0), TextColor(SIGNAL)));
                 });
             root.spawn(card_with(
                 &RAIL,
@@ -98,6 +99,7 @@ pub fn spawn_demo_end(mut commands: Commands, data: Res<GameData>) {
                     ..default()
                 },
             ))
+            .card_look(&RAIL, &RAIL_ROLES)
             .with_child((
                 Text::new(RESTART_PROMPT),
                 BODY.fitted(RESTART_PROMPT, 24.0),

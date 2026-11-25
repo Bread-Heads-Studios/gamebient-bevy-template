@@ -18,7 +18,13 @@
 //!   (`"title"` in the template). It must be one of `theme::STRINGS`; the
 //!   pack strings the tests build are sized from that key's `max_chars`.
 //!
-//! Beyond the block the file names only `ui::fonts::ALL`, `ui::fit`,
+//! The clamp test lays the title line out in **`ui::fonts::BODY`**, the
+//! face the template's body text uses (and whose `<---` ligature it was
+//! written to catch), so the game's `fonts.rs` needs a `Face` named `BODY`
+//! (every template game has one). It is not part of the config block: the
+//! face-dependent checks adapt to whatever `BODY` measures.
+//!
+//! Beyond the block the file names only `ui::fonts::{ALL, BODY}`, `ui::fit`,
 //! `ui::theme` (`LOOK`, `STRINGS`) and `look::refit`. Do not edit the test
 //! bodies: the face-dependent checks adapt themselves. A **monospace** face
 //! (every printable advance equal, measured from its own table) has no
