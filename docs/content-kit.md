@@ -171,6 +171,10 @@ player's kind and start, the floor, how far `beside` is), counters from
 copied verbatim (`tools/frame-accept.sh --check-copies`); the editor carries
 byte-identical copies of `model.rs`, `cases.json` and the schema.
 
+A data check runs whole in one frame, and a long check (up to 1800 ticks)
+can take a noticeable fraction of a second in the browser; a name already
+waiting in the queue is not queued again.
+
 The editor runs checks by name (`data:<id>`, one per frame, through
 `checks.run`); `content.set checks.json` swaps the file in. The test
 `data_checks_pass` runs every check that is on in the committed file under

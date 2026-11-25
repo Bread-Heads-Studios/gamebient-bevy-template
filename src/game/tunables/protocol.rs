@@ -372,7 +372,16 @@ fn run_requested_checks(world: &mut World) {
     let (data, names): (Vec<String>, Vec<String>) = names
         .into_iter()
         .partition(|n| crate::game::checks_data::is_data(n));
-    world.resource_mut::<DataQueue>().0.extend(data);
+    // A name already waiting is not queued again, so repeated requests
+    // (timeouts, rapid edits) cannot grow the queue past the file's checks.
+    {
+        let mut queue = world.resource_mut::<DataQueue>();
+        for name in data {
+            if !queue.0.contains(&name) {
+                queue.0.push_back(name);
+            }
+        }
+    }
     if names.is_empty() {
         return;
     }
@@ -1459,6 +1468,32 @@ mod tests {
                 .any(|k| k == "Player")
         );
         assert_eq!(j["rules"]["triggers"].as_array().unwrap().len(), 6);
+    }
+
+    #[test]
+    fn repeated_data_check_requests_queue_each_name_once() {
+        let mut app = build_builtin_app();
+        app.update();
+        let text = r#"{"checks":[{"id":"a","source":"The run keeps going","do":[{"wait":1}],"expect":[{"outcome":"playing"}]},{"id":"b","source":"It is won","do":[],"expect":[{"outcome":"win"}]}]}"#;
+        crate::game::checks_data::set_checks(app.world_mut(), text.as_bytes()).unwrap();
+        drain_custom(&mut app);
+        // Two requests land before the queue drains (no update between them
+        // is possible for the drain, so call the request handler directly).
+        for _ in 0..2 {
+            app.world_mut()
+                .resource_mut::<ChecksRequested>()
+                .0
+                .extend(["data:a".to_string(), "data:b".to_string()]);
+            run_requested_checks(app.world_mut());
+        }
+        let queued: Vec<String> = app
+            .world()
+            .resource::<DataQueue>()
+            .0
+            .iter()
+            .cloned()
+            .collect();
+        assert_eq!(queued, ["data:a", "data:b"]);
     }
 
     #[test]
