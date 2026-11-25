@@ -615,3 +615,79 @@ fn the_templates_cards_are_unchanged_by_the_default_look_and_follow_a_pack() {
     assert_eq!(badge.0, c("#778899", 0.18));
     assert_eq!(badge.2, BorderColor::all(c("#778899", 1.0)));
 }
+
+/// A prompt pulse writes its `TextColor` alpha every frame, and a look
+/// change retints the same `TextColor` in `LookSet`: `UiPlugin` runs
+/// `pulse_text` in `PostUpdate` after `LookSet`, so the pulse's alpha is the
+/// last write. In `Update` the retint would repaint the role's own alpha for
+/// a frame on every `LookChanged`.
+#[test]
+fn a_look_change_mid_pulse_keeps_the_pulse_alpha() {
+    use bevy::asset::AssetPlugin;
+    use bevy::input::InputPlugin;
+    use bevy::state::app::StatesPlugin;
+    use bevy::text::TextPlugin;
+    use gamebient_game::ui::transition::Pulse;
+    use gamebient_game::{assets, display, frame, game::GamePlugin, ui};
+
+    let mut app = App::new();
+    app.add_plugins((
+        MinimalPlugins,
+        AssetPlugin::default(),
+        StatesPlugin,
+        InputPlugin,
+        WindowPlugin {
+            primary_window: None,
+            exit_condition: bevy::window::ExitCondition::DontExit,
+            ..default()
+        },
+        TextPlugin,
+    ));
+    app.init_asset::<Mesh>()
+        .init_asset::<Image>()
+        .init_asset::<Shader>()
+        .init_asset::<StandardMaterial>()
+        .init_asset::<ColorMaterial>()
+        .init_asset::<AudioSource>()
+        .init_resource::<UiScale>()
+        .init_resource::<ClearColor>()
+        .insert_resource(Selection::Default)
+        .add_plugins((
+            display::DisplayPlugin,
+            LookPlugin {
+                contract: &theme::LOOK,
+            },
+            GamePlugin::default(),
+            assets::AssetsPlugin,
+            ui::UiPlugin,
+            frame::FramePlugin,
+        ));
+    app.finish();
+    app.cleanup();
+    for _ in 0..3 {
+        app.update();
+    }
+    let e = app
+        .world_mut()
+        .spawn((
+            Text::new("PRESS START"),
+            TextColor(theme::PAPER),
+            LookColour::new("paper"),
+            Pulse {
+                speed: 3.0,
+                min: 0.3,
+                max: 0.6,
+            },
+        ))
+        .id();
+    let alpha = |app: &App| app.world().get::<TextColor>(e).unwrap().0.alpha();
+    for frame in 0..3 {
+        app.world_mut().write_message(look::LookChanged);
+        app.update();
+        let a = alpha(&app);
+        assert!(
+            (0.3..=0.6).contains(&a),
+            "frame {frame}: alpha {a} is outside the pulse's 0.3..=0.6: a look change repainted it"
+        );
+    }
+}
