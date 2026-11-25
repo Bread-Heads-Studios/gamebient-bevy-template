@@ -3,10 +3,10 @@ use bevy::prelude::*;
 use crate::game::audio::SfxEvent;
 use crate::game::input::GameInput;
 use crate::game::states::GameState;
-use crate::ui::card::{S1, S2, S4, card_with};
+use crate::ui::card::{CardLookExt, S1, S2, S4, card_with};
 use crate::ui::fonts::{BODY, DISPLAY};
 use crate::ui::menu::PROMPT_PULSE;
-use crate::ui::theme::{MUTED, NIGHT, PAPER, RAIL, SIGNAL, TITLE_SHADOW};
+use crate::ui::theme::{MUTED, NIGHT, PAPER, RAIL, RAIL_ROLES, SIGNAL, TITLE_SHADOW};
 use crate::ui::transition::ScreenFade;
 
 /// Set once the player has seen the how-to-play screen this session; never
@@ -118,6 +118,7 @@ pub fn spawn_how_to_play(
                         ..default()
                     },
                 ))
+                .card_look(&RAIL, &RAIL_ROLES)
                 .with_child((
                     Text::new(LAUNCH_PROMPT),
                     BODY.font(26.0),

@@ -25,7 +25,7 @@ pub struct LookChanged;
 /// `BackgroundColor`) it colours the text only. Otherwise it colours the
 /// `BackgroundColor`, `Sprite`, `ColorMaterial` (`MeshMaterial2d`) or
 /// `StandardMaterial` (`MeshMaterial3d`) it finds there.
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct LookColour {
     pub role: &'static str,
     pub alpha: Option<f32>,

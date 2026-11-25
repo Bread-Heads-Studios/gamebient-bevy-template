@@ -125,6 +125,17 @@ impl LookTint {
     }
 }
 
+impl From<LookTint> for super::apply::LookColour {
+    /// A `LookColour` for the same role: its `alpha` and `keep_alpha` carry
+    /// over (`toward_white` and `default_is` are tint-only).
+    fn from(t: LookTint) -> Self {
+        let mut c = Self::new(t.role);
+        c.alpha = t.alpha;
+        c.keep_alpha = t.keep_alpha;
+        c
+    }
+}
+
 /// Colours all four sides of the entity's `BorderColor` from a role.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct LookBorder(pub LookTint);

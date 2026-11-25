@@ -521,3 +521,97 @@ fn a_look_preview_pack_does_not_change_a_replay() {
     );
     assert!(v.matches);
 }
+
+/// The template's own cards carry `card_look` tags (`theme::*_ROLES`). Under
+/// the default look every part is exactly the style's colour, bit for bit
+/// (the tags change nothing); under a pack that sets the card roles each
+/// part follows its role, at the alpha its tint names (else the pack's own,
+/// which a 6-digit hex colour makes opaque).
+#[test]
+fn the_templates_cards_are_unchanged_by_the_default_look_and_follow_a_pack() {
+    use gamebient_game::look::validate::parse_colour;
+    use gamebient_game::ui::card::{CardLookExt, CardRoles, CardStyle, card_with};
+    let cards: [(&CardStyle, &CardRoles); 4] = [
+        (&theme::CARD, &theme::CARD_ROLES),
+        (&theme::RAIL, &theme::RAIL_ROLES),
+        (&theme::CHIP, &theme::CHIP_ROLES),
+        (&theme::BADGE, &theme::BADGE_ROLES),
+    ];
+    let mut app = app_with(Selection::Default);
+    let ids: Vec<Entity> = cards
+        .iter()
+        .map(|(style, roles)| {
+            let id = app
+                .world_mut()
+                .spawn(card_with(style, Node::default()))
+                .card_look(style, roles)
+                .id();
+            id
+        })
+        .collect();
+    let parts = |app: &App, id: Entity| {
+        let w = app.world();
+        let stops: Vec<Color> = match w.get::<BackgroundGradient>(id).unwrap().0.first() {
+            Some(Gradient::Linear(l)) => l.stops.iter().map(|s| s.color).collect(),
+            _ => vec![],
+        };
+        (
+            w.get::<BackgroundColor>(id).unwrap().0,
+            stops,
+            *w.get::<BorderColor>(id).unwrap(),
+            w.get::<BoxShadow>(id)
+                .unwrap()
+                .0
+                .iter()
+                .map(|s| s.color)
+                .collect::<Vec<_>>(),
+        )
+    };
+    let want = |style: &CardStyle| {
+        (
+            style.fill,
+            style.gradient.map_or(vec![], |g| g.to_vec()),
+            BorderColor::all(style.border),
+            style.shadow.into_iter().collect::<Vec<_>>(),
+        )
+    };
+    app.update();
+    for ((style, _), id) in cards.iter().zip(&ids) {
+        assert_eq!(parts(&app, *id), want(style), "default look, first frame");
+    }
+    // A clear / reload to the same look changes nothing either.
+    app.world_mut().write_message(look::LookChanged);
+    app.update();
+    for ((style, _), id) in cards.iter().zip(&ids) {
+        assert_eq!(parts(&app, *id), want(style), "after a LookChanged");
+    }
+    // Parts the style lacks carry no tag at all.
+    assert!(app.world().get::<look::LookGradient>(ids[1]).is_none());
+    assert!(app.world().get::<look::LookShadow>(ids[2]).is_none());
+
+    // A pack that sets every card role.
+    let json = r##"{"v":1,"id":"cards","name":"C","kind":"palette","palette":{
+        "card":"#112233","cardtop":"#223344","cardbottom":"#334455",
+        "cardshadow":"#445566","signal":"#556677","ink":"#667788","coral":"#778899"}}"##;
+    let files = std::collections::BTreeMap::from([(
+        look::manifest::MANIFEST_FILE.to_string(),
+        json.as_bytes().to_vec(),
+    )]);
+    app.insert_resource(
+        ActiveLook::from_files(&theme::LOOK, files, Selection::Default, None).expect("valid pack"),
+    );
+    app.world_mut().write_message(look::LookChanged);
+    app.update();
+    let c = |hex: &str, a: f32| parse_colour(hex).unwrap().with_alpha(a);
+    let card = parts(&app, ids[0]);
+    assert_eq!(card.0, c("#112233", 1.0));
+    assert_eq!(card.1, vec![c("#223344", 1.0), c("#334455", 1.0)]);
+    assert_eq!(card.2, BorderColor::all(c("#556677", 0.85)));
+    assert_eq!(card.3, vec![c("#445566", 1.0)]);
+    let rail = parts(&app, ids[1]);
+    assert_eq!(rail.0, c("#667788", 0.78));
+    assert_eq!(rail.3, vec![c("#445566", 0.45)]);
+    let badge = parts(&app, ids[3]);
+    assert_eq!(badge.0, c("#778899", 0.18));
+    assert_eq!(badge.2, BorderColor::all(c("#778899", 1.0)));
+}

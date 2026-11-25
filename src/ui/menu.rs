@@ -7,11 +7,14 @@ use crate::game::scoring::GameData;
 use crate::game::states::GameState;
 use crate::look::{ActiveLook, LookColour, LookText};
 use crate::ui::backdrop::spawn_backdrop;
-use crate::ui::card::{S1, S2, S4, S6, card_node, card_with, chip_node, intro};
+use crate::ui::card::{CardLookExt, S1, S2, S4, S6, card_node, card_with, chip_node, intro};
 use crate::ui::demo_end::spawn_demo_tag;
 use crate::ui::fonts::{BODY, DISPLAY};
 use crate::ui::how_to_play::{SeenHowToPlay, start_target};
-use crate::ui::theme::{self, BADGE, CHIP, CORAL, MUTED, PAPER, RAIL, SIGNAL, TITLE_SHADOW};
+use crate::ui::theme::{
+    self, BADGE, BADGE_ROLES, CHIP, CHIP_ROLES, CORAL, MUTED, PAPER, RAIL, RAIL_ROLES, SIGNAL,
+    TITLE_SHADOW,
+};
 use crate::ui::transition::{Pulse, ScreenFade};
 
 #[derive(Component)]
@@ -146,6 +149,7 @@ pub fn spawn_menu(mut commands: Commands, data: Res<GameData>, look: Option<Res<
                             ..default()
                         },
                     ))
+                    .card_look(&RAIL, &RAIL_ROLES)
                     .with_children(|rail| {
                         rail.spawn((
                             Text::new(START_PROMPT),
@@ -159,11 +163,9 @@ pub fn spawn_menu(mut commands: Commands, data: Res<GameData>, look: Option<Res<
                             ..default()
                         })
                         .with_children(|line| {
-                            line.spawn(card_with(&CHIP, chip_node())).with_child((
-                                Text::new(best),
-                                BODY.font(15.0),
-                                TextColor(SIGNAL),
-                            ));
+                            line.spawn(card_with(&CHIP, chip_node()))
+                                .card_look(&CHIP, &CHIP_ROLES)
+                                .with_child((Text::new(best), BODY.font(15.0), TextColor(SIGNAL)));
                             line.spawn((
                                 Text::new(CONTROLS),
                                 BODY.fitted(CONTROLS, 16.0),
@@ -207,6 +209,7 @@ pub fn spawn_game_over(mut commands: Commands, data: Res<GameData>) {
                 ..card_node()
             };
             root.spawn((card_with(&theme::CARD, card_node), intro()))
+                .card_look(&theme::CARD, &theme::CARD_ROLES)
                 .with_children(|card| {
                     card.spawn((
                         Text::new(GAME_OVER_HEADLINE),
@@ -232,26 +235,24 @@ pub fn spawn_game_over(mut commands: Commands, data: Res<GameData>) {
                         ));
                     });
                     if new_best {
-                        card.spawn(card_with(&BADGE, chip_node())).with_child((
-                            Text::new("NEW BEST"),
-                            BODY.font(16.0),
-                            TextColor(CORAL),
-                        ));
+                        card.spawn(card_with(&BADGE, chip_node()))
+                            .card_look(&BADGE, &BADGE_ROLES)
+                            .with_child((Text::new("NEW BEST"), BODY.font(16.0), TextColor(CORAL)));
                     } else {
-                        card.spawn(card_with(&CHIP, chip_node())).with_child((
-                            Text::new(best),
-                            BODY.font(16.0),
-                            TextColor(SIGNAL),
-                        ));
+                        card.spawn(card_with(&CHIP, chip_node()))
+                            .card_look(&CHIP, &CHIP_ROLES)
+                            .with_child((Text::new(best), BODY.font(16.0), TextColor(SIGNAL)));
                     }
                     // A sponsor pack's end card (`look::end_card`); empty otherwise.
                     card.spawn((Node::default(), crate::look::EndCardSlot));
                     if demo::DEMO {
-                        card.spawn(card_with(&CHIP, chip_node())).with_child((
-                            Text::new(crate::ui::demo_end::FULL_GAME_LINE),
-                            BODY.font(14.0),
-                            TextColor(MUTED),
-                        ));
+                        card.spawn(card_with(&CHIP, chip_node()))
+                            .card_look(&CHIP, &CHIP_ROLES)
+                            .with_child((
+                                Text::new(crate::ui::demo_end::FULL_GAME_LINE),
+                                BODY.font(14.0),
+                                TextColor(MUTED),
+                            ));
                     }
                 });
             root.spawn(card_with(
@@ -262,6 +263,7 @@ pub fn spawn_game_over(mut commands: Commands, data: Res<GameData>) {
                     ..default()
                 },
             ))
+            .card_look(&RAIL, &RAIL_ROLES)
             .with_child((
                 Text::new(CONTINUE_PROMPT),
                 BODY.fitted(CONTINUE_PROMPT, 24.0),
